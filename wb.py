@@ -100,6 +100,13 @@ class Webull:
                 return a["account_id"]
         raise WebullError("no INDIVIDUAL_CASH account found")
 
+    def equity_account_number(self) -> str:
+        """Human-facing account number — its last 4 is the place-order confirmation."""
+        for a in self.accounts():
+            if a.get("account_class") == "INDIVIDUAL_CASH":
+                return a.get("account_number", "")
+        return ""
+
     def portfolio(self) -> dict:
         """Every account with balances and positions, plus rolled-up totals.
 
@@ -172,13 +179,18 @@ class Webull:
             "fetched_at": time.time(),
         }
 
-    def _order_payload(self, symbol: str, side: str, qty: str, limit_price: str) -> list[dict]:
+    def _order_payload(self, symbol: str, side: str, qty: str, limit_price: str,
+                       client_order_id: str | None = None) -> list[dict]:
         # combo_type is mandatory on equity orders — Webull's own bundled sample
         # omits it and the request fails with 417 invalid combo_type.
+        #
+        # client_order_id is minted at preview and carried through to place, so
+        # an ambiguous timeout + retry is rejected by Webull as a duplicate
+        # rather than filling twice. Never regenerate it on the place path.
         return [
             {
                 "combo_type": "NORMAL",
-                "client_order_id": uuid.uuid4().hex,
+                "client_order_id": client_order_id or uuid.uuid4().hex,
                 "symbol": symbol.upper().strip(),
                 "instrument_type": "EQUITY",
                 "market": "US",
@@ -192,18 +204,40 @@ class Webull:
             }
         ]
 
-    def preview(self, symbol: str, side: str, qty: str, limit_price: str) -> dict:
+    def preview(self, symbol: str, side: str, qty: str, limit_price: str,
+                client_order_id: str | None = None) -> dict:
         aid = self.equity_account_id()
-        orders = self._order_payload(symbol, side, qty, limit_price)
+        orders = self._order_payload(symbol, side, qty, limit_price, client_order_id)
         res = self._trade.order_v2.preview_order(aid, orders)
         return {"http": res.status_code, "payload": orders[0], "result": res.json()}
 
-    def place(self, symbol: str, side: str, qty: str, limit_price: str) -> dict:
+    def place(self, symbol: str, side: str, qty: str, limit_price: str,
+              client_order_id: str | None = None) -> dict:
+        """Place a REAL order. Pass the client_order_id from preview — see _order_payload."""
         aid = self.equity_account_id()
-        orders = self._order_payload(symbol, side, qty, limit_price)
+        orders = self._order_payload(symbol, side, qty, limit_price, client_order_id)
         res = self._trade.order_v2.place_order(aid, orders)
         self.invalidate()
         return {"http": res.status_code, "payload": orders[0], "result": res.json()}
+
+    def held_qty(self, symbol: str) -> float:
+        """Shares currently held. Used to block an oversell → accidental short."""
+        for p in self.portfolio()["positions"]:
+            if p["symbol"] == symbol.upper().strip():
+                return p["quantity"]
+        return 0.0
+
+    def open_sell_qty(self, symbol: str) -> float:
+        """Quantity already working on the sell side, so two half-sells can't both pass."""
+        total = 0.0
+        for o in self.open_orders():
+            if (o.get("symbol", "").upper() == symbol.upper().strip()
+                    and str(o.get("side", "")).upper() == "SELL"):
+                try:
+                    total += float(o.get("quantity", 0)) - float(o.get("filled_quantity", 0) or 0)
+                except (TypeError, ValueError):
+                    pass
+        return total
 
     def open_orders(self) -> list[dict]:
         aid = self.equity_account_id()

@@ -282,7 +282,12 @@
       </div>
 
       <div class="card">
-        <h2>Order Ticket</h2>
+        <h2>Order Ticket
+          <label class="right" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="arm" style="width:auto;margin:0">
+            <span id="arm-label" style="font-weight:700;letter-spacing:0.06em">DISARMED</span>
+          </label>
+        </h2>
         <div class="ticket">
           <label class="f"><div class="label">Symbol</div><input id="o-sym" value="RR" autocomplete="off"></label>
           <label class="f"><div class="label">Side</div>
@@ -292,10 +297,11 @@
           <label class="f"><div class="label">Limit price</div><input id="o-px" value="1.50" inputmode="decimal"></label>
           <div class="full" style="display:flex;gap:10px">
             <button class="btn-preview" id="btn-preview" style="flex:2">Preview</button>
-            <button class="btn-place" id="btn-place" style="flex:1" disabled title="Preview first">Place</button>
+            <button class="btn-place" id="btn-place" style="flex:1" disabled title="Preview first, then arm">Place</button>
           </div>
         </div>
-        <div class="out" id="o-out">Preview is free and submits nothing. Place asks for confirmation and is a real order.</div>
+        <div class="meter-cap" id="o-tok" style="margin-top:8px"></div>
+        <div class="out" id="o-out">Preview is free and submits nothing. Placing needs: armed + a live preview + the account's last 4.</div>
       </div>
 
       <div class="card">
@@ -633,9 +639,56 @@ async function post(url, body) {
   return r.json();
 }
 
+/* ---------- order safety (ported from TraderDaddy-Desktop) ----------
+   A preview mints a single-use token bound to the exact params, valid 60s.
+   Place needs: armed + that token + the account's last 4. Editing the ticket
+   drops the token, so you can never place something you didn't preview. */
+let previewToken = null, tokenTimer = null, armed = false, confirmHint = "";
+
+function dropToken(why) {
+  previewToken = null;
+  clearInterval(tokenTimer);
+  $("btn-place").disabled = true;
+  if (why) $("o-tok").textContent = why;
+}
+
+function holdToken(token, ttl) {
+  previewToken = token;
+  let left = ttl;
+  clearInterval(tokenTimer);
+  const tick = () => {
+    if (--left <= 0) return dropToken("preview expired — preview again");
+    $("o-tok").textContent = `preview valid ${left}s`;
+  };
+  $("o-tok").textContent = `preview valid ${left}s`;
+  tokenTimer = setInterval(tick, 1000);
+  $("btn-place").disabled = !armed;
+}
+
+// Any edit invalidates the preview — this is the whole point.
+["o-sym", "o-side", "o-qty", "o-px"].forEach(id =>
+  $(id).addEventListener("input", () => previewToken && dropToken("ticket changed — preview again")));
+$("o-side").addEventListener("change", () => previewToken && dropToken("ticket changed — preview again"));
+
+async function armState() {
+  try {
+    const s = await (await fetch("/api/arm")).json();
+    armed = s.armed; confirmHint = s.confirm_hint || "";
+    $("arm").checked = armed;
+    $("arm-label").textContent = armed ? "ARMED" : "DISARMED";
+    $("arm-label").className = armed ? "bear" : "";
+    $("btn-place").disabled = !(armed && previewToken);
+  } catch {}
+}
+
+$("arm").onchange = async () => {
+  await post("/api/arm", { armed: $("arm").checked });
+  await armState();
+};
+
 $("btn-preview").onclick = async () => {
   const t = ticket();
-  $("o-out").textContent = "Previewing…"; $("btn-place").disabled = true;
+  $("o-out").textContent = "Previewing…"; dropToken("");
   try {
     const r = await post("/api/preview", t);
     const g = renderGuard(r.guard);
@@ -645,8 +698,9 @@ $("btn-preview").onclick = async () => {
         `${t.side} ${t.quantity} ${t.symbol} @ ${t.limit_price} (LIMIT / DAY)\n` +
         `estimated cost   ${res.estimated_cost ?? "?"} ${res.currency ?? ""}\n` +
         `estimated fee    ${res.estimated_transaction_fee ?? "?"}\n` +
-        (g ? `\n${g}\n` : "") + `\nNothing was submitted. Press Place to send this for real.`;
-      $("btn-place").disabled = (r.guard || []).some(x => x.level === "block");
+        (g ? `\n${g}\n` : "") + `\nNothing was submitted.`;
+      if (r.preview_token) holdToken(r.preview_token, r.preview_ttl_secs || 60);
+      else dropToken("blocked — cannot place");
     } else {
       $("o-out").textContent = `Preview failed:\n${r.error || JSON.stringify(r.result)}\n\n${g}`;
     }
@@ -655,15 +709,22 @@ $("btn-preview").onclick = async () => {
 
 $("btn-place").onclick = async () => {
   const t = ticket();
-  if (!confirm(`Place a REAL order?\n\n${t.side} ${t.quantity} ${t.symbol} @ $${t.limit_price}\n\nThis uses real money.`)) return;
+  if (!previewToken) return;
+  const code = prompt(`Place a REAL order with real money?\n\n${t.side} ${t.quantity} ${t.symbol} @ $${t.limit_price}\n\nType the ${confirmHint} to confirm:`);
+  if (!code) return;
   $("o-out").textContent = "Placing…";
   try {
-    const r = await post("/api/order", { ...t, confirm: "PLACE" });
-    $("o-out").textContent = (r.ok ? "ORDER PLACED\n" : "NOT PLACED\n") + (r.error ? r.error + "\n" : "") +
-      JSON.stringify(r.result ?? {}, null, 2) + "\n\n" + renderGuard(r.guard);
+    const r = await post("/api/order", { ...t, confirm: code.trim(), preview_token: previewToken });
+    if (r.detail) {
+      $("o-out").textContent = "NOT PLACED\n" + r.detail;
+    } else {
+      $("o-out").textContent = (r.ok ? "ORDER PLACED\n" : "NOT PLACED\n") +
+        (r.error ? r.error + "\n" : "") + (r.warning ? "WARNING: " + r.warning + "\n" : "") +
+        JSON.stringify(r.result ?? {}, null, 2) + "\n\n" + renderGuard(r.guard);
+    }
     refresh();
   } catch (e) { $("o-out").textContent = "Error: " + e; }
-  $("btn-place").disabled = true;
+  dropToken("");   // token is single-use, spent either way
 };
 
 async function refresh() {
@@ -835,7 +896,7 @@ $("suggest").addEventListener("click", e => {
   if (q) chatSend(q);
 });
 
-refresh(); refreshSignals(); chatStatus();
+refresh(); refreshSignals(); chatStatus(); armState();
 setInterval(refresh, 10000);        // Webull caps balance/positions at 2 req / 2s
 setInterval(refreshSignals, 120000);
 </script>

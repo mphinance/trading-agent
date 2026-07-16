@@ -125,11 +125,14 @@ def _breadth(totals: dict) -> dict:
     return _mk("Breadth", "ok", f"{w}/{n}", f"{w} of {n} positions green", meter)
 
 
-def order_guard(symbol: str, side: str, qty: float, limit_price: float, portfolio: dict, max_notional: float) -> list[dict]:
+def order_guard(symbol: str, side: str, qty: float, limit_price: float, portfolio: dict,
+                max_notional: float, held_qty: float | None = None,
+                open_sell_qty: float = 0.0) -> list[dict]:
     """Pre-trade checks. Returns blocking + advisory findings for one order."""
     findings: list[dict] = []
     notional = qty * limit_price
     totals = portfolio["totals"]
+    sym = symbol.upper().strip()
 
     if notional > max_notional:
         findings.append(
@@ -142,6 +145,23 @@ def order_guard(symbol: str, side: str, qty: float, limit_price: float, portfoli
             _mk("Buying power", "block", f"${notional:,.2f} exceeds ${totals['buying_power']:,.2f} available",
                 "Webull will reject this order.")
         )
+
+    # Oversell → accidental short. The notional cap CANNOT catch this: selling
+    # doesn't consume buying power, so a 100-share sell of a 10-share position
+    # passes every dollar-denominated check. Nets out already-working sells so
+    # two half-position sells can't both pass. (Shape borrowed from nautilus's
+    # risk engine: available = net_long - submitted_sell.)
+    if side.upper() == "SELL" and held_qty is not None:
+        available = held_qty - open_sell_qty
+        if qty > available:
+            detail = f"You hold {held_qty:g} {sym}"
+            if open_sell_qty:
+                detail += f", with {open_sell_qty:g} already working on the sell side"
+            detail += (f" — {qty:g} would sell {qty - available:g} more than you own. "
+                       "In a cash account that's a rejection; on margin it opens a short.")
+            findings.append(
+                _mk("Oversell", "block", f"{qty:g} exceeds {available:g} available to sell", detail)
+            )
 
     if notional < MIN_SENSIBLE_ORDER:
         findings.append(

@@ -97,18 +97,56 @@ failure, and orders after `tailscaled` so the bind doesn't race at startup.
 
 ## Order safety
 
-Three independent layers, because the account has ~$54 of buying power and a
-fat-fingered order matters at that size:
+Six gates. The pipeline shape is ported from
+[TraderDaddy-Desktop](https://github.com/mphinance/TraderDaddy-Desktop)
+(`src-tauri/src/commands/orders.rs`); the last three are from reading
+[nautilus_trader](https://github.com/nautechsystems/nautilus_trader)'s risk engine.
 
-1. **Preview first.** `preview_order` validates auth, payload, and buying power
-   and returns Webull's own cost/fee estimate — submitting nothing. The Place
-   button stays disabled until a preview succeeds.
-2. **The guard runs server-side.** `risk.order_guard` returns `block` findings
-   (notional cap, insufficient buying power) that `/api/order` refuses to place,
-   and `caution` findings (averaging down, correlated add, sub-$20 tickets) that
-   are shown but don't block. A UI that skipped preview still can't bypass this.
-3. **Explicit confirmation.** `/api/order` requires `confirm: "PLACE"` in the
-   body, plus a browser confirm dialog.
+1. **Arm flag** — session-scoped, **OFF on every boot**, never persisted. A
+   restart should never come back armed.
+2. **Preview token** — preview mints a single-use UUID bound to the *exact*
+   params with a 60s TTL. Place pops it, then checks expiry and that the params
+   still match. *This fixed a real bug:* previously a successful preview just
+   enabled the Place button, so editing the ticket afterwards let you place an
+   order that was never previewed.
+3. **Confirm with the account's last 4** — not a fixed word. `PLACE` becomes
+   muscle memory and never makes you look at *which* account you're trading.
+4. **One `client_order_id`, minted at preview and reused at place.** If a place
+   times out ambiguously and the order actually landed, a retry carries the same
+   id and Webull rejects the duplicate instead of filling twice. Nautilus won't
+   let you bypass duplicate-id checking even with every other risk check off —
+   that's the tell.
+5. **Oversell check** — a SELL is blocked if `qty > held - already_working_sells`.
+   **The notional cap cannot catch this**: selling doesn't consume buying power,
+   so a 100-share sell of a 3-share position at $0.20 is $20 of notional and
+   passes every dollar-denominated check while opening a 97-share short.
+6. **Risk guard** — notional cap + buying power, plus non-blocking cautions
+   (averaging down, correlated add, sub-$20 tickets).
+
+Prices are rounded/validated to the SEC Rule 612 tick ($0.01 at/above $1.00,
+$0.0001 below) and formatted with `Decimal`, because `str(1e-05)` yields
+`'1e-05'` — which is what would have gone on the wire as a price.
+
+Orders are journalled to `orders.jsonl` **before** success is reported. If that
+write fails the order is already live, so the response says so rather than
+staying silent.
+
+### Deliberately NOT adopted from nautilus
+
+Judged over-engineering at this scale, and worth recording so nobody re-litigates:
+
+- **Fixed-point `Price`/`Quantity`/`Money` types.** The `i128` machinery exists
+  for 16-decimal crypto and multi-venue FX. At 2-dp equity prices float64 is
+  exact to ~15 significant digits. The lesson was tick-rounding, not the types.
+- **An order-state FSM** (~50 transition pairs). Guards against out-of-order
+  *event-stream* delivery. We poll; the broker is the source of truth.
+- **A submit throttler** (nautilus defaults to 100 orders/sec). One human, one
+  button, and the token vault already makes double-submit impossible.
+- **A price collar vs last.** Nautilus **doesn't do this either** — its price
+  check is precision + positivity only; collars are the venue's job. A limit
+  sell at $0.01 executes against the best bid, not at $0.01.
+- **Boot reconciliation** (~700 lines). Solves "my engine holds authoritative
+  state that drifted while it was down." We hold none — we re-fetch every poll.
 
 ## Guardrails
 
