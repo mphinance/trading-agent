@@ -1,9 +1,16 @@
 # sidecar
 
 A companion deck for Webull Desktop. Live positions, P&L, portfolio guardrails,
-and an order ticket — in a browser window you park *beside* the Webull app.
+TraderDaddy Pro signals, and a Claude chat panel — in a browser window you park
+*beside* the Webull app. **Read-only: sidecar cannot place, modify, or cancel
+an order.** It only ever reads your account; all trading still happens in
+Webull Desktop itself.
 
+<!-- Screenshot pending — the previous one showed an order-ticket UI that no
+     longer exists in this app. Drop an updated docs/screenshot.png here and
+     restore the image line below.
 ![sidecar](docs/screenshot.png)
+-->
 
 ## Why "sidecar" and not an overlay
 
@@ -27,11 +34,12 @@ OpenAPI. Nothing it shows depends on the desktop app running at all.
 ```
 
 **Loopback only by default, and that default is load-bearing.** This process
-holds live brokerage credentials and can place real orders, with **no
-authentication of any kind**. Binding it to `0.0.0.0` lets anyone on the network
-trade the account. To reach it from other machines, bind it to a **Tailscale**
-address (see Deploy) — device-authenticated, encrypted, invisible to the LAN and
-the internet.
+holds live brokerage credentials, with **no authentication of any kind**.
+sidecar is read-only — it never places, modifies, or cancels an order — but
+binding it to `0.0.0.0` still lets anyone on the network read the account's
+balances and positions. To reach it from other machines, bind it to a
+**Tailscale** address (see Deploy) — device-authenticated, encrypted, invisible
+to the LAN and the internet.
 
 ### Credentials
 
@@ -52,15 +60,14 @@ it must be in the file.
 | --- | --- | --- |
 | `SIDECAR_HOST` | `127.0.0.1` | Bind address. Use a Tailscale IP to share; never `0.0.0.0`. |
 | `SIDECAR_PORT` | `8787` | Listen port. |
-| `SIDECAR_MAX_NOTIONAL` | `25` | Hard ceiling on any single order placed through the UI. |
 | `SIDECAR_CHAT_MODEL` | `claude-sonnet-5` | Chat model. `claude-opus-4-8` for hard questions. |
 | `TD_API_KEY` | — | `td_live_…`; lights up the TraderDaddy panels. |
 
 ## Layout
 
 ```
-wb.py            Webull SDK wrapper — credentials, caching, rate-limit handling
-risk.py          Portfolio guardrails + pre-trade order checks
+wb.py            Webull SDK wrapper — credentials, caching, rate-limit handling (read-only)
+risk.py          Portfolio guardrails
 td.py            TraderDaddy Pro client (direct JSON-RPC, no MCP library)
 chat.py          Claude chat via the Agent SDK; injects live state into each turn
 server.py        FastAPI routes
@@ -94,59 +101,6 @@ failure, and orders after `tailscaled` so the bind doesn't race at startup.
   The *Python* Agent SDK shells out to it and does **not** bundle a binary — only
   the TypeScript SDK does. Without it, chat fails at runtime, not at install.
   `run.sh` adds the nvm bin dir to `PATH` because systemd's PATH is minimal.
-
-## Order safety
-
-Six gates. The pipeline shape is ported from
-[TraderDaddy-Desktop](https://github.com/mphinance/TraderDaddy-Desktop)
-(`src-tauri/src/commands/orders.rs`); the last three are from reading
-[nautilus_trader](https://github.com/nautechsystems/nautilus_trader)'s risk engine.
-
-1. **Arm flag** — session-scoped, **OFF on every boot**, never persisted. A
-   restart should never come back armed.
-2. **Preview token** — preview mints a single-use UUID bound to the *exact*
-   params with a 60s TTL. Place pops it, then checks expiry and that the params
-   still match. *This fixed a real bug:* previously a successful preview just
-   enabled the Place button, so editing the ticket afterwards let you place an
-   order that was never previewed.
-3. **Confirm with the account's last 4** — not a fixed word. `PLACE` becomes
-   muscle memory and never makes you look at *which* account you're trading.
-4. **One `client_order_id`, minted at preview and reused at place.** If a place
-   times out ambiguously and the order actually landed, a retry carries the same
-   id and Webull rejects the duplicate instead of filling twice. Nautilus won't
-   let you bypass duplicate-id checking even with every other risk check off —
-   that's the tell.
-5. **Oversell check** — a SELL is blocked if `qty > held - already_working_sells`.
-   **The notional cap cannot catch this**: selling doesn't consume buying power,
-   so a 100-share sell of a 3-share position at $0.20 is $20 of notional and
-   passes every dollar-denominated check while opening a 97-share short.
-6. **Risk guard** — notional cap + buying power, plus non-blocking cautions
-   (averaging down, correlated add, sub-$20 tickets).
-
-Prices are rounded/validated to the SEC Rule 612 tick ($0.01 at/above $1.00,
-$0.0001 below) and formatted with `Decimal`, because `str(1e-05)` yields
-`'1e-05'` — which is what would have gone on the wire as a price.
-
-Orders are journalled to `orders.jsonl` **before** success is reported. If that
-write fails the order is already live, so the response says so rather than
-staying silent.
-
-### Deliberately NOT adopted from nautilus
-
-Judged over-engineering at this scale, and worth recording so nobody re-litigates:
-
-- **Fixed-point `Price`/`Quantity`/`Money` types.** The `i128` machinery exists
-  for 16-decimal crypto and multi-venue FX. At 2-dp equity prices float64 is
-  exact to ~15 significant digits. The lesson was tick-rounding, not the types.
-- **An order-state FSM** (~50 transition pairs). Guards against out-of-order
-  *event-stream* delivery. We poll; the broker is the source of truth.
-- **A submit throttler** (nautilus defaults to 100 orders/sec). One human, one
-  button, and the token vault already makes double-submit impossible.
-- **A price collar vs last.** Nautilus **doesn't do this either** — its price
-  check is precision + positivity only; collars are the venue's job. A limit
-  sell at $0.01 executes against the best bid, not at $0.01.
-- **Boot reconciliation** (~700 lines). Solves "my engine holds authoritative
-  state that drifted while it was down." We hold none — we re-fetch every poll.
 
 ## Guardrails
 
@@ -233,8 +187,6 @@ Palette and forms follow the dataviz method rather than taste:
   `stale` in the header when that happens — it never presents old numbers as live.
 - **Buying power is shared across accounts**, so totals use `max()`, not `sum()`.
   Summing double-counts the same dollars.
-- **`combo_type: "NORMAL"` is mandatory** on equity orders. Webull's own bundled
-  sample omits it and gets `417 invalid combo_type`.
-- **No market data subscription is required** for any of this — positions,
-  balances, and order preview are all trading-API surface. Quotes would need a
-  non-display entitlement; see `../docs/README.md`.
+- **No market data subscription is required** for any of this — positions and
+  balances are trading-API surface, not quotes. Quotes would need a non-display
+  entitlement; see `../docs/README.md`.

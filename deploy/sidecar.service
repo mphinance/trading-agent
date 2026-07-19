@@ -1,5 +1,5 @@
 [Unit]
-Description=sidecar — Webull trading deck
+Description=sidecar — Webull companion deck
 Documentation=file:///home/mph/webull/sidecar/README.md
 # Bound to a Tailscale address, so don't start before tailscaled has one.
 After=network-online.target tailscaled.service
@@ -13,7 +13,7 @@ Restart=on-failure
 RestartSec=5
 
 # SIDECAR_HOST is written by deploy/install.sh to this machine's Tailscale IP.
-# Never set it to 0.0.0.0: sidecar has no auth and can place real orders.
+# Never set it to 0.0.0.0: sidecar has no auth and holds live brokerage credentials.
 EnvironmentFile=%h/webull/sidecar/deploy/sidecar.env
 
 # If tailscaled isn't up yet at boot the bind fails; retry rather than give up.

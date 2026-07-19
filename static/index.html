@@ -231,23 +231,13 @@
   }
   .suggest button:hover { border-color: var(--accent); color: var(--accent); }
 
-  .ticket { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .ticket .full { grid-column: 1 / -1; }
-  label.f { display: block; }
-  input, select { width: 100%; background: hsla(220 40% 6% / 0.8); color: var(--text-primary);
+  select { width: 100%; background: hsla(220 40% 6% / 0.8); color: var(--text-primary);
     border: 1px solid var(--border-strong); border-radius: 8px; padding: 9px 11px;
     font-size: 13px; font-family: var(--mono); }
-  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+  select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
   button { border: 0; border-radius: 8px; padding: 10px 12px; font-size: 12px; font-weight: 700;
     letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; font-family: var(--font); }
-  .btn-preview { background: var(--accent-dim); color: var(--accent); border: 1px solid hsla(40 96% 56% / 0.35); }
-  .btn-preview:hover { background: hsla(40 96% 56% / 0.22); }
-  .btn-place { background: hsla(2 90% 62% / 0.14); color: var(--bear); border: 1px solid hsla(2 90% 62% / 0.35); }
-  .btn-place:hover:not(:disabled) { background: hsla(2 90% 62% / 0.24); }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
-  .out { font-family: var(--mono); font-size: 11px; line-height: 1.6; margin-top: 12px; padding: 12px;
-    border-radius: 8px; background: hsla(220 40% 6% / 0.7); border: 1px solid var(--border);
-    white-space: pre-wrap; word-break: break-word; max-height: 230px; overflow: auto; }
   .empty { color: var(--text-faint); font-size: 12px; padding: 8px 0; line-height: 1.6; }
   footer { margin-top: 22px; font-size: 10px; color: var(--text-faint); text-align: center; letter-spacing: 0.04em; }
 </style>
@@ -279,29 +269,6 @@
       <div class="card">
         <h2>Options Flow <span class="right">put / call ratio · 1.0 = neutral</span></h2>
         <div class="pulse-grid" id="pulse"><div class="empty">Loading…</div></div>
-      </div>
-
-      <div class="card">
-        <h2>Order Ticket
-          <label class="right" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none">
-            <input type="checkbox" id="arm" style="width:auto;margin:0">
-            <span id="arm-label" style="font-weight:700;letter-spacing:0.06em">DISARMED</span>
-          </label>
-        </h2>
-        <div class="ticket">
-          <label class="f"><div class="label">Symbol</div><input id="o-sym" value="RR" autocomplete="off"></label>
-          <label class="f"><div class="label">Side</div>
-            <select id="o-side"><option value="BUY">BUY</option><option value="SELL">SELL</option></select>
-          </label>
-          <label class="f"><div class="label">Quantity</div><input id="o-qty" value="1" inputmode="decimal"></label>
-          <label class="f"><div class="label">Limit price</div><input id="o-px" value="1.50" inputmode="decimal"></label>
-          <div class="full" style="display:flex;gap:10px">
-            <button class="btn-preview" id="btn-preview" style="flex:2">Preview</button>
-            <button class="btn-place" id="btn-place" style="flex:1" disabled title="Preview first, then arm">Place</button>
-          </div>
-        </div>
-        <div class="meter-cap" id="o-tok" style="margin-top:8px"></div>
-        <div class="out" id="o-out">Preview is free and submits nothing. Placing needs: armed + a live preview + the account's last 4.</div>
       </div>
 
       <div class="card">
@@ -345,7 +312,7 @@
     </div>
   </div>
 
-  <footer>LOOPBACK ONLY · LIVE BROKERAGE CREDENTIALS · <span id="capnote"></span></footer>
+  <footer>LOOPBACK ONLY · LIVE BROKERAGE CREDENTIALS · READ-ONLY</footer>
 </div>
 
 <script>
@@ -627,113 +594,12 @@ function renderHealth(s) {
   $("health").innerHTML = hero + rows;
 }
 
-function ticket() {
-  return { symbol: $("o-sym").value.trim().toUpperCase(), side: $("o-side").value,
-           quantity: parseFloat($("o-qty").value), limit_price: parseFloat($("o-px").value) };
-}
-const renderGuard = g => !g || !g.length ? "" :
-  g.map(x => `${x.level === "block" ? "⛔" : "⚠"} ${x.name}: ${x.message}${x.detail ? "\n   " + x.detail : ""}`).join("\n");
-
-async function post(url, body) {
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  return r.json();
-}
-
-/* ---------- order safety (ported from TraderDaddy-Desktop) ----------
-   A preview mints a single-use token bound to the exact params, valid 60s.
-   Place needs: armed + that token + the account's last 4. Editing the ticket
-   drops the token, so you can never place something you didn't preview. */
-let previewToken = null, tokenTimer = null, armed = false, confirmHint = "";
-
-function dropToken(why) {
-  previewToken = null;
-  clearInterval(tokenTimer);
-  $("btn-place").disabled = true;
-  if (why) $("o-tok").textContent = why;
-}
-
-function holdToken(token, ttl) {
-  previewToken = token;
-  let left = ttl;
-  clearInterval(tokenTimer);
-  const tick = () => {
-    if (--left <= 0) return dropToken("preview expired — preview again");
-    $("o-tok").textContent = `preview valid ${left}s`;
-  };
-  $("o-tok").textContent = `preview valid ${left}s`;
-  tokenTimer = setInterval(tick, 1000);
-  $("btn-place").disabled = !armed;
-}
-
-// Any edit invalidates the preview — this is the whole point.
-["o-sym", "o-side", "o-qty", "o-px"].forEach(id =>
-  $(id).addEventListener("input", () => previewToken && dropToken("ticket changed — preview again")));
-$("o-side").addEventListener("change", () => previewToken && dropToken("ticket changed — preview again"));
-
-async function armState() {
-  try {
-    const s = await (await fetch("/api/arm")).json();
-    armed = s.armed; confirmHint = s.confirm_hint || "";
-    $("arm").checked = armed;
-    $("arm-label").textContent = armed ? "ARMED" : "DISARMED";
-    $("arm-label").className = armed ? "bear" : "";
-    $("btn-place").disabled = !(armed && previewToken);
-  } catch {}
-}
-
-$("arm").onchange = async () => {
-  await post("/api/arm", { armed: $("arm").checked });
-  await armState();
-};
-
-$("btn-preview").onclick = async () => {
-  const t = ticket();
-  $("o-out").textContent = "Previewing…"; dropToken("");
-  try {
-    const r = await post("/api/preview", t);
-    const g = renderGuard(r.guard);
-    if (r.ok) {
-      const res = r.result || {};
-      $("o-out").textContent =
-        `${t.side} ${t.quantity} ${t.symbol} @ ${t.limit_price} (LIMIT / DAY)\n` +
-        `estimated cost   ${res.estimated_cost ?? "?"} ${res.currency ?? ""}\n` +
-        `estimated fee    ${res.estimated_transaction_fee ?? "?"}\n` +
-        (g ? `\n${g}\n` : "") + `\nNothing was submitted.`;
-      if (r.preview_token) holdToken(r.preview_token, r.preview_ttl_secs || 60);
-      else dropToken("blocked — cannot place");
-    } else {
-      $("o-out").textContent = `Preview failed:\n${r.error || JSON.stringify(r.result)}\n\n${g}`;
-    }
-  } catch (e) { $("o-out").textContent = "Error: " + e; }
-};
-
-$("btn-place").onclick = async () => {
-  const t = ticket();
-  if (!previewToken) return;
-  const code = prompt(`Place a REAL order with real money?\n\n${t.side} ${t.quantity} ${t.symbol} @ $${t.limit_price}\n\nType the ${confirmHint} to confirm:`);
-  if (!code) return;
-  $("o-out").textContent = "Placing…";
-  try {
-    const r = await post("/api/order", { ...t, confirm: code.trim(), preview_token: previewToken });
-    if (r.detail) {
-      $("o-out").textContent = "NOT PLACED\n" + r.detail;
-    } else {
-      $("o-out").textContent = (r.ok ? "ORDER PLACED\n" : "NOT PLACED\n") +
-        (r.error ? r.error + "\n" : "") + (r.warning ? "WARNING: " + r.warning + "\n" : "") +
-        JSON.stringify(r.result ?? {}, null, 2) + "\n\n" + renderGuard(r.guard);
-    }
-    refresh();
-  } catch (e) { $("o-out").textContent = "Error: " + e; }
-  dropToken("");   // token is single-use, spent either way
-};
-
 async function refresh() {
   try {
     const p = await (await fetch("/api/portfolio")).json();
     if (p.detail) { setStatus("err", p.detail); return; }
     lastPortfolio = p;
     renderKpis(p.totals); renderAllocation(p); renderPositions(p); renderRisk(p.risk);
-    $("capnote").textContent = `ORDER CAP ${money(p.max_notional)}`;
     if (p.stale) setStatus("err", "stale — " + (p.error || "refresh failed"));
     else setStatus("live", "live");
     $("clock").textContent = "updated " + new Date().toLocaleTimeString();
@@ -896,7 +762,7 @@ $("suggest").addEventListener("click", e => {
   if (q) chatSend(q);
 });
 
-refresh(); refreshSignals(); chatStatus(); armState();
+refresh(); refreshSignals(); chatStatus();
 setInterval(refresh, 10000);        // Webull caps balance/positions at 2 req / 2s
 setInterval(refreshSignals, 120000);
 </script>

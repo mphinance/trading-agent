@@ -20,7 +20,6 @@ CONCENTRATION_CAUTION = 0.25
 DRAWDOWN_ALERT = -0.25  # portfolio down > 25% on cost
 DRAWDOWN_CAUTION = -0.10
 LOW_BP_RATIO = 0.10  # buying power < 10% of NLV
-MIN_SENSIBLE_ORDER = 20.0  # below this, fixed costs/spread dominate
 
 
 def evaluate(portfolio: dict) -> list[dict]:
@@ -123,68 +122,3 @@ def _breadth(totals: dict) -> dict:
                    "Nothing is working. This is a signal about entry timing or selection, not any one ticker.",
                    meter)
     return _mk("Breadth", "ok", f"{w}/{n}", f"{w} of {n} positions green", meter)
-
-
-def order_guard(symbol: str, side: str, qty: float, limit_price: float, portfolio: dict,
-                max_notional: float, held_qty: float | None = None,
-                open_sell_qty: float = 0.0) -> list[dict]:
-    """Pre-trade checks. Returns blocking + advisory findings for one order."""
-    findings: list[dict] = []
-    notional = qty * limit_price
-    totals = portfolio["totals"]
-    sym = symbol.upper().strip()
-
-    if notional > max_notional:
-        findings.append(
-            _mk("Notional cap", "block", f"${notional:,.2f} exceeds the ${max_notional:,.2f} cap",
-                "Raise SIDECAR_MAX_NOTIONAL to override.")
-        )
-
-    if side.upper() == "BUY" and notional > totals["buying_power"]:
-        findings.append(
-            _mk("Buying power", "block", f"${notional:,.2f} exceeds ${totals['buying_power']:,.2f} available",
-                "Webull will reject this order.")
-        )
-
-    # Oversell → accidental short. The notional cap CANNOT catch this: selling
-    # doesn't consume buying power, so a 100-share sell of a 10-share position
-    # passes every dollar-denominated check. Nets out already-working sells so
-    # two half-position sells can't both pass. (Shape borrowed from nautilus's
-    # risk engine: available = net_long - submitted_sell.)
-    if side.upper() == "SELL" and held_qty is not None:
-        available = held_qty - open_sell_qty
-        if qty > available:
-            detail = f"You hold {held_qty:g} {sym}"
-            if open_sell_qty:
-                detail += f", with {open_sell_qty:g} already working on the sell side"
-            detail += (f" — {qty:g} would sell {qty - available:g} more than you own. "
-                       "In a cash account that's a rejection; on margin it opens a short.")
-            findings.append(
-                _mk("Oversell", "block", f"{qty:g} exceeds {available:g} available to sell", detail)
-            )
-
-    if notional < MIN_SENSIBLE_ORDER:
-        findings.append(
-            _mk("Order size", "caution", f"${notional:,.2f} is a very small order",
-                "Spread and fixed costs are a large share of a ticket this size.")
-        )
-
-    underlying = RELATED.get(symbol.upper())
-    if underlying and side.upper() == "BUY":
-        held = [p["symbol"] for p in portfolio["positions"] if RELATED.get(p["symbol"]) == underlying]
-        if held:
-            findings.append(
-                _mk("Correlated add", "caution", f"You already hold {', '.join(held)} on {underlying}",
-                    "This concentrates rather than diversifies.")
-            )
-
-    existing = next((p for p in portfolio["positions"] if p["symbol"] == symbol.upper()), None)
-    if existing and side.upper() == "BUY" and existing["unrealized_pl"] < 0:
-        findings.append(
-            _mk("Averaging down", "caution",
-                f"{symbol.upper()} is {existing['unrealized_pl_pct']:.0%} underwater",
-                f"Cost basis ${existing['cost_price']:.2f} vs last ${existing['last_price']:.2f}. "
-                "Adding lowers your average and raises your total risk in the name.")
-        )
-
-    return findings

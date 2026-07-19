@@ -2,10 +2,12 @@
 # sidecar launcher.
 #
 # Binds to 127.0.0.1 by default. SIDECAR_HOST can widen that — but read this
-# first: sidecar has NO AUTHENTICATION and can place real orders. Binding it to
-# 0.0.0.0 lets anyone on the network trade the account. The supported way to
-# reach it from other machines is a Tailscale IP (100.x.y.z), which is
-# device-authenticated and invisible to the LAN and the internet.
+# first: sidecar has NO AUTHENTICATION and holds live brokerage credentials.
+# It's read-only (it never places orders), but account balances and positions
+# still shouldn't leak to the LAN. Binding it to 0.0.0.0 lets anyone on the
+# network read the account. The supported way to reach it from other machines
+# is a Tailscale IP (100.x.y.z), which is device-authenticated and invisible
+# to the LAN and the internet.
 set -euo pipefail
 cd "$(dirname "$0")"
 
