@@ -24,8 +24,8 @@ from claude_agent_sdk import (
     query,
 )
 
-# Read-only by default. The order path already has its own guardrails and
-# confirmation flow — a chat panel should not be a second, unguarded way in.
+# Read-only. sidecar never places orders anywhere, and the chat panel is no
+# exception — these are the only tools it ever gets.
 ALLOWED_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
 
 # Sonnet 5, not Haiku: this panel reasons over the portfolio and calls tools,
@@ -35,8 +35,9 @@ ALLOWED_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
 # claude-opus-4-8 for the hardest questions, claude-haiku-4-5 to economise).
 DEFAULT_MODEL = os.environ.get("SIDECAR_CHAT_MODEL", "claude-sonnet-5")
 
-SYSTEM_PROMPT = """You are the analyst panel inside `sidecar`, a trading deck the \
-user runs beside Webull Desktop.
+SYSTEM_PROMPT = """You are the analyst panel inside `sidecar`, a read-only companion \
+deck the user runs beside Webull Desktop. You cannot place trades — only discuss \
+what the account already holds.
 
 The user's live portfolio, guardrails, and TraderDaddy Pro signals are injected \
 into each turn as a LIVE DATA block. Read it from there — do not try to fetch \

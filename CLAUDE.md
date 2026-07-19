@@ -3,9 +3,11 @@
 ## What this repo is
 
 A companion deck for **Webull Desktop**: live positions, portfolio guardrails,
-TraderDaddy Pro signals, a single-order ticket, and a Claude chat panel. Runs
-beside the Webull app, not on top of it. See [README.md](./README.md) for setup,
-deploy, and the full list of API traps.
+TraderDaddy Pro signals, and a Claude chat panel. Runs beside the Webull app,
+not on top of it. **Read-only — sidecar cannot place, modify, or cancel an
+order.** All trading still happens in Webull Desktop; this app only reads the
+account. See [README.md](./README.md) for setup, deploy, and the full list of
+API traps.
 
 **This is the org's only real Webull integration.** The one in `trading-dashboard`
 (now archived) was a credential form wired to a `setTimeout`. Nothing else here
@@ -13,8 +15,8 @@ talks to Webull.
 
 Related repos, and why this isn't merged into them:
 - `TraderDaddy-Desktop` — the serious desktop app (Rust/Tauri, Tradier-only,
-  hard-wired). Its order-safety pipeline was ported here. Build *that* one for
-  Tradier; this one is Webull.
+  hard-wired, and it *does* place orders). Build that one for Tradier; this one
+  is a read-only Webull companion.
 - `traderdaddy-bridge` — a **demo** of a canonical broker schema, not a library.
   Its adapters take injected payload dicts, not credentials; `preview_order`
   echoes the request back; nothing in it can place an order; zero Webull. Do not
@@ -26,7 +28,8 @@ Related repos, and why this isn't merged into them:
 
 - **Backend:** Python + FastAPI + uvicorn. No build step, no frontend framework.
 - **Broker:** `webull-openapi-python-sdk` (the official one) — `webull.core` /
-  `webull.trade` / `webull.data`.
+  `webull.trade` / `webull.data`, read-only calls only (accounts, balances,
+  positions).
 - **Signals:** TraderDaddy Pro over plain JSON-RPC (`POST /api/v1/mcp`). No MCP
   client library — the endpoint takes a bare `tools/call` with no handshake.
 - **Chat:** Claude Agent SDK (`claude_agent_sdk`), which shells out to the
@@ -37,10 +40,11 @@ Related repos, and why this isn't merged into them:
 ## Critical design rules
 
 ### 1. Loopback or Tailscale. Never 0.0.0.0.
-This app has **no authentication** and **can place real orders**. Binding it to a
-LAN lets any device on the wifi trade the account. `deploy/install.sh` *refuses
-to run* without a Tailscale IP rather than falling back — the guardrail is in
-code, not in a comment. Live on venus at `100.113.21.73:8787`, tailnet-only.
+This app has **no authentication** and holds live brokerage credentials. Even
+though it's read-only, binding it to a LAN lets any device on the wifi read the
+account's balances and positions. `deploy/install.sh` *refuses to run* without a
+Tailscale IP rather than falling back — the guardrail is in code, not in a
+comment. Live on venus at `100.113.21.73:8787`, tailnet-only.
 
 ### 2. Secrets live outside the repo, and only in files
 `../.env.webull` and `../.env.anthropic` sit in the **parent** directory, so they
@@ -49,32 +53,26 @@ shell does **not** reach the server — every Bash call spawns a fresh shell, an
 systemd gets its own environment. Audit `git diff --cached` for `sk-ant-` /
 `td_live_` before any push.
 
-### 3. Six gates before an order goes out
-In order: **armed** (session flag, OFF every boot, never persisted) → **confirm**
-(last 4 of the account number, not a fixed word) → **preview token** (single-use,
-60s TTL, bound to the exact params) → **tick check** → **oversell check** →
-**risk guard** (notional cap + buying power).
-
-Three of these exist because a `qty * price > cap` check is blind to them:
-- A **duplicate order** — so one `client_order_id` is minted at preview and
-  reused at place. Never regenerate it on the place path.
-- A **sell** — selling doesn't consume buying power, so 100 shares of a 3-share
-  position at $0.20 is $20 of notional and passes every dollar check while
-  opening a 97-share short.
-- A **malformed price** — off-tick prices are rejected, not silently rounded.
+### 3. There is no order path. Keep it that way.
+sidecar reads accounts, balances, and positions — nothing in `wb.py` calls
+`preview_order`, `place_order`, or `cancel_order`. Chat is read-only too
+(`Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`) — it can discuss the numbers
+it's given, not act on them. Don't reintroduce an order ticket, an arm flag, or
+any write path to the broker without treating it as a new feature with its own
+threat model, not a small addition to this one.
 
 ### 4. Inject live state into chat; never make the model fetch it
 `WebFetch` upgrades `http://` to `https://`, so it **cannot** read this app's own
 loopback server. `chat.py` formats the portfolio + signals into the turn instead.
-Faster, no tool round-trip, guaranteed current. Chat is read-only (`Read`,
-`Glob`, `Grep`, `WebSearch`, `WebFetch`) — the order path has its own gates and
-a chat box must not become a second, unguarded way in.
+Faster, no tool round-trip, guaranteed current.
 
 ### 5. Assume this is on video
 The user streams this panel. `static/index.html` scrubs anything matching
 `sk-ant-…` / `td_live_…` before rendering, and `chat.py` sets
 `setting_sources=[]` so the user's `~/.claude` config never leaks into frame.
-Prompts are not a guarantee; the scrub is.
+Prompts are not a guarantee; the scrub is. The same logic applies to anything
+checked into the repo, not just what renders live — screenshots and docs get
+read on stream too; don't commit one showing real account numbers or balances.
 
 ### 6. Prefer the subscription credential
 `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) over `ANTHROPIC_API_KEY`.
@@ -84,20 +82,10 @@ being spent. The SDK still reports `total_cost_usd` on OAuth; it's notional.
 Note: the Agent SDK docs say offering claude.ai login *in a product for other
 users* needs prior approval — personal use only.
 
-### 7. Don't cargo-cult nautilus
-Read `nautilus_trader`'s risk engine, take the three checks in rule 3, and leave
-the rest. Explicitly rejected, with reasons, in the README: fixed-point money
-types (float64 is exact to ~15 digits at 2-dp equity prices), an order FSM (we
-poll; the broker is the source of truth), a submit throttler (one human, one
-button), boot reconciliation (we hold no authoritative state), and a price collar
-(**nautilus doesn't do this either** — collars are the venue's job).
-
 ## Gotchas that will cost you an hour
 
 All verified 2026-07-16 and documented at length in the README:
 
-- **`combo_type: "NORMAL"` is mandatory** on equity orders. Webull's own bundled
-  sample omits it → `417 invalid combo_type`.
 - **Rate limits are tight**: balance and positions are **2 req / 2s each**. One
   poll spends the whole budget across two accounts. `wb.py` uses a lock so
   concurrent callers share one fetch, plus backoff and a stale fallback.
@@ -112,7 +100,6 @@ All verified 2026-07-16 and documented at length in the README:
   ignored and you silently get the market-wide gauge for every call.
 - **TDPro doesn't declare a charset**, so `requests` decodes UTF-8 as
   ISO-8859-1 and em-dashes arrive as `â€"`.
-- **`str(1e-05)` is `'1e-05'`** — use `safety.fmt_price` for anything on the wire.
 - **Python must be `>=3.8,<3.14`** (Webull SDK pins it). venus defaults to 3.14;
   it runs on a `python3.10` venv.
 - **The Python Agent SDK ships no `claude` binary** (only the TS one does).
@@ -121,9 +108,8 @@ All verified 2026-07-16 and documented at length in the README:
 ## Layout
 
 ```
-wb.py       Webull SDK wrapper — credentials, caching, rate-limit handling
-risk.py     Portfolio guardrails + pre-trade order checks
-safety.py   Arm flag, preview-token vault, tick validation, order journal
+wb.py       Webull SDK wrapper — credentials, caching, rate-limit handling (read-only)
+risk.py     Portfolio guardrails
 td.py       TraderDaddy Pro client (direct JSON-RPC, no MCP library)
 chat.py     Claude chat via the Agent SDK; injects live state into each turn
 server.py   FastAPI routes
@@ -134,8 +120,7 @@ deploy/     systemd unit + Tailscale-bound installer
 ## Status
 
 Working and verified against the live account: positions, guardrails, TDPro
-signals, chat, order preview. **No real order has been placed through it yet** —
-only previews. The order path is tested end-to-end up to the point of submission.
+signals, chat. Read-only — there is no order path to test.
 
 Deployed on venus (`100.113.21.73:8787`) as a boot-enabled user service. The
 local Crostini copy binds `127.0.0.1`, which the ChromeOS browser **cannot

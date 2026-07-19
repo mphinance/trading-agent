@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 *.log
+*.log.*
+webull_trade_sdk.log*
 .env*
 .venv/
 deploy/sidecar.env

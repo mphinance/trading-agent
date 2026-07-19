@@ -2,6 +2,10 @@
 
 Thin layer over webull-openapi-python-sdk: credential loading, a short TTL cache
 sized to Webull's rate limits, and normalised portfolio shapes for the UI.
+
+Read-only. This wrapper only ever reads accounts/balances/positions — it holds
+no order-placement calls, by design (sidecar is a companion, not a second way
+to trade).
 """
 
 from __future__ import annotations
@@ -9,7 +13,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -72,10 +75,6 @@ class Webull:
         self._cache[key] = (now, val)
         return val
 
-    def invalidate(self) -> None:
-        """Drop cached portfolio state (call after an order changes it)."""
-        self._cache.pop("portfolio", None)
-
     @staticmethod
     def _is_429(e: Exception) -> bool:
         return "429" in str(e) or "TOO_MANY_REQUESTS" in str(e)
@@ -93,19 +92,6 @@ class Webull:
 
     def accounts(self) -> list[dict]:
         return self._cached("accounts", lambda: self._trade.account_v2.get_account_list().json(), ttl=60.0)
-
-    def equity_account_id(self) -> str:
-        for a in self.accounts():
-            if a.get("account_class") == "INDIVIDUAL_CASH":
-                return a["account_id"]
-        raise WebullError("no INDIVIDUAL_CASH account found")
-
-    def equity_account_number(self) -> str:
-        """Human-facing account number — its last 4 is the place-order confirmation."""
-        for a in self.accounts():
-            if a.get("account_class") == "INDIVIDUAL_CASH":
-                return a.get("account_number", "")
-        return ""
 
     def portfolio(self) -> dict:
         """Every account with balances and positions, plus rolled-up totals.
@@ -178,81 +164,6 @@ class Webull:
             },
             "fetched_at": time.time(),
         }
-
-    def _order_payload(self, symbol: str, side: str, qty: str, limit_price: str,
-                       client_order_id: str | None = None) -> list[dict]:
-        # combo_type is mandatory on equity orders — Webull's own bundled sample
-        # omits it and the request fails with 417 invalid combo_type.
-        #
-        # client_order_id is minted at preview and carried through to place, so
-        # an ambiguous timeout + retry is rejected by Webull as a duplicate
-        # rather than filling twice. Never regenerate it on the place path.
-        return [
-            {
-                "combo_type": "NORMAL",
-                "client_order_id": client_order_id or uuid.uuid4().hex,
-                "symbol": symbol.upper().strip(),
-                "instrument_type": "EQUITY",
-                "market": "US",
-                "order_type": "LIMIT",
-                "limit_price": str(limit_price),
-                "quantity": str(qty),
-                "support_trading_session": "CORE",
-                "side": side.upper().strip(),
-                "time_in_force": "DAY",
-                "entrust_type": "QTY",
-            }
-        ]
-
-    def preview(self, symbol: str, side: str, qty: str, limit_price: str,
-                client_order_id: str | None = None) -> dict:
-        aid = self.equity_account_id()
-        orders = self._order_payload(symbol, side, qty, limit_price, client_order_id)
-        res = self._trade.order_v2.preview_order(aid, orders)
-        return {"http": res.status_code, "payload": orders[0], "result": res.json()}
-
-    def place(self, symbol: str, side: str, qty: str, limit_price: str,
-              client_order_id: str | None = None) -> dict:
-        """Place a REAL order. Pass the client_order_id from preview — see _order_payload."""
-        aid = self.equity_account_id()
-        orders = self._order_payload(symbol, side, qty, limit_price, client_order_id)
-        res = self._trade.order_v2.place_order(aid, orders)
-        self.invalidate()
-        return {"http": res.status_code, "payload": orders[0], "result": res.json()}
-
-    def held_qty(self, symbol: str) -> float:
-        """Shares currently held. Used to block an oversell → accidental short."""
-        for p in self.portfolio()["positions"]:
-            if p["symbol"] == symbol.upper().strip():
-                return p["quantity"]
-        return 0.0
-
-    def open_sell_qty(self, symbol: str) -> float:
-        """Quantity already working on the sell side, so two half-sells can't both pass."""
-        total = 0.0
-        for o in self.open_orders():
-            if (o.get("symbol", "").upper() == symbol.upper().strip()
-                    and str(o.get("side", "")).upper() == "SELL"):
-                try:
-                    total += float(o.get("quantity", 0)) - float(o.get("filled_quantity", 0) or 0)
-                except (TypeError, ValueError):
-                    pass
-        return total
-
-    def open_orders(self) -> list[dict]:
-        aid = self.equity_account_id()
-        try:
-            res = self._trade.order_v2.get_order_open(aid)
-            return res.json() if res.status_code == 200 else []
-        except Exception:
-            return []
-
-    def cancel(self, client_order_id: str) -> dict:
-        aid = self.equity_account_id()
-        res = self._trade.order_v2.cancel_order(aid, client_order_id)
-        self.invalidate()
-        return {"http": res.status_code, "result": res.json()}
-
 
 def _f(v: Any) -> float:
     try:
