@@ -6,11 +6,10 @@ TraderDaddy Pro signals, and a Claude chat panel — in a browser window you par
 an order.** It only ever reads your account; all trading still happens in
 Webull Desktop itself.
 
-<!-- Screenshot pending — the previous one showed an order-ticket UI that no
-     longer exists in this app. Drop an updated docs/screenshot.png here and
-     restore the image line below.
 ![sidecar](docs/screenshot.png)
--->
+
+*Portfolio, guardrails, options flow, and conviction figures above are
+illustrative sample data, not a real account.*
 
 ## Why "sidecar" and not an overlay
 
