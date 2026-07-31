@@ -60,7 +60,9 @@ class Webull:
             raise WebullError("WEBULL_KEY / WEBULL_SECRET missing from .env.webull")
         client = ApiClient(key, secret, REGION)
         client.add_endpoint(REGION, PROD_HOST)
+        self._client = client
         self._trade = TradeClient(client)
+        self._data = None
         self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
         self._last_good: dict | None = None
@@ -89,6 +91,21 @@ class Webull:
                     time.sleep(BACKOFF_SEC)
                     continue
                 raise
+
+    def data_client(self):
+        """Market-data client, for quotes on symbols you don't hold.
+
+        Separate from the trade client and separately ENTITLED: sidecar's
+        credentials have only ever been exercised against the trade API, so this
+        may refuse. Callers must degrade rather than treat it as guaranteed.
+
+        Still read-only — DataClient exposes quotes, bars and screeners, and no
+        order surface whatsoever, so this does not widen rule 3.
+        """
+        if self._data is None:
+            from webull.data.data_client import DataClient
+            self._data = DataClient(self._client)
+        return self._data
 
     def accounts(self) -> list[dict]:
         return self._cached("accounts", lambda: self._trade.account_v2.get_account_list().json(), ttl=60.0)

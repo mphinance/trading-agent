@@ -49,9 +49,37 @@ committed by construction:
 | --- | --- |
 | `../.env.webull` | `WEBULL_KEY`, `WEBULL_SECRET` (required); `TD_API_KEY` (optional) |
 | `../.env.anthropic` | `CLAUDE_CODE_OAUTH_TOKEN` (preferred) **or** `ANTHROPIC_API_KEY` |
+| `../.env.notify` | `NTFY_TOPIC` (no signup) and/or `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` — optional, alert delivery |
 
-`run.sh` sources both. An `export` in your shell does **not** reach the server —
-it must be in the file.
+`run.sh` sources all of them. An `export` in your shell does **not** reach the
+server — it must be in the file.
+
+### Starting on a new machine
+
+Nothing in this repo carries a credential, so a fresh clone runs once the three
+env files exist. `../` means the directory *containing* the repo, not the repo.
+
+```bash
+git clone git@github.com:mphinance/webull-sidecar.git
+cd webull-sidecar
+python3.10 -m venv .venv                        # >=3.8,<3.14 (Webull SDK pins it)
+./.venv/bin/pip install -r requirements.txt
+npm i -g @anthropic-ai/claude-code              # the `claude` binary; chat needs it
+
+# credentials — copy from the old box or reissue; none of this is in git
+vi ../.env.webull ../.env.anthropic
+
+python3 notify.py --setup                       # alerts: mints an ntfy topic
+./run.sh
+```
+
+Then check `/api/health`, which reports each of Webull, TDPro and chat
+separately, so a missing credential names itself instead of failing vaguely.
+
+Alerts live in `~/.local/state/webull-sidecar/alerts.json` (override with
+`SIDECAR_STATE_DIR`), **not** in the repo — they do not travel with a clone. A
+new machine starts with none, which is usually what you want, since alerts armed
+from another desk are rarely still relevant.
 
 ### Optional env
 
@@ -60,15 +88,23 @@ it must be in the file.
 | `SIDECAR_HOST` | `127.0.0.1` | Bind address. Use a Tailscale IP to share; never `0.0.0.0`. |
 | `SIDECAR_PORT` | `8787` | Listen port. |
 | `SIDECAR_CHAT_MODEL` | `claude-sonnet-5` | Chat model. `claude-opus-4-8` for hard questions. |
-| `TD_API_KEY` | — | `td_live_…`; lights up the TraderDaddy panels. |
+| `TD_API_KEY` | — | `td_live_…`; lights up the TraderDaddy panels and dealer gamma. |
+| `SIDECAR_STATE_DIR` | `~/.local/state/webull-sidecar` | Where `alerts.json` lives. |
+| `SIDECAR_URL` | `http://127.0.0.1:8787` | Read by `mcp_server.py` to find sidecar. |
+| `NTFY_SERVER` | `https://ntfy.sh` | Override only for a self-hosted ntfy. |
 
 ## Layout
 
 ```
 wb.py            Webull SDK wrapper — credentials, caching, rate-limit handling (read-only)
 risk.py          Portfolio guardrails
-td.py            TraderDaddy Pro client (direct JSON-RPC, no MCP library)
+td.py            TraderDaddy Pro client (direct JSON-RPC, no MCP library) + dealer-gamma levels
 chat.py          Claude chat via the Agent SDK; injects live state into each turn
+alerts.py        Alert store + crossing logic (levels can BE the dealer structure)
+quotes.py        Last price, with a source chain: Webull data -> portfolio -> TDPro spot
+watcher.py       Background thread that evaluates alerts and delivers them
+notify.py        Alert delivery: ntfy (no signup) and/or Telegram
+mcp_server.py    Claude Desktop MCP server (thin client over the HTTP API)
 server.py        FastAPI routes
 static/          Single-page UI, no build step
 deploy/          systemd unit + installer (Tailscale-bound)
@@ -137,6 +173,178 @@ that dict as the book changes — the check is only as good as the map.
 - **`setting_sources=[]`** keeps the user's `~/.claude` config (CLAUDE.md,
   skills) out of a panel that gets streamed on video.
 
+## Alerts
+
+Alerts whose level can BE the dealer structure rather than a number you typed:
+
+```bash
+curl -X POST localhost:8787/api/alerts -H 'Content-Type: application/json' \
+  -d '{"symbol":"SPY","level":"flip","direction":"below","note":"trending down"}'
+```
+
+`level` is a price, or one of `flip` / `pin` / `wall_above` / `wall_below`, which
+are re-read from TDPro on every check. That is the reason this exists at all:
+**Webull, IBKR and TradingView all store a frozen number.** Dealer gamma moves
+daily, so a level typed on Monday is stale by Wednesday, still armed, quietly
+meaningless. Here the flip that fires the alert is the flip as of that tick.
+
+### Why the Webull app can't do this (verified 2026-07-31)
+
+**The Webull OpenAPI has no price-alert endpoint.** `webull-openapi-python-sdk`
+2.0.16 ships exactly one thing matching /alert/ — `GetFinancialsAlertRequest`,
+which hits `/openapi/fundamentals/financial/alert` and is earnings/fundamentals
+data, not a price trigger. So the app's alerts cannot be created, read or
+modified programmatically at all; they are a UI feature only. If you want them,
+set them by hand: right-click the chart → alert, or Alerts → Create New Alert →
+Preset Templates for a breakout, and turn on **push + email** rather than the
+in-app bell, whose delivery is unreliable.
+
+### Two traps this had to solve
+
+- **A break is a transition, not a comparison.** Testing `price <= level` fires
+  the instant you arm an alert on a level price has already passed. Alerts here
+  record which side price was on and fire only on a crossing; one armed on the
+  wrong side starts `pending` and waits for price to come back first.
+- **A moving level must not fire the alert by itself.** This one is unique to
+  gamma-aware alerts and no broker implementation has to deal with it: if the
+  flip moves 745 → 748 while price sits at 746.50, price is suddenly "below the
+  flip" without having moved. Both the previous and current price are therefore
+  compared against the *current* level, so a crossing requires price to have
+  moved; a level that jumps over a stationary price drops the alert back to
+  `pending` instead of firing.
+
+### Delivery
+
+Two channels, either or both, configured in `../.env.notify`.
+
+**ntfy — no account, no email, no signup**, and no server to run: the public
+ntfy.sh instance is all that's needed. On the box sidecar runs on:
+
+```bash
+python3 notify.py --setup      # mints a topic, writes ../.env.notify (0600)
+# install the ntfy app, subscribe to the topic it printed, then:
+python3 notify.py --test       # send a test — repeatable
+python3 notify.py              # show which channels are configured
+```
+
+`--setup` deliberately does **not** send a test. You cannot subscribe to a topic
+before it exists, so a test fired at that moment always beats the phone to it
+and is always missed. `--test` is separate so it can be run again — "did that
+work?" is a question you need to ask more than once.
+
+**The topic IS the credential.** ntfy.sh has no accounts and no access control:
+anyone who knows the topic can read every alert published to it. So `--setup`
+mints 128 bits of randomness rather than letting you pick something memorable,
+the env file is 0600, and — because this panel gets streamed (rule 5) —
+`status()` deliberately never returns the topic and no route sends it to the
+browser. **Keep it off camera.** A topic read off a video frame is a
+subscription someone else keeps.
+
+**Telegram** is the other option, and the one that could later carry a reply
+path since it is two-way. It costs a @BotFather signup, which now wants an email:
+
+```
+TELEGRAM_BOT_TOKEN=123456:AA...
+TELEGRAM_CHAT_ID=987654321
+```
+
+Send the new bot any message, then read the chat id from
+`https://api.telegram.org/bot<TOKEN>/getUpdates`.
+
+`POST /api/alerts/test` proves whichever path end to end. With both configured
+the alert goes to both, and success is any channel accepting it — one dead
+channel must not mark a delivered alert undelivered.
+
+Nothing configured is not an error: alerts still fire and show in the UI, and
+the panel says delivery is off rather than pretending.
+
+One ntfy trap: **its headers are latin-1**, so an emoji in the `Title` header
+500s while the identical character in the body is fine. `alert_title()` is
+ASCII-only for that reason; the arrows live in the body.
+
+### Quote sources, in order
+
+The watcher needs a price for symbols you may not hold, and only the first of
+these is a real quote feed:
+
+1. **Webull market-data snapshot** — batched, any symbol. Separately entitled
+   from trading, and sidecar's credentials have only ever been used against the
+   trade API, so **this may refuse**. It latches off on failure rather than
+   retrying a dead endpoint every tick.
+2. **The portfolio poll** — `last_price` already arrives on every position, so
+   held names are free. Held names only.
+3. **TDPro `spotPrice`** — cached ~5 min upstream, so it is a poor trigger. It
+   is the backstop, and any alert fired from it says so and says how old it was.
+
+## Claude Desktop (MCP)
+
+`mcp_server.py` is a stdio MCP server — a thin client that holds no credentials
+and makes one HTTP call per tool to the sidecar routes that already exist.
+
+```
+Claude Desktop ──stdio──► mcp_server.py ──HTTP──► sidecar on venus
+(your machine)            (your machine)          (100.113.21.73:8787)
+```
+
+Settings → Developer → Edit Config:
+
+```json
+{
+  "mcpServers": {
+    "sidecar": {
+      "command": "/path/to/webull-sidecar/.venv/bin/python",
+      "args": ["/path/to/webull-sidecar/mcp_server.py"],
+      "env": { "SIDECAR_URL": "http://100.113.21.73:8787" }
+    }
+  }
+}
+```
+
+`pip install mcp`, then restart Claude Desktop. Tools: `get_portfolio`,
+`get_gamma`, `get_signals`, `list_alerts`, `create_alert`, `delete_alert`,
+`test_alert_delivery`. No order tool, and there must never be one.
+
+- **stdio, not a remote connector.** Claude Desktop launches it as a subprocess
+  on your own machine, which is already on the tailnet — so no public hostname,
+  no TLS, and no auth layer to get wrong. A remote connector would mean exposing
+  sidecar to the internet, and sidecar has no authentication at all (rule 1).
+  supermcp is the repo that already solved OAuth; that is where a shareable
+  version belongs.
+- **MCP cannot be where alerts live.** A stdio server only runs while Claude
+  Desktop is talking to it, so an alert evaluated there would fire only during a
+  conversation — exactly when you don't need one. sidecar's own background
+  thread does the watching; these tools only arm and inspect.
+- **`level` must accept a string or a number.** Typed as `str` alone, "alert me
+  when SPY breaks 743" fails schema validation before it reaches the server,
+  because the model sends `743` as a number. Caught in testing; both arms now.
+
+## Voice (verified 2026-07-31)
+
+Click the 🎙 button or press **Ctrl+Space**, speak, and stop. The transcript
+lands in the chat box and sends itself; the reply is read back aloud. A turn you
+*typed* is never spoken — unrequested audio is a real cost on a streamed desk.
+
+- Built on the browser's **Web Speech API** (`webkitSpeechRecognition` +
+  `speechSynthesis`). No dependency, no build step, nothing added to the server.
+  Chrome only — the button disables itself and says so elsewhere. Recognition
+  goes through Chrome's recognizer, the same path as any dictation in the browser.
+- **Stop the speech synthesis before starting recognition.** The recognizer hears
+  the speakers, so a reply still being read aloud gets transcribed back as the
+  next question. `toggleMic()` cancels playback first, and a click while Claude
+  is talking just hushes it (barge-in) rather than opening the mic into the tail
+  of an utterance.
+- **Speak the text, not the markdown.** Bullets, backticks and `#` all read aloud
+  as noise, and `$743` comes out as "dollar seven four three" without a rewrite.
+  The same secret scrub the renderer uses applies before speaking — a token read
+  out on stream leaks exactly as badly as one displayed.
+- **Tickers are the weak point.** Recognition renders NVDA as "in video" and
+  similar. Two mitigations: the focused Dealer Gamma symbol rides along with
+  every chat turn, so "what's the gamma here" needs no ticker at all; and the
+  system prompt tells the model to prefer a symbol from the live-data block over
+  a near-miss in the transcript, and to say which it used.
+- `continuous = false` — one utterance per press. A hot mic on a streamed desk
+  is not wanted.
+
 ## TraderDaddy API gotchas (verified 2026-07-16)
 
 - **`get_conviction` takes `symbol`, not `ticker`.** An unknown key is silently
@@ -156,6 +364,28 @@ that dict as the book changes — the check is only as good as the map.
   decodes `r.content` explicitly.
 - The endpoint takes a bare `tools/call` with **no initialize handshake**, so one
   POST per call — no MCP client library needed.
+
+### Dealer gamma (`get_gex_ticker` / `get_apex_levels`, verified 2026-07-31)
+
+- **`get_gex_ticker` returns the WHOLE strike ladder** — ~200 strikes and roughly
+  40KB of JSON for SPY, most of it strikes with `netGex: 0` that exist only
+  because they have open interest. Never hand that to a chat turn; `td.levels()`
+  compacts it to ~1.3KB (spot, regime, flip, pin, key levels, and the heaviest
+  strikes within ±5% of spot).
+- **The two tools name the same concept differently and compute it differently.**
+  `get_gex_ticker` gives `gammaFlipLevel` and `maxGammaStrike`; `get_apex_levels`
+  gives `gammaFlip` plus strikes scored 0–100 by OI mass blended with net gamma.
+  The two flips genuinely disagree, and since the flip is a *regime* boundary,
+  a disagreement can put price on opposite sides of the read. `td.levels()`
+  prefers apex, reports both, and sets `flip_split` when they straddle spot —
+  the UI and the chat prompt both surface that rather than quietly picking one.
+- **Apex is premium.** When it is gated the call fails and the picture degrades
+  to gex-only (`apex_note` says so) rather than returning nothing.
+- **Non-index names are computed on demand, ~2–4s on a cold call.** Index names
+  (SPX/SPY/QQQ/IWM/DIA) are cached upstream and answer instantly. So gamma is
+  fetched on demand, never polled across the book, and cached 5 min locally.
+- **Rank walls by `abs(netGex)`, not by `netGex`.** Put walls are negative; sort
+  by raw value and you get a read with resistance above and no support below.
 
 ## Visualisation notes
 

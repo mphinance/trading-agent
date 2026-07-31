@@ -1,0 +1,32 @@
+# sidecar dependencies.
+#
+# Python must be >=3.8,<3.14 — webull-openapi-python-sdk pins it. venus defaults
+# to 3.14, so it runs on a python3.10 venv:
+#
+#     python3.10 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+#
+# Unpinned on purpose: this is a personal tool on two machines, not a
+# distributed package, and pinning here would mean maintaining it. If a
+# transitive break ever shows up, pin the offender then, not pre-emptively.
+
+# Web server
+fastapi
+uvicorn
+
+# Webull broker API (read-only calls only — see rule 3 in CLAUDE.md).
+# Pulls in paho-mqtt for its streaming client, which needs build tools on some
+# Pythons; that stream is not used today.
+webull-openapi-python-sdk
+
+# TraderDaddy Pro JSON-RPC, Telegram, and ntfy all go over plain HTTP
+requests
+
+# Claude chat panel. Also needs the `claude` CLI binary, which this package does
+# NOT ship (only the TypeScript SDK does):
+#     npm i -g @anthropic-ai/claude-code
+# Without it, chat fails at runtime rather than at install.
+claude-agent-sdk
+
+# Claude Desktop MCP server (mcp_server.py). Only needed on the machine running
+# Claude Desktop, which may not be the machine running sidecar.
+mcp
