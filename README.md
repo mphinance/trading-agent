@@ -232,6 +232,24 @@ project's dependencies, so `python3 notify.py` dies on `import requests` before
 it does anything. The script prints its own re-invocation commands using
 whichever interpreter is running it, so copy them from its output.
 
+**Getting the topic onto the phone: `--qr`, not copy-paste.**
+
+```bash
+./.venv/bin/python notify.py --qr   # scannable subscribe URL
+```
+
+A 32-hex-character topic invites a typo, and a typo silently subscribes you to
+a topic nobody publishes to — it looks identical to a working setup until an
+alert never arrives. The other shortcuts are worse: pasting it into a chat, a
+note or an email puts a credential somewhere permanent and searchable. A QR is
+on screen for seconds and lands in the app directly.
+
+**To rotate**, delete the `NTFY_TOPIC` line from `../.env.notify`, re-run
+`--setup`, re-scan `--qr`, and restart sidecar. Do that if the topic was ever
+pasted, screenshotted, or on camera — anyone holding it can both read your
+alerts and **publish** to it, and a spoofed "SPY broke below flip" is
+indistinguishable from a real one.
+
 `--setup` deliberately does **not** send a test. You cannot subscribe to a topic
 before it exists, so a test fired at that moment always beats the phone to it
 and is always missed. `--test` is separate so it can be run again — "did that

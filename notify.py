@@ -276,6 +276,52 @@ def _self_cmd() -> str:
     return f"{exe_str} notify.py"
 
 
+def _qr(topic: str | None = None) -> int:
+    """`notify.py --qr` — print the subscribe URL as a scannable QR code.
+
+    Getting a 32-hex-character topic onto a phone is the one genuinely awkward
+    step, and the tempting shortcuts are all bad: typing it invites a typo that
+    silently subscribes you to a topic nobody publishes to, and pasting it into
+    a chat, a note or an email puts the credential somewhere permanent. A QR is
+    on screen for seconds, lands in the ntfy app directly, and leaves no copy.
+
+    Still a credential in visual form — do not screenshot it or scan it on camera.
+    """
+    topic = topic or _load_env().get("NTFY_TOPIC") or os.environ.get("NTFY_TOPIC", "")
+    if not topic:
+        print(f"No NTFY_TOPIC set. Run `{_self_cmd()} --setup` first.")
+        return 1
+    server = (os.environ.get("NTFY_SERVER") or _load_env().get("NTFY_SERVER")
+              or NTFY_DEFAULT_SERVER).rstrip("/")
+    url = f"{server}/{topic}"
+
+    try:
+        import io
+        import qrcode
+    except ModuleNotFoundError:
+        # Optional dependency: everything else here works without it, so this
+        # degrades to the URL rather than failing. Derive pip from the running
+        # interpreter for the same reason the other commands are derived.
+        import sys
+        pip = Path(sys.executable).with_name("pip")
+        print("QR output needs the `qrcode` package (pure python, no compiler):\n")
+        print(f"    {pip if pip.exists() else 'pip'} install qrcode\n")
+        print(f"Meanwhile, the subscribe URL is:\n\n    {url}\n")
+        return 1
+
+    q = qrcode.QRCode(border=1)
+    q.add_data(url)
+    q.make(fit=True)
+    buf = io.StringIO()
+    q.print_ascii(out=buf)
+    buf.seek(0)
+    print(buf.read())
+    print("Scan with the phone camera, or ntfy > + > Subscribe and scan there.\n")
+    print("This QR IS the topic, which IS the credential. Do not screenshot it,")
+    print("and do not have it on screen while recording.")
+    return 0
+
+
 def _setup() -> int:
     """`notify.py --setup` — mint a topic and save it.
 
@@ -313,6 +359,7 @@ def _setup() -> int:
     print("2. Tap + / Subscribe to topic, and enter this EXACTLY:\n")
     print(f"     {topic}\n")
     print(f"3. Come back here and run:  {_self_cmd()} --test\n")
+    print(f"   (or `{_self_cmd()} --qr` to scan it instead of typing it)\n")
     print("4. Restart sidecar to pick up the topic.\n")
     print("Keep that topic off camera. ntfy.sh has no accounts, so the topic IS")
     print("the credential: anyone who reads it off a stream gets your alerts,")
@@ -348,5 +395,7 @@ if __name__ == "__main__":
         raise SystemExit(_setup())
     if "--test" in sys.argv:
         raise SystemExit(_test())
+    if "--qr" in sys.argv:
+        raise SystemExit(_qr())
     print(json.dumps(Notifier().status(), indent=2))
     raise SystemExit(0)
