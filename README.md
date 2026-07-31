@@ -49,9 +49,37 @@ committed by construction:
 | --- | --- |
 | `../.env.webull` | `WEBULL_KEY`, `WEBULL_SECRET` (required); `TD_API_KEY` (optional) |
 | `../.env.anthropic` | `CLAUDE_CODE_OAUTH_TOKEN` (preferred) **or** `ANTHROPIC_API_KEY` |
+| `../.env.notify` | `NTFY_TOPIC` (no signup) and/or `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` — optional, alert delivery |
 
-`run.sh` sources both. An `export` in your shell does **not** reach the server —
-it must be in the file.
+`run.sh` sources all of them. An `export` in your shell does **not** reach the
+server — it must be in the file.
+
+### Starting on a new machine
+
+Nothing in this repo carries a credential, so a fresh clone runs once the three
+env files exist. `../` means the directory *containing* the repo, not the repo.
+
+```bash
+git clone git@github.com:mphinance/webull-sidecar.git
+cd webull-sidecar
+python3.10 -m venv .venv                        # >=3.8,<3.14 (Webull SDK pins it)
+./.venv/bin/pip install -r requirements.txt
+npm i -g @anthropic-ai/claude-code              # the `claude` binary; chat needs it
+
+# credentials — copy from the old box or reissue; none of this is in git
+vi ../.env.webull ../.env.anthropic
+
+python3 notify.py --setup                       # alerts: mints an ntfy topic
+./run.sh
+```
+
+Then check `/api/health`, which reports each of Webull, TDPro and chat
+separately, so a missing credential names itself instead of failing vaguely.
+
+Alerts live in `~/.local/state/webull-sidecar/alerts.json` (override with
+`SIDECAR_STATE_DIR`), **not** in the repo — they do not travel with a clone. A
+new machine starts with none, which is usually what you want, since alerts armed
+from another desk are rarely still relevant.
 
 ### Optional env
 
@@ -60,7 +88,10 @@ it must be in the file.
 | `SIDECAR_HOST` | `127.0.0.1` | Bind address. Use a Tailscale IP to share; never `0.0.0.0`. |
 | `SIDECAR_PORT` | `8787` | Listen port. |
 | `SIDECAR_CHAT_MODEL` | `claude-sonnet-5` | Chat model. `claude-opus-4-8` for hard questions. |
-| `TD_API_KEY` | — | `td_live_…`; lights up the TraderDaddy panels. |
+| `TD_API_KEY` | — | `td_live_…`; lights up the TraderDaddy panels and dealer gamma. |
+| `SIDECAR_STATE_DIR` | `~/.local/state/webull-sidecar` | Where `alerts.json` lives. |
+| `SIDECAR_URL` | `http://127.0.0.1:8787` | Read by `mcp_server.py` to find sidecar. |
+| `NTFY_SERVER` | `https://ntfy.sh` | Override only for a self-hosted ntfy. |
 
 ## Layout
 
