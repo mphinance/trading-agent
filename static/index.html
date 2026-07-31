@@ -235,10 +235,28 @@
   .btn-mic.speaking { border-color: var(--bull); color: var(--bull); }
 
   .gex-head { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
-  .gex-head input { flex: 1; min-width: 0; background: hsla(220 40% 6% / 0.7);
+  .gex-head input, .gex-head select {
+                    flex: 1; min-width: 0; background: hsla(220 40% 6% / 0.7);
                     border: 1px solid var(--border-strong); color: var(--text-primary);
                     border-radius: 8px; padding: 6px 9px; font-family: var(--font);
                     font-size: 12px; text-transform: uppercase; }
+  .gex-head select { text-transform: none; flex: 0 0 auto; }
+  #al-level { text-transform: none; }
+
+  .al-row { display: flex; align-items: center; gap: 8px; font-size: 12px;
+            padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .al-row:last-child { border-bottom: 0; }
+  .al-row .txt { flex: 1; min-width: 0; }
+  .al-row .sub { font-size: 10px; color: var(--text-faint); }
+  .al-state { font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase;
+              padding: 2px 6px; border-radius: 999px; border: 1px solid var(--border-strong);
+              color: var(--text-muted); white-space: nowrap; }
+  .al-state.armed { color: var(--bull); border-color: hsla(150 85% 50% / 0.4); }
+  .al-state.pending { color: var(--caution); border-color: hsla(42 96% 56% / 0.4); }
+  .al-state.triggered { color: var(--bear); border-color: hsla(2 90% 62% / 0.4); }
+  .al-del { background: transparent; border: 0; color: var(--text-faint); padding: 2px 4px;
+            font-size: 13px; line-height: 1; }
+  .al-del:hover { color: var(--bear); }
   .gex-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 3px 0; }
   .gex-row .k { color: var(--text-faint); }
   .gex-ladder { margin-top: 9px; border-top: 1px solid var(--border); padding-top: 8px; }
@@ -333,6 +351,22 @@
       <div class="card">
         <h2>Guardrails</h2>
         <div id="risk"><div class="empty">Loading…</div></div>
+      </div>
+
+      <div class="card">
+        <h2>Alerts <span class="count" id="alert-count">—</span>
+          <span class="right" id="alert-status"></span></h2>
+        <div class="gex-head">
+          <input id="al-sym" maxlength="6" spellcheck="false" placeholder="SYM" style="flex:0 0 62px" aria-label="Alert symbol">
+          <select id="al-dir" aria-label="Direction">
+            <option value="below">breaks below</option>
+            <option value="above">breaks above</option>
+          </select>
+          <input id="al-level" spellcheck="false" placeholder="flip / pin / 743" aria-label="Level">
+          <button id="al-add">Arm</button>
+        </div>
+        <div id="alerts"><div class="empty">Loading…</div></div>
+        <div class="gex-note" id="alert-note"></div>
       </div>
 
       <div class="card">
@@ -663,6 +697,80 @@ async function refreshSignals() {
   }
 }
 
+/* ---------- alerts ---------- */
+// States are worth distinguishing in the UI: "pending" means price is on the
+// wrong side of the level and the alert is waiting to arm, which looks like a
+// broken alert unless it says so.
+const AL_HINT = {
+  pending: "waiting for price to reach the arming side",
+  armed: "watching for the break",
+  triggered: "fired",
+};
+
+function renderAlerts(d) {
+  const list = d.alerts || [], el = $("alerts");
+  $("alert-count").textContent = list.length;
+
+  const w = d.watcher || {};
+  const tg = w.telegram || {};
+  const bits = [];
+  if (!w.running) bits.push("watcher STOPPED");
+  if (!tg.configured) bits.push("Telegram not configured — alerts fire but won't reach your phone");
+  if (w.last_error) bits.push("last error: " + w.last_error);
+  const q = w.quotes || {};
+  if (q.snapshot && q.snapshot !== "ok") bits.push("quotes: " + q.snapshot);
+  $("alert-note").innerHTML = bits.length ? esc(bits.join(" · ")) : "";
+  $("alert-status").textContent = w.running ? "watching " + (w.watching || []).length : "stopped";
+
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">No alerts. Try <code>flip</code>, <code>pin</code>, '
+      + '<code>wall_above</code> or <code>wall_below</code> for a level that tracks live '
+      + 'dealer structure instead of a frozen number.</div>';
+    return;
+  }
+  el.innerHTML = list.map(a => {
+    const lvl = a.level_now != null ? "$" + Number(a.level_now).toFixed(2) : "unavailable";
+    const dyn = a.level_ref ? `${esc(a.level_ref)} → ${lvl}` : lvl;
+    const last = a.last_price != null ? " · last $" + Number(a.last_price).toFixed(2) : "";
+    return `<div class="al-row">
+      <div class="txt"><div>${esc(a.symbol)} breaks ${esc(a.direction)} ${dyn}</div>
+        <div class="sub">${esc(AL_HINT[a.state] || a.state)}${last}${a.repeat ? " · repeating" : ""}
+          ${a.note ? " · " + esc(a.note) : ""}</div></div>
+      <span class="al-state ${esc(a.state)}">${esc(a.state)}</span>
+      <button class="al-del" data-del="${esc(a.id)}" title="Delete">✕</button>
+    </div>`;
+  }).join("");
+}
+
+async function loadAlerts() {
+  try { renderAlerts(await (await fetch("/api/alerts")).json()); }
+  catch { $("alerts").innerHTML = '<div class="empty">Alerts unavailable.</div>'; }
+}
+
+async function addAlert() {
+  const symbol = $("al-sym").value.trim().toUpperCase();
+  const level = $("al-level").value.trim();
+  if (!symbol || !level) return;
+  try {
+    const r = await fetch("/api/alerts", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, level, direction: $("al-dir").value }),
+    });
+    if (!r.ok) { $("alert-note").textContent = (await r.json()).detail || "rejected"; return; }
+    $("al-sym").value = ""; $("al-level").value = "";
+    loadAlerts();
+  } catch { $("alert-note").textContent = "could not reach the server"; }
+}
+
+$("al-add").onclick = addAlert;
+$("al-level").addEventListener("keydown", e => { if (e.key === "Enter") addAlert(); });
+$("alerts").addEventListener("click", async e => {
+  const id = e.target.closest("[data-del]")?.dataset.del;
+  if (!id) return;
+  await fetch("/api/alerts/" + encodeURIComponent(id), { method: "DELETE" });
+  loadAlerts();
+});
+
 /* ---------- dealer gamma ---------- */
 // The symbol whose structure is on screen. It rides along with every chat turn,
 // so "what's the gamma here" works without saying a ticker out loud — which
@@ -992,7 +1100,9 @@ $("suggest").addEventListener("click", e => {
   if (q) chatSend(q);
 });
 
-refresh(); refreshSignals(); chatStatus(); loadGex(gexSymbol);
+refresh(); refreshSignals(); chatStatus(); loadGex(gexSymbol); loadAlerts();
+// Matches the watcher's own poll, so a fire shows up within a tick of firing.
+setInterval(loadAlerts, 15000);
 setInterval(refresh, 10000);        // Webull caps balance/positions at 2 req / 2s
 setInterval(refreshSignals, 120000);
 // Gamma structure is cached upstream for 5 min; refreshing faster just burns

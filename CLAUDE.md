@@ -47,8 +47,8 @@ Tailscale IP rather than falling back — the guardrail is in code, not in a
 comment. Live on venus at `100.113.21.73:8787`, tailnet-only.
 
 ### 2. Secrets live outside the repo, and only in files
-`../.env.webull` and `../.env.anthropic` sit in the **parent** directory, so they
-cannot be committed by construction. `run.sh` sources them. An `export` in a
+`../.env.webull`, `../.env.anthropic` and `../.env.telegram` sit in the **parent**
+directory, so they cannot be committed by construction. `run.sh` sources them. An `export` in a
 shell does **not** reach the server — every Bash call spawns a fresh shell, and
 systemd gets its own environment. Audit `git diff --cached` for `sk-ant-` /
 `td_live_` before any push.
@@ -96,6 +96,42 @@ spoken reply if synthesis isn't cancelled first, and tickers are mis-transcribed
 constantly (NVDA becomes "in video"). The focused Dealer Gamma symbol is sent
 with every turn so the common questions need no ticker at all.
 
+### 4d. Alerts: the level is live, and a break is a transition
+`alerts.py` exists because every native alert system (Webull, IBKR, TradingView)
+stores a frozen NUMBER, and dealer gamma moves daily. An alert here can reference
+`flip` / `pin` / `wall_above` / `wall_below`, re-resolved from TDPro every tick.
+
+Do not "simplify" either of these; both were wrong on the first pass and both are
+covered by tests:
+
+- **Never test `price <= level`.** That fires the moment you arm an alert on a
+  level price has already passed. Alerts fire on a CROSSING, and one armed on the
+  wrong side starts `pending` until price returns.
+- **A moving level must never fire an alert on its own.** If the flip moves past
+  a stationary price, price did not break anything. Both previous and current
+  price are compared against the CURRENT level, so only price movement can cross
+  it; a level that jumps over price re-pends the alert instead of firing.
+
+Also: `resolve_level()` returns None rather than falling back to a remembered
+number when TDPro is unavailable. A stale flip is the exact failure this module
+exists to prevent, so an outage silences dynamic alerts instead of misfiring them.
+
+The watcher is a background THREAD, not an asyncio task — the Webull SDK is
+blocking, and a slow snapshot inside the event loop would stall the SSE chat
+stream that shares it.
+
+### 4e. MCP is the control surface, never the watcher
+`mcp_server.py` connects Claude Desktop over stdio and is a thin client: no
+credentials, no broker, one HTTP call per tool to routes that already exist.
+sidecar stays the only process holding the Webull keys.
+
+A stdio MCP server only runs while Claude Desktop is talking to it, so nothing
+that must happen while you are away can live there. Alerts are evaluated by
+sidecar's own thread; MCP only arms and inspects.
+
+Keep it stdio. A remote connector means exposing an app with no authentication
+to the internet — supermcp is where a shareable, OAuth-gated version belongs.
+
 ### 5. Assume this is on video
 The user streams this panel. `static/index.html` scrubs anything matching
 `sk-ant-…` / `td_live_…` before rendering, and `chat.py` sets
@@ -138,13 +174,18 @@ All verified 2026-07-16 and documented at length in the README:
 ## Layout
 
 ```
-wb.py       Webull SDK wrapper — credentials, caching, rate-limit handling (read-only)
-risk.py     Portfolio guardrails
-td.py       TraderDaddy Pro client (direct JSON-RPC, no MCP library)
-chat.py     Claude chat via the Agent SDK; injects live state into each turn
-server.py   FastAPI routes
-static/     Single-page UI, no build step
-deploy/     systemd unit + Tailscale-bound installer
+wb.py          Webull SDK wrapper — credentials, caching, rate-limit handling (read-only)
+risk.py        Portfolio guardrails
+td.py          TraderDaddy Pro client (direct JSON-RPC) + dealer-gamma levels
+chat.py        Claude chat via the Agent SDK; injects live state into each turn
+alerts.py      Alert store + crossing logic (a level can BE the dealer structure)
+quotes.py      Last price: Webull data -> portfolio -> TDPro spot, tagged by source
+watcher.py     Background thread that evaluates alerts and delivers them
+notify.py      Telegram delivery
+mcp_server.py  Claude Desktop MCP server (stdio, thin client over the HTTP API)
+server.py      FastAPI routes
+static/        Single-page UI, no build step
+deploy/        systemd unit + Tailscale-bound installer
 ```
 
 ## Status
