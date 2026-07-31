@@ -6,3 +6,9 @@ webull_trade_sdk.log*
 .env*
 .venv/
 deploy/sidecar.env
+
+# The Webull SDK writes its 2FA token to conf/token.txt under the working
+# directory unless WEBULL_OPENAPI_TOKEN_DIR says otherwise. That is a live
+# credential — never let it near a commit.
+conf/
+token.txt
