@@ -223,6 +223,35 @@
   .btn-send:hover:not(:disabled) { background: hsla(40 96% 56% / 0.22); }
   .chat-meta { font-size: 10px; color: var(--text-faint); margin-top: 8px;
                display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  /* Mic sits inside the send row. It turns red and pulses while listening —
+     this app gets streamed, so "is it hearing me" must be readable at a glance
+     from across the room, not just from a cursor hover. */
+  .btn-mic { background: transparent; border: 1px solid var(--border-strong); color: var(--text-muted);
+             align-self: stretch; padding: 0 12px; font-size: 15px; line-height: 1; }
+  .btn-mic:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .btn-mic.on { background: hsla(2 90% 62% / 0.18); border-color: var(--bear); color: var(--bear);
+                animation: mic-pulse 1.3s ease-in-out infinite; }
+  @keyframes mic-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.45 } }
+  .btn-mic.speaking { border-color: var(--bull); color: var(--bull); }
+
+  .gex-head { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
+  .gex-head input { flex: 1; min-width: 0; background: hsla(220 40% 6% / 0.7);
+                    border: 1px solid var(--border-strong); color: var(--text-primary);
+                    border-radius: 8px; padding: 6px 9px; font-family: var(--font);
+                    font-size: 12px; text-transform: uppercase; }
+  .gex-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 3px 0; }
+  .gex-row .k { color: var(--text-faint); }
+  .gex-ladder { margin-top: 9px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .gex-wall { display: grid; grid-template-columns: 58px 1fr auto; gap: 8px; align-items: center;
+              font-size: 11px; padding: 2px 0; }
+  .gex-wall .bar { height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .gex-wall .bar i { display: block; height: 100%; border-radius: 3px; }
+  .gex-spot { border-top: 1px dashed hsla(40 96% 56% / 0.5); margin: 4px 0; position: relative; }
+  .gex-spot span { position: absolute; right: 0; top: -7px; font-size: 9px; color: var(--accent);
+                   background: var(--bg-base); padding: 0 4px; }
+  .gex-note { font-size: 10px; color: var(--text-faint); margin-top: 8px; line-height: 1.5; }
+  .gex-split { color: var(--caution); }
+
   .suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
   .suggest button {
     background: transparent; border: 1px solid var(--border-strong); color: var(--text-muted);
@@ -295,6 +324,7 @@
         <div class="chat-log" id="chat-log"></div>
         <div class="chat-input">
           <textarea id="chat-in" rows="1" placeholder="Ask about your positions, the signals, the risk…"></textarea>
+          <button class="btn-mic" id="chat-mic" title="Hold a conversation — click or press Ctrl+Space">🎙</button>
           <button class="btn-send" id="chat-send">Send</button>
         </div>
         <div class="chat-meta" id="chat-meta"></div>
@@ -303,6 +333,15 @@
       <div class="card">
         <h2>Guardrails</h2>
         <div id="risk"><div class="empty">Loading…</div></div>
+      </div>
+
+      <div class="card">
+        <h2>Dealer Gamma <span class="right" id="gex-time"></span></h2>
+        <div class="gex-head">
+          <input id="gex-sym" value="SPY" maxlength="6" spellcheck="false" aria-label="Gamma symbol">
+          <button id="gex-go">Load</button>
+        </div>
+        <div id="gex"><div class="empty">Loading…</div></div>
       </div>
 
       <div class="card">
@@ -400,7 +439,9 @@ function renderPositions(p) {
     const c = cls(x.unrealized_pl);
     const convCell = convictionCell(conviction[x.symbol]);
     return `<tr>
-      <td><div class="sym"><i class="sw" style="background:${colorFor(x.symbol)}"></i>${esc(x.symbol)}
+      <td><div class="sym" ${x.instrument_type === "EQUITY" ? `data-gex="${esc(x.symbol)}"
+        style="cursor:pointer" title="Show dealer gamma for ${esc(x.symbol)}"` : ""}>
+        <i class="sw" style="background:${colorFor(x.symbol)}"></i>${esc(x.symbol)}
         ${x.instrument_type === "CRYPTO" ? '<span class="tag">crypto</span>' : ""}</div></td>
       <td class="neutral">${x.quantity.toLocaleString(undefined, {maximumFractionDigits: 6})}</td>
       <td class="neutral">${x.cost_price.toFixed(x.cost_price < 10 ? 4 : 2)}</td>
@@ -622,6 +663,97 @@ async function refreshSignals() {
   }
 }
 
+/* ---------- dealer gamma ---------- */
+// The symbol whose structure is on screen. It rides along with every chat turn,
+// so "what's the gamma here" works without saying a ticker out loud — which
+// matters because speech recognition is unreliable on tickers.
+let gexSymbol = "SPY", gexBusy = false;
+
+function renderGex(g) {
+  const el = $("gex");
+  if (!g || g.error) {
+    el.innerHTML = `<div class="empty">${esc(g?.error || "Gamma unavailable.")}</div>`;
+    $("gex-time").textContent = "";
+    return;
+  }
+  const rows = [];
+  const above = g.above_flip;
+  rows.push(`<div class="gex-row"><span class="k">spot</span><span>${money(g.spot)}</span></div>`);
+  if (g.flip) {
+    rows.push(`<div class="gex-row"><span class="k">flip</span><span>${money(g.flip)}
+      <span style="color:${above ? "var(--bull)" : "var(--bear)"}">${above ? "above" : "below"}</span></span></div>`);
+  }
+  if (g.regime) rows.push(`<div class="gex-row"><span class="k">regime</span><span>${esc(g.regime)}</span></div>`);
+  if (g.pin) rows.push(`<div class="gex-row"><span class="k">pin</span><span>${money(g.pin)}</span></div>`);
+
+  // Ladder: bar length is relative to the heaviest wall on screen, so the shape
+  // of the positioning reads at a glance. Green = call/positive gamma (dampening
+  // above), red = put/negative gamma (where support sits).
+  const walls = g.walls || [];
+  let ladder = "";
+  if (walls.length) {
+    const max = Math.max(...walls.map(w => Math.abs(w.net_gex))) || 1;
+    let spotDrawn = false;
+    ladder = '<div class="gex-ladder">';
+    // Walls arrive low-to-high; render high-to-low so the ladder reads like a chart.
+    for (const w of [...walls].reverse()) {
+      if (!spotDrawn && w.strike <= g.spot) {
+        ladder += `<div class="gex-spot"><span>${money(g.spot)}</span></div>`;
+        spotDrawn = true;
+      }
+      const pct = Math.max(3, Math.abs(w.net_gex) / max * 100);
+      const col = w.net_gex >= 0 ? "var(--bull)" : "var(--bear)";
+      const oi = w.net_gex >= 0 ? w.call_oi : w.put_oi;
+      ladder += `<div class="gex-wall"><span>${money(w.strike)}</span>
+        <span class="bar"><i style="width:${pct}%;background:${col}"></i></span>
+        <span style="color:var(--text-faint)">${Math.round(oi / 1000)}k OI</span></div>`;
+    }
+    if (!spotDrawn) ladder += `<div class="gex-spot"><span>${money(g.spot)}</span></div>`;
+    ladder += "</div>";
+  }
+
+  const notes = [];
+  // A split flip is the one thing here that changes the read rather than
+  // decorating it, so it is called out instead of being quietly resolved.
+  if (g.flip_split) {
+    notes.push(`<span class="gex-split">flip split: GEX ${money(g.flip_gex)} vs apex
+      ${money(g.flip_apex)} — models disagree on the regime.</span>`);
+  }
+  if (g.apex_note) notes.push(esc(g.apex_note) + " — flip is GEX-only.");
+  if (g.gamma_pocket) notes.push("gamma pocket: " + esc(g.gamma_pocket));
+  if (g.expirations?.length) notes.push("exp " + g.expirations.join(", "));
+
+  el.innerHTML = rows.join("") + ladder +
+    (notes.length ? `<div class="gex-note">${notes.join("<br>")}</div>` : "");
+  $("gex-time").textContent = g.as_of ? new Date(g.as_of).toLocaleTimeString() : "";
+}
+
+async function loadGex(sym) {
+  sym = (sym || "").trim().toUpperCase();
+  if (!/^[A-Z]{1,6}$/.test(sym) || gexBusy) return;
+  gexBusy = true;
+  gexSymbol = sym;
+  $("gex-sym").value = sym;
+  // A cold non-index name is computed upstream on first call (~2-4s), so say so
+  // rather than leaving the panel looking hung.
+  $("gex").innerHTML = '<div class="empty">Loading ' + esc(sym) + '…</div>';
+  try {
+    renderGex(await (await fetch("/api/gex/" + encodeURIComponent(sym))).json());
+  } catch {
+    $("gex").innerHTML = '<div class="empty">Gamma unavailable.</div>';
+  }
+  gexBusy = false;
+}
+
+$("gex-go").onclick = () => loadGex($("gex-sym").value);
+$("gex-sym").addEventListener("keydown", e => { if (e.key === "Enter") loadGex(e.target.value); });
+// Clicking a held equity focuses its gamma — and therefore what the chat sees.
+// Delegated, because the table is rebuilt on every 10s poll.
+$("positions").addEventListener("click", e => {
+  const sym = e.target.closest("[data-gex]")?.dataset.gex;
+  if (sym) loadGex(sym);
+});
+
 /* ---------- chat ---------- */
 let chatSession = null, chatBusy = false, chatCost = 0;
 
@@ -653,7 +785,7 @@ function bubble(who, cls) {
   return el.querySelector(".body");
 }
 
-async function chatSend(text) {
+async function chatSend(text, spoken = false) {
   if (chatBusy || !text.trim()) return;
   chatBusy = true; $("chat-send").disabled = true;
   bubble("You", "user").textContent = text;
@@ -663,16 +795,18 @@ async function chatSend(text) {
   const caret = document.createElement("span");
   caret.className = "caret";
   body.appendChild(caret);
+  let acc = "";
 
   try {
     const r = await fetch("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
       // Switching model starts a fresh session — resuming across models is not
       // meaningful, and the SDK ties session history to the model that made it.
-      body: JSON.stringify({ prompt: text, session_id: chatSession, model: $("chat-model").value }),
+      body: JSON.stringify({ prompt: text, session_id: chatSession, model: $("chat-model").value,
+                             symbol: gexSymbol }),
     });
     const reader = r.body.getReader(), dec = new TextDecoder();
-    let buf = "", acc = "";
+    let buf = "";
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -713,6 +847,102 @@ async function chatSend(text) {
   caret.remove();
   chatBusy = false; $("chat-send").disabled = false;
   renderChatMeta();
+  // Voice in, voice out: a turn started by voice is answered aloud, a typed one
+  // is not. The user streams this panel, so unrequested audio is a real cost.
+  if (spoken && acc) speak(acc);
+}
+
+/* ---------- voice ---------- */
+// Web Speech API — built into Chrome, which is what this runs in. No dependency,
+// no build step, and no audio leaves the machine except to Google's recognizer
+// (the same path any Chrome dictation takes).
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null, listening = false;
+
+// Speak the reply, not its markup. Bullets, code fences and bold markers all
+// read aloud as noise, and the secret scrub applies here too — a token spoken
+// on stream leaks exactly as badly as one rendered.
+function speak(text) {
+  if (!window.speechSynthesis) return;
+  const clean = scrub(text)
+    .replace(/```[\s\S]*?```/g, " code block omitted. ")
+    .replace(/[*_`#>]/g, "")
+    .replace(/\$(\d)/g, "$1 dollars ")   // "$743" reads as "dollar seven four three" otherwise
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return;
+  const u = new SpeechSynthesisUtterance(clean);
+  u.rate = 1.06;
+  speechSynthesis.cancel();   // never stack utterances across turns
+  speechSynthesis.speak(u);
+}
+
+function micState(on) {
+  listening = on;
+  $("chat-mic").classList.toggle("on", on);
+  $("chat-mic").textContent = on ? "◉" : "🎙";
+}
+
+function startListening() {
+  if (!SR || listening) return;
+  // Stop any reply still being read aloud first: the recognizer hears the
+  // speakers, and it will happily transcribe Claude's own answer back as the
+  // next question.
+  speechSynthesis?.cancel();
+
+  recog = new SR();
+  recog.lang = "en-US";
+  recog.interimResults = true;   // show words as they land, so a misheard ticker is visible immediately
+  recog.continuous = false;      // one utterance per press; a hot mic on a streamed desk is not wanted
+
+  let final = "";
+  recog.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += t; else interim += t;
+    }
+    const box = $("chat-in");
+    box.value = (final + interim).trim();
+    box.style.height = "auto";
+    box.style.height = Math.min(box.scrollHeight, 130) + "px";
+  };
+  recog.onerror = ev => {
+    micState(false);
+    if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+      $("chat-meta").textContent = "microphone blocked — allow it in the address bar";
+    }
+  };
+  // Fires after the utterance ends, whether by silence or by a second click.
+  recog.onend = () => {
+    micState(false);
+    const text = $("chat-in").value.trim();
+    // Send automatically — the point of voice is not having to reach for the
+    // keyboard. The transcript stays visible in the bubble, so a mishearing is
+    // obvious rather than silent, and nothing here can act on the account.
+    if (text) chatSend(text, true);
+  };
+  micState(true);
+  try { recog.start(); } catch { micState(false); }
+}
+
+function toggleMic() {
+  if (!SR) return;
+  if (listening) recog?.stop();            // onend sends what was heard
+  else if (speechSynthesis?.speaking) speechSynthesis.cancel();  // barge-in: hush, don't listen yet
+  else startListening();
+}
+
+$("chat-mic").onclick = toggleMic;
+// Ctrl+Space works from anywhere on the page, so the panel can be driven
+// without clicking into it first.
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey && e.code === "Space") { e.preventDefault(); toggleMic(); }
+});
+if (!SR) {
+  $("chat-mic").disabled = true;
+  $("chat-mic").title = "Voice needs Chrome's Web Speech API — not available in this browser";
+  $("chat-mic").style.opacity = 0.4;
 }
 
 let chatKind = null;
@@ -762,9 +992,12 @@ $("suggest").addEventListener("click", e => {
   if (q) chatSend(q);
 });
 
-refresh(); refreshSignals(); chatStatus();
+refresh(); refreshSignals(); chatStatus(); loadGex(gexSymbol);
 setInterval(refresh, 10000);        // Webull caps balance/positions at 2 req / 2s
 setInterval(refreshSignals, 120000);
+// Gamma structure is cached upstream for 5 min; refreshing faster just burns
+// the TDPro rate limit for a number that has not moved.
+setInterval(() => loadGex(gexSymbol), 300000);
 </script>
 </body>
 </html>

@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import json
+import re
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -24,6 +25,10 @@ from td import TDPro
 from wb import Webull, WebullError
 
 STATIC = Path(__file__).resolve().parent / "static"
+
+# Bound what reaches the upstream tool. Its own schema is ^[A-Za-z]{1,6}$, and
+# a path segment is user input even on loopback.
+_SYMBOL_RE = re.compile(r"^[A-Za-z]{1,6}$")
 
 app = FastAPI(title="sidecar", docs_url=None, redoc_url=None)
 
@@ -57,10 +62,27 @@ def signals():
     return _td.snapshot(symbols)
 
 
+@app.get("/api/gex/{symbol}")
+def gex(symbol: str):
+    """Dealer-gamma structure for one symbol.
+
+    On-demand rather than polled: a cold non-index name is computed upstream on
+    first call (~2-4s), so fanning this out across the book on a timer would be
+    both slow and rude to the rate limit. td.levels() caches for 5 minutes.
+    """
+    if not _SYMBOL_RE.match(symbol):
+        raise HTTPException(400, "symbol must be 1-6 letters")
+    return _td.levels(symbol)
+
+
 class ChatReq(BaseModel):
     prompt: str = Field(min_length=1, max_length=8000)
     session_id: str | None = None
     model: str | None = None
+    # The symbol whose gamma structure the UI is showing. Its levels ride along
+    # with the turn so "what's the gamma here" resolves without the user having
+    # to say a ticker out loud — speech recognition mangles tickers badly.
+    symbol: str | None = Field(default=None, max_length=6)
 
 
 @app.get("/api/chat/status")
@@ -90,10 +112,17 @@ async def chat_stream(req: ChatReq):
     except Exception:
         pass
 
+    levels = None
+    if req.symbol and _SYMBOL_RE.match(req.symbol):
+        try:
+            levels = _td.levels(req.symbol)
+        except Exception:
+            pass  # a dead gamma read must not cost the user their turn
+
     async def events():
         try:
             async for ev in chat.ask(req.prompt, session_id=req.session_id, model=req.model,
-                                     portfolio=portfolio, signals=signals):
+                                     portfolio=portfolio, signals=signals, levels=levels):
                 yield f"data: {json.dumps(ev)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"

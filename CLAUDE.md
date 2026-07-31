@@ -63,8 +63,38 @@ threat model, not a small addition to this one.
 
 ### 4. Inject live state into chat; never make the model fetch it
 `WebFetch` upgrades `http://` to `https://`, so it **cannot** read this app's own
-loopback server. `chat.py` formats the portfolio + signals into the turn instead.
-Faster, no tool round-trip, guaranteed current.
+loopback server. `chat.py` formats the portfolio + signals + dealer gamma into the
+turn instead. Faster, no tool round-trip, guaranteed current.
+
+The cost of injection is context, so **inject the compacted shape, never the raw
+payload**. `get_gex_ticker` returns the full strike ladder — ~200 strikes, ~40KB
+on SPY, mostly zeroes. `td.levels()` reduces it to ~1.3KB and is the only thing
+`_fmt_levels()` will read. If a future block starts costing more than the
+portfolio it is meant to inform, compact it before injecting it.
+
+### 4b. Gamma is a map of positioning, not a forecast
+Dealer gamma marks where hedging is concentrated, which is why price often
+*reacts* there. It never means price will travel there, and a wall above spot is
+not a reason to be long. The system prompt says this explicitly and the read
+should keep saying it — the failure mode is a level being repeated back as a
+target.
+
+The flip is a **regime boundary**, and the two tools disagree about where it is:
+`get_gex_ticker`'s `gammaFlipLevel` is read off the ladder, `get_apex_levels`'
+`gammaFlip` is simulated. When they straddle spot the regime call is genuinely
+uncertain, so `td.levels()` sets `flip_split` and both the UI and the prompt say
+so. Do not "fix" this by picking one silently — the disagreement is the signal.
+
+### 4c. Voice is browser-side only
+The mic uses the Web Speech API in `static/index.html`. Nothing about voice
+reaches the server — the transcript arrives as an ordinary chat POST. Keep it
+that way; an audio upload path would be a new threat model for a panel that
+already holds brokerage credentials and no authentication.
+
+Two traps that will look like bugs: recognition transcribes the app's own
+spoken reply if synthesis isn't cancelled first, and tickers are mis-transcribed
+constantly (NVDA becomes "in video"). The focused Dealer Gamma symbol is sent
+with every turn so the common questions need no ticker at all.
 
 ### 5. Assume this is on video
 The user streams this panel. `static/index.html` scrubs anything matching

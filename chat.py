@@ -39,9 +39,25 @@ SYSTEM_PROMPT = """You are the analyst panel inside `sidecar`, a read-only compa
 deck the user runs beside Webull Desktop. You cannot place trades — only discuss \
 what the account already holds.
 
-The user's live portfolio, guardrails, and TraderDaddy Pro signals are injected \
-into each turn as a LIVE DATA block. Read it from there — do not try to fetch \
-it. It is already current as of this turn.
+The user's live portfolio, guardrails, TraderDaddy Pro signals, and (when a \
+symbol is in focus) its dealer-gamma structure are injected into each turn as a \
+LIVE DATA block. Read it from there — do not try to fetch it. It is already \
+current as of this turn.
+
+Reading the DEALER GAMMA block, if present:
+- It is a map of where option hedging is concentrated. It is NOT a forecast. \
+Heavy gamma marks where price often REACTS on arrival; it never means price \
+will travel there. A wall above spot is not a reason to be long.
+- The flip is a regime boundary, not a target: above it dealer hedging dampens \
+moves (fades, mean reversion), below it it amplifies them (trends, breakouts).
+- If flip_split is true the two models disagree about which side price is on, \
+so the regime call is genuinely uncertain — say so rather than picking one.
+- Levels decay into expiry and the block lists which expirations it covers.
+
+Some of the user's questions will arrive by voice, so they may be short, \
+punctuated oddly, or contain a mis-transcribed ticker (speech recognition \
+renders NVDA as "in video", and so on). If a symbol in the question is close to \
+one in the LIVE DATA block, assume the block is right and say which you used.
 
 The account is small (a few hundred dollars). Position sizing and downside \
 matter far more than entry ideas; fixed costs and concentration hurt at this size.
@@ -56,7 +72,50 @@ on video; treat everything you render as public.
 """
 
 
-def _fmt_context(portfolio: dict | None, signals: dict | None) -> str:
+def _fmt_levels(lv: dict | None) -> list[str]:
+    """Render one symbol's dealer-gamma structure as prompt lines.
+
+    Reads td.levels()'s compacted shape, never a raw get_gex_ticker payload —
+    that one carries the whole strike ladder (~40KB on SPY) and would dwarf the
+    portfolio it is meant to inform.
+    """
+    if not lv or lv.get("error") or not lv.get("spot"):
+        return []
+    out = [f"DEALER GAMMA — {lv['symbol']} (spot ${lv['spot']:.2f}, as of {lv.get('as_of', '?')}):"]
+
+    flip, regime = lv.get("flip"), lv.get("regime")
+    if flip:
+        side = "ABOVE" if lv.get("above_flip") else "BELOW"
+        line = f"  flip=${flip:.2f} — price is {side} it ({regime or 'regime unknown'})"
+        if lv.get("flip_split"):
+            line += (f" [SPLIT: gex says ${lv['flip_gex']:.2f}, apex says ${lv['flip_apex']:.2f} — "
+                     "the two models put price on opposite sides, so the regime call is uncertain]")
+        out.append(line)
+    if lv.get("pin"):
+        out.append(f"  max-gamma pin=${lv['pin']:.2f}  net_gex={lv.get('net_gex', 0):,.0f}  "
+                   f"put/call_gex={lv.get('pc_gex_ratio', 0):.2f}")
+
+    kl = [f"${k['strike']:.2f} {k['type']}" for k in (lv.get("key_levels") or []) if k.get("strike")]
+    if kl:
+        out.append("  key levels: " + ", ".join(kl))
+
+    for w in (lv.get("walls") or []):
+        out.append(f"    ${w['strike']:.2f} {w['side']:<5} net_gex={w['net_gex']/1e6:+,.0f}M  "
+                   f"call_oi={w['call_oi']:,.0f} put_oi={w['put_oi']:,.0f}")
+    for a in (lv.get("apex") or []):
+        out.append(f"    apex #{a['rank']}: ${a['strike']:.2f} score={a['score']:.0f}/100 oi={a['oi']:,.0f}")
+
+    if lv.get("gamma_pocket"):
+        out.append(f"  gamma pocket: {lv['gamma_pocket']} (positioning divergence from the broad "
+                   "regime — a sizing/hedging note, not a direction call)")
+    if lv.get("apex_note"):
+        out.append(f"  note: {lv['apex_note']} — scored levels unavailable, flip is gex-only")
+    if lv.get("expirations"):
+        out.append("  expirations covered: " + ", ".join(lv["expirations"]))
+    return out
+
+
+def _fmt_context(portfolio: dict | None, signals: dict | None, levels: dict | None = None) -> str:
     """Compact the live state into a prompt block.
 
     Injected rather than fetched: the server already holds this data, WebFetch
@@ -64,7 +123,10 @@ def _fmt_context(portfolio: dict | None, signals: dict | None) -> str:
     tool round-trip costs latency and tokens for data we have in hand.
     """
     if not portfolio:
-        return ""
+        # Gamma alone is still worth a turn — the user may be asking about a
+        # symbol they don't hold, or Webull may simply be rate-limited.
+        gx = _fmt_levels(levels)
+        return "\n".join(["<live_data>", *gx, "</live_data>"]) if gx else ""
     t = portfolio.get("totals", {})
     lines = [
         "<live_data>",
@@ -109,6 +171,8 @@ def _fmt_context(portfolio: dict | None, signals: dict | None) -> str:
                     bits.append(f"{sym}={c['score']}" + ("(no signal)" if pillars <= 1 and c["score"] == 50 else ""))
             if bits:
                 lines.append("TD CONVICTION (0-100, 50=neutral): " + " ".join(bits))
+
+    lines.extend(_fmt_levels(levels))
     lines.append("</live_data>")
     return "\n".join(lines)
 
@@ -132,6 +196,7 @@ async def ask(
     model: str | None = None,
     portfolio: dict | None = None,
     signals: dict | None = None,
+    levels: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Stream a chat turn as {type, ...} events for the UI.
 
@@ -144,7 +209,7 @@ async def ask(
         yield {"type": "error", "message": label}
         return
 
-    ctx = _fmt_context(portfolio, signals)
+    ctx = _fmt_context(portfolio, signals, levels)
     full_prompt = f"{ctx}\n\n{prompt}" if ctx else prompt
 
     opts = ClaudeAgentOptions(

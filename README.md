@@ -67,7 +67,7 @@ it must be in the file.
 ```
 wb.py            Webull SDK wrapper — credentials, caching, rate-limit handling (read-only)
 risk.py          Portfolio guardrails
-td.py            TraderDaddy Pro client (direct JSON-RPC, no MCP library)
+td.py            TraderDaddy Pro client (direct JSON-RPC, no MCP library) + dealer-gamma levels
 chat.py          Claude chat via the Agent SDK; injects live state into each turn
 server.py        FastAPI routes
 static/          Single-page UI, no build step
@@ -137,6 +137,33 @@ that dict as the book changes — the check is only as good as the map.
 - **`setting_sources=[]`** keeps the user's `~/.claude` config (CLAUDE.md,
   skills) out of a panel that gets streamed on video.
 
+## Voice (verified 2026-07-31)
+
+Click the 🎙 button or press **Ctrl+Space**, speak, and stop. The transcript
+lands in the chat box and sends itself; the reply is read back aloud. A turn you
+*typed* is never spoken — unrequested audio is a real cost on a streamed desk.
+
+- Built on the browser's **Web Speech API** (`webkitSpeechRecognition` +
+  `speechSynthesis`). No dependency, no build step, nothing added to the server.
+  Chrome only — the button disables itself and says so elsewhere. Recognition
+  goes through Chrome's recognizer, the same path as any dictation in the browser.
+- **Stop the speech synthesis before starting recognition.** The recognizer hears
+  the speakers, so a reply still being read aloud gets transcribed back as the
+  next question. `toggleMic()` cancels playback first, and a click while Claude
+  is talking just hushes it (barge-in) rather than opening the mic into the tail
+  of an utterance.
+- **Speak the text, not the markdown.** Bullets, backticks and `#` all read aloud
+  as noise, and `$743` comes out as "dollar seven four three" without a rewrite.
+  The same secret scrub the renderer uses applies before speaking — a token read
+  out on stream leaks exactly as badly as one displayed.
+- **Tickers are the weak point.** Recognition renders NVDA as "in video" and
+  similar. Two mitigations: the focused Dealer Gamma symbol rides along with
+  every chat turn, so "what's the gamma here" needs no ticker at all; and the
+  system prompt tells the model to prefer a symbol from the live-data block over
+  a near-miss in the transcript, and to say which it used.
+- `continuous = false` — one utterance per press. A hot mic on a streamed desk
+  is not wanted.
+
 ## TraderDaddy API gotchas (verified 2026-07-16)
 
 - **`get_conviction` takes `symbol`, not `ticker`.** An unknown key is silently
@@ -156,6 +183,28 @@ that dict as the book changes — the check is only as good as the map.
   decodes `r.content` explicitly.
 - The endpoint takes a bare `tools/call` with **no initialize handshake**, so one
   POST per call — no MCP client library needed.
+
+### Dealer gamma (`get_gex_ticker` / `get_apex_levels`, verified 2026-07-31)
+
+- **`get_gex_ticker` returns the WHOLE strike ladder** — ~200 strikes and roughly
+  40KB of JSON for SPY, most of it strikes with `netGex: 0` that exist only
+  because they have open interest. Never hand that to a chat turn; `td.levels()`
+  compacts it to ~1.3KB (spot, regime, flip, pin, key levels, and the heaviest
+  strikes within ±5% of spot).
+- **The two tools name the same concept differently and compute it differently.**
+  `get_gex_ticker` gives `gammaFlipLevel` and `maxGammaStrike`; `get_apex_levels`
+  gives `gammaFlip` plus strikes scored 0–100 by OI mass blended with net gamma.
+  The two flips genuinely disagree, and since the flip is a *regime* boundary,
+  a disagreement can put price on opposite sides of the read. `td.levels()`
+  prefers apex, reports both, and sets `flip_split` when they straddle spot —
+  the UI and the chat prompt both surface that rather than quietly picking one.
+- **Apex is premium.** When it is gated the call fails and the picture degrades
+  to gex-only (`apex_note` says so) rather than returning nothing.
+- **Non-index names are computed on demand, ~2–4s on a cold call.** Index names
+  (SPX/SPY/QQQ/IWM/DIA) are cached upstream and answer instantly. So gamma is
+  fetched on demand, never polled across the book, and cached 5 min locally.
+- **Rank walls by `abs(netGex)`, not by `netGex`.** Put walls are negative; sort
+  by raw value and you get a read with resistance above and no support below.
 
 ## Visualisation notes
 
