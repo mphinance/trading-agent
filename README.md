@@ -20,6 +20,9 @@ sidecar, sidecar calls Webull.
 reads the order back, and only sends after you say yes — and every order runs a
 notional cap and a quantity cap first. See [Trading](#trading).
 
+📖 **[docs/API.md](docs/API.md)** — every MCP tool, every HTTP route, the ticket
+handshake, and the SSE stream format.
+
 ![sidecar](docs/screenshot.png)
 
 *Portfolio, guardrails, options flow, and conviction figures above are
@@ -72,8 +75,15 @@ client. Then add to `claude_desktop_config.json`:
 ```
 
 Restart Claude Desktop and you get 31 tools: portfolio, quotes, bars, depth,
-time & sales, option chains, research, screeners, watchlists, orders. Point it
-at a remote sidecar with `SIDECAR_URL=http://100.113.21.73:8787`.
+time & sales, option chains, research, screeners, watchlists, orders — all
+listed in [docs/API.md](docs/API.md). Point it at a remote sidecar with
+`SIDECAR_URL=http://100.113.21.73:8787`.
+
+Then talk to it:
+
+> **You:** what am I holding?
+> **You:** pull up the ONDS chain for next Friday
+> **You:** buy two ONDS at eight forty with a stop at seven ninety
 
 ### Credentials
 
@@ -166,6 +176,7 @@ mcp.sh           What Claude Desktop spawns
 test_orders.py   Order-path tests against a stub broker (no network, no account)
 static/          Single-page UI, no build step
 deploy/          systemd unit + installer (Tailscale-bound)
+docs/API.md      Full MCP tool + HTTP route + SSE stream reference
 ```
 
 `mcp_server.py` deliberately has no Webull client of its own. Two SDK clients

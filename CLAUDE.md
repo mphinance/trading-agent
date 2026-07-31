@@ -13,7 +13,8 @@ MCP server). You talk to Claude; Claude calls sidecar; sidecar calls Webull.
 
 **This app can place orders.** That was not true before — see rule 3 for what
 changed and what guards it. See [README.md](./README.md) for setup, deploy, and
-the full list of API traps.
+the full list of API traps, and [docs/API.md](./docs/API.md) for every MCP tool,
+HTTP route, the ticket handshake, and the SSE event shapes.
 
 **This is the org's only real Webull integration.** The one in `trading-dashboard`
 (now archived) was a credential form wired to a `setTimeout`. Nothing else here
@@ -161,6 +162,9 @@ mcp.sh        What Claude Desktop spawns
 static/       Single-page UI, no build step
 deploy/       systemd unit + Tailscale-bound installer
 test_orders.py Order-path tests against a stub broker — no network, no account
+docs/API.md   Generated-from-code reference: 31 MCP tools, 37 HTTP endpoints, SSE
+              event shapes, the ticket handshake. Regenerate it if you add a
+              route or a tool — a stale API doc is worse than none.
 ```
 
 `mcp_server.py` deliberately does **not** build its own Webull client. Two SDK
