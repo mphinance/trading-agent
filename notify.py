@@ -240,49 +240,76 @@ def alert_title(rec: dict) -> str:
 
 
 def _setup() -> int:
-    """`python3 notify.py --setup` — mint a topic, save it, send a test.
+    """`python3 notify.py --setup` — mint a topic and save it.
 
     Writes `../.env.notify` with mode 0600. The file holds the topic, which is
     the only thing standing between your alerts and anyone else, so it gets the
     same treatment as a token. Refuses to overwrite an existing NTFY_TOPIC —
     replacing it silently would leave the phone subscribed to a dead one.
+
+    Deliberately does NOT send a test here. You cannot subscribe to a topic that
+    does not exist yet, so a test fired at this moment always arrives before the
+    phone is listening and is always missed. Subscribe first, then `--test`.
     """
     path = PARENT / ".env.notify"
     existing = _load_env()
     if existing.get("NTFY_TOPIC"):
-        print(f"NTFY_TOPIC is already set (in {path} or the environment). "
-              "Delete it first if you want a new one.")
+        print(f"NTFY_TOPIC is already set (in {path} or the environment).")
+        print("Run `python3 notify.py --test` to send to it, or delete the line "
+              "from that file first if you want a new topic.")
         return 1
 
     topic = pick_topic()
-    line = f"NTFY_TOPIC={topic}\n"
     try:
         with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line)
+            fh.write(f"NTFY_TOPIC={topic}\n")
         os.chmod(path, 0o600)
     except OSError as e:
         print(f"could not write {path}: {e}")
         return 1
 
     print(f"wrote {path} (mode 600)\n")
-    print("On your phone: install ntfy (App Store / Play Store / F-Droid),")
-    print("tap Subscribe, and enter this topic EXACTLY:\n")
-    print(f"    {topic}\n")
-    print("Keep it off camera. There are no accounts on ntfy.sh — the topic IS")
-    print("the credential, and anyone who reads it off a stream gets your alerts.\n")
-
-    if Ntfy({"NTFY_TOPIC": topic}).send(
-            "If you can read this, sidecar alerts will reach your phone.",
-            "sidecar is connected"):
-        print("test notification sent. Subscribe first, then re-run to see it arrive.")
-    else:
-        print("test notification FAILED to send — check network access to ntfy.sh")
-        return 1
-    print("\nRestart sidecar to pick up the new topic.")
+    print("1. On your phone, install ntfy:")
+    print("     iOS      App Store   -> 'ntfy'")
+    print("     Android  Play Store or F-Droid -> 'ntfy'")
+    print("   Leave the server as the default (ntfy.sh). There is no account to make.\n")
+    print("2. Tap + / Subscribe to topic, and enter this EXACTLY:\n")
+    print(f"     {topic}\n")
+    print("3. Come back here and run:  python3 notify.py --test\n")
+    print("4. Restart sidecar to pick up the topic.\n")
+    print("Keep that topic off camera. ntfy.sh has no accounts, so the topic IS")
+    print("the credential: anyone who reads it off a stream gets your alerts,")
+    print("and can send you fake ones. Rotate by deleting the line and re-running.")
     return 0
+
+
+def _test() -> int:
+    """`python3 notify.py --test` — send to whatever is configured, repeatably.
+
+    Separate from --setup precisely so it can be run again: the first test
+    always races the phone's subscription, and "did it work" is a question you
+    need to be able to ask more than once.
+    """
+    n = Notifier()
+    if not n.configured:
+        print(n.status()["reason"])
+        print("\nRun `python3 notify.py --setup` for the no-signup ntfy path.")
+        return 1
+    names = ", ".join(c.name for c in n.active)
+    if n.send("If you can read this, sidecar alerts will reach your phone.",
+              "sidecar is connected"):
+        print(f"sent via {names}. If nothing arrives, check the topic in the app "
+              "matches ../.env.notify exactly.")
+        return 0
+    print(f"FAILED to send via {names} — check network access.")
+    return 1
 
 
 if __name__ == "__main__":
     import sys
-    raise SystemExit(_setup() if "--setup" in sys.argv else
-                     (print(json.dumps(Notifier().status(), indent=2)) or 0))
+    if "--setup" in sys.argv:
+        raise SystemExit(_setup())
+    if "--test" in sys.argv:
+        raise SystemExit(_test())
+    print(json.dumps(Notifier().status(), indent=2))
+    raise SystemExit(0)

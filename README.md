@@ -186,15 +186,20 @@ in-app bell, whose delivery is unreliable.
 
 Two channels, either or both, configured in `../.env.notify`.
 
-**ntfy — no account, no email, no signup.** One command:
+**ntfy — no account, no email, no signup**, and no server to run: the public
+ntfy.sh instance is all that's needed. On the box sidecar runs on:
 
 ```bash
-python3 notify.py --setup      # mints a topic, writes ../.env.notify (0600), sends a test
+python3 notify.py --setup      # mints a topic, writes ../.env.notify (0600)
+# install the ntfy app, subscribe to the topic it printed, then:
+python3 notify.py --test       # send a test — repeatable
 python3 notify.py              # show which channels are configured
 ```
 
-Then install the ntfy app (App Store / Play Store / F-Droid), tap Subscribe, and
-enter the topic it printed. Restart sidecar.
+`--setup` deliberately does **not** send a test. You cannot subscribe to a topic
+before it exists, so a test fired at that moment always beats the phone to it
+and is always missed. `--test` is separate so it can be run again — "did that
+work?" is a question you need to ask more than once.
 
 **The topic IS the credential.** ntfy.sh has no accounts and no access control:
 anyone who knows the topic can read every alert published to it. So `--setup`
