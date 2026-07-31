@@ -38,7 +38,25 @@ import secrets
 import time
 from pathlib import Path
 
-import requests
+try:
+    import requests
+except ModuleNotFoundError as e:  # pragma: no cover - operator ergonomics
+    # Reached by running `python3 notify.py` instead of the venv's python. The
+    # bare ImportError names the module but not the cause, and the cause is
+    # always the same: the deps live in .venv (python3.10, since the Webull SDK
+    # pins <3.14) and the system interpreter has none of them.
+    import sys
+    _venv = Path(__file__).resolve().parent / ".venv" / "bin" / "python"
+    print(f"{e}\n", file=sys.stderr)
+    print(f"Ran with: {sys.executable}", file=sys.stderr)
+    if _venv.exists():
+        print(f"Use the project venv instead:\n\n    {_venv} {Path(__file__).name} "
+              f"{' '.join(sys.argv[1:]) or '--setup'}\n", file=sys.stderr)
+    else:
+        print("No .venv here. Create one:\n\n"
+              "    python3.10 -m venv .venv\n"
+              "    ./.venv/bin/pip install -r requirements.txt\n", file=sys.stderr)
+    raise SystemExit(1)
 
 PARENT = Path(__file__).resolve().parent.parent
 ENV_PATHS = (PARENT / ".env.notify", PARENT / ".env.telegram")
@@ -239,8 +257,27 @@ def alert_title(rec: dict) -> str:
     return f"{rec['symbol']} broke {rec['direction']} {rec['level']:.2f}"
 
 
+def _self_cmd() -> str:
+    """How to re-invoke this script, using the interpreter actually running it.
+
+    Hardcoding `python3` here is wrong on the deployment this is written for:
+    venus runs sidecar from a python3.10 venv (the Webull SDK pins <3.14), and
+    the system python3 has none of the dependencies, so `python3 notify.py`
+    dies on `import requests` before doing anything. Deriving the command from
+    sys.executable means the instructions are correct wherever they are printed.
+    """
+    import sys
+    exe = Path(sys.executable)
+    try:
+        rel = exe.relative_to(Path.cwd())
+        exe_str = f"./{rel}"
+    except ValueError:
+        exe_str = str(exe)
+    return f"{exe_str} notify.py"
+
+
 def _setup() -> int:
-    """`python3 notify.py --setup` — mint a topic and save it.
+    """`notify.py --setup` — mint a topic and save it.
 
     Writes `../.env.notify` with mode 0600. The file holds the topic, which is
     the only thing standing between your alerts and anyone else, so it gets the
@@ -255,8 +292,8 @@ def _setup() -> int:
     existing = _load_env()
     if existing.get("NTFY_TOPIC"):
         print(f"NTFY_TOPIC is already set (in {path} or the environment).")
-        print("Run `python3 notify.py --test` to send to it, or delete the line "
-              "from that file first if you want a new topic.")
+        print(f"Run `{_self_cmd()} --test` to send to it, or delete the line")
+        print("from that file first if you want a new topic.")
         return 1
 
     topic = pick_topic()
@@ -275,7 +312,7 @@ def _setup() -> int:
     print("   Leave the server as the default (ntfy.sh). There is no account to make.\n")
     print("2. Tap + / Subscribe to topic, and enter this EXACTLY:\n")
     print(f"     {topic}\n")
-    print("3. Come back here and run:  python3 notify.py --test\n")
+    print(f"3. Come back here and run:  {_self_cmd()} --test\n")
     print("4. Restart sidecar to pick up the topic.\n")
     print("Keep that topic off camera. ntfy.sh has no accounts, so the topic IS")
     print("the credential: anyone who reads it off a stream gets your alerts,")
@@ -284,7 +321,7 @@ def _setup() -> int:
 
 
 def _test() -> int:
-    """`python3 notify.py --test` — send to whatever is configured, repeatably.
+    """`notify.py --test` — send to whatever is configured, repeatably.
 
     Separate from --setup precisely so it can be run again: the first test
     always races the phone's subscription, and "did it work" is a question you
@@ -293,7 +330,7 @@ def _test() -> int:
     n = Notifier()
     if not n.configured:
         print(n.status()["reason"])
-        print("\nRun `python3 notify.py --setup` for the no-signup ntfy path.")
+        print(f"\nRun `{_self_cmd()} --setup` for the no-signup ntfy path.")
         return 1
     names = ", ".join(c.name for c in n.active)
     if n.send("If you can read this, sidecar alerts will reach your phone.",

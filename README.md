@@ -69,7 +69,7 @@ npm i -g @anthropic-ai/claude-code              # the `claude` binary; chat need
 # credentials — copy from the old box or reissue; none of this is in git
 vi ../.env.webull ../.env.anthropic
 
-python3 notify.py --setup                       # alerts: mints an ntfy topic
+./.venv/bin/python notify.py --setup            # alerts: mints an ntfy topic
 ./run.sh
 ```
 
@@ -221,11 +221,16 @@ Two channels, either or both, configured in `../.env.notify`.
 ntfy.sh instance is all that's needed. On the box sidecar runs on:
 
 ```bash
-python3 notify.py --setup      # mints a topic, writes ../.env.notify (0600)
+./.venv/bin/python notify.py --setup   # mints a topic, writes ../.env.notify (0600)
 # install the ntfy app, subscribe to the topic it printed, then:
-python3 notify.py --test       # send a test — repeatable
-python3 notify.py              # show which channels are configured
+./.venv/bin/python notify.py --test    # send a test — repeatable
+./.venv/bin/python notify.py           # show which channels are configured
 ```
+
+**Use the venv's python, not `python3`.** The system python3 has none of this
+project's dependencies, so `python3 notify.py` dies on `import requests` before
+it does anything. The script prints its own re-invocation commands using
+whichever interpreter is running it, so copy them from its output.
 
 `--setup` deliberately does **not** send a test. You cannot subscribe to a topic
 before it exists, so a test fired at that moment always beats the phone to it
