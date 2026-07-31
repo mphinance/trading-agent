@@ -712,10 +712,11 @@ function renderAlerts(d) {
   $("alert-count").textContent = list.length;
 
   const w = d.watcher || {};
-  const tg = w.telegram || {};
+  const n = w.notify || {};
   const bits = [];
   if (!w.running) bits.push("watcher STOPPED");
-  if (!tg.configured) bits.push("Telegram not configured — alerts fire but won't reach your phone");
+  if (!n.configured) bits.push("no delivery channel — alerts fire but won't reach your phone");
+  else bits.push("via " + (n.channels || []).filter(c => c.configured).map(c => c.name).join(" + "));
   if (w.last_error) bits.push("last error: " + w.last_error);
   const q = w.quotes || {};
   if (q.snapshot && q.snapshot !== "ok") bits.push("quotes: " + q.snapshot);

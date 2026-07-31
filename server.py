@@ -158,9 +158,9 @@ def delete_alert(alert_id: str):
 
 @app.post("/api/alerts/test")
 def test_alert():
-    """Prove the delivery path end to end. Nothing else verifies Telegram."""
-    ok = _watcher.telegram.send("sidecar test alert — delivery is working.")
-    return {"sent": ok, "telegram": _watcher.telegram.status()}
+    """Prove the delivery path end to end. Nothing else verifies it."""
+    ok = _watcher.notifier.send("sidecar test alert — delivery is working.", "sidecar test")
+    return {"sent": ok, "notify": _watcher.notifier.status()}
 
 
 class ChatReq(BaseModel):

@@ -15,8 +15,8 @@ cd "$(dirname "$0")"
 # interactive terminal does not reach this process.
 #   .env.webull    WEBULL_KEY / WEBULL_SECRET (required), TD_API_KEY (optional)
 #   .env.anthropic CLAUDE_CODE_OAUTH_TOKEN (subscription) or ANTHROPIC_API_KEY
-#   .env.telegram  TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID (optional; alert delivery)
-for f in ../.env.webull ../.env.anthropic ../.env.telegram; do
+#   .env.notify    NTFY_TOPIC (no signup) and/or TELEGRAM_BOT_TOKEN + CHAT_ID
+for f in ../.env.webull ../.env.anthropic ../.env.notify ../.env.telegram; do
   [ -f "$f" ] && set -a && . "$f" && set +a
 done
 

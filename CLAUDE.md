@@ -120,6 +120,13 @@ The watcher is a background THREAD, not an asyncio task — the Webull SDK is
 blocking, and a slow snapshot inside the event loop would stall the SSE chat
 stream that shares it.
 
+Delivery is `notify.Notifier`, fanning out to ntfy and/or Telegram. **An ntfy
+topic is a credential, not a name.** There are no accounts: whoever knows the
+topic reads every alert. So it is minted with 128 bits of randomness, the env
+file is 0600, and `status()` must never return it — this panel is streamed, and
+a topic read off a frame is a subscription someone else keeps. If you add a
+channel, keep its secret out of `status()` the same way.
+
 ### 4e. MCP is the control surface, never the watcher
 `mcp_server.py` connects Claude Desktop over stdio and is a thin client: no
 credentials, no broker, one HTTP call per tool to routes that already exist.
@@ -181,7 +188,7 @@ chat.py        Claude chat via the Agent SDK; injects live state into each turn
 alerts.py      Alert store + crossing logic (a level can BE the dealer structure)
 quotes.py      Last price: Webull data -> portfolio -> TDPro spot, tagged by source
 watcher.py     Background thread that evaluates alerts and delivers them
-notify.py      Telegram delivery
+notify.py      Alert delivery: ntfy (no signup) and/or Telegram
 mcp_server.py  Claude Desktop MCP server (stdio, thin client over the HTTP API)
 server.py      FastAPI routes
 static/        Single-page UI, no build step

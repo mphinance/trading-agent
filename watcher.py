@@ -32,11 +32,11 @@ BACKOFF_MAX = 120.0
 
 
 class Watcher:
-    def __init__(self, store, quotes, levels_of, telegram=None, on_log=None) -> None:
+    def __init__(self, store, quotes, levels_of, notifier=None, on_log=None) -> None:
         self.store = store
         self.quotes = quotes
         self.levels_of = levels_of
-        self.telegram = telegram or notify.Telegram()
+        self.notifier = notifier or notify.Notifier()
         self._log = on_log or (lambda *a: None)
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -66,7 +66,7 @@ class Watcher:
             "last_tick": self._last_tick,
             "last_error": self._last_error,
             "watching": self.store.symbols(),
-            "telegram": self.telegram.status(),
+            "notify": self.notifier.status(),
             "quotes": self.quotes.status(),
             "recent": recent,
         }
@@ -107,7 +107,7 @@ class Watcher:
         source, age = self.quotes.source_of(sym), self.quotes.age_of(sym)
         rec["source"] = source
         text = notify.format_alert(rec, source, age)
-        rec["delivered"] = self.telegram.send(text)
+        rec["delivered"] = self.notifier.send(text, notify.alert_title(rec))
         # Log either way. An alert that fired but could not be delivered is the
         # one case where silence would be actively misleading.
         self._log(f"ALERT {'sent' if rec['delivered'] else 'UNDELIVERED'}: {text.splitlines()[0]}")

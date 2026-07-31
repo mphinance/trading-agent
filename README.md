@@ -72,7 +72,7 @@ chat.py          Claude chat via the Agent SDK; injects live state into each tur
 alerts.py        Alert store + crossing logic (levels can BE the dealer structure)
 quotes.py        Last price, with a source chain: Webull data -> portfolio -> TDPro spot
 watcher.py       Background thread that evaluates alerts and delivers them
-notify.py        Telegram delivery
+notify.py        Alert delivery: ntfy (no signup) and/or Telegram
 mcp_server.py    Claude Desktop MCP server (thin client over the HTTP API)
 server.py        FastAPI routes
 static/          Single-page UI, no build step
@@ -182,17 +182,49 @@ in-app bell, whose delivery is unreliable.
   moved; a level that jumps over a stationary price drops the alert back to
   `pending` instead of firing.
 
-Delivery is Telegram, configured in `../.env.telegram`:
+### Delivery
+
+Two channels, either or both, configured in `../.env.notify`.
+
+**ntfy — no account, no email, no signup.** One command:
+
+```bash
+python3 notify.py --setup      # mints a topic, writes ../.env.notify (0600), sends a test
+python3 notify.py              # show which channels are configured
+```
+
+Then install the ntfy app (App Store / Play Store / F-Droid), tap Subscribe, and
+enter the topic it printed. Restart sidecar.
+
+**The topic IS the credential.** ntfy.sh has no accounts and no access control:
+anyone who knows the topic can read every alert published to it. So `--setup`
+mints 128 bits of randomness rather than letting you pick something memorable,
+the env file is 0600, and — because this panel gets streamed (rule 5) —
+`status()` deliberately never returns the topic and no route sends it to the
+browser. **Keep it off camera.** A topic read off a video frame is a
+subscription someone else keeps.
+
+**Telegram** is the other option, and the one that could later carry a reply
+path since it is two-way. It costs a @BotFather signup, which now wants an email:
 
 ```
 TELEGRAM_BOT_TOKEN=123456:AA...
 TELEGRAM_CHAT_ID=987654321
 ```
 
-Create the bot with @BotFather, send it any message, then read the chat id from
-`https://api.telegram.org/bot<TOKEN>/getUpdates`. `POST /api/alerts/test` proves
-the path end to end. Unconfigured is not an error — alerts still fire and show
-in the UI, and the panel says delivery is off rather than pretending.
+Send the new bot any message, then read the chat id from
+`https://api.telegram.org/bot<TOKEN>/getUpdates`.
+
+`POST /api/alerts/test` proves whichever path end to end. With both configured
+the alert goes to both, and success is any channel accepting it — one dead
+channel must not mark a delivered alert undelivered.
+
+Nothing configured is not an error: alerts still fire and show in the UI, and
+the panel says delivery is off rather than pretending.
+
+One ntfy trap: **its headers are latin-1**, so an emoji in the `Title` header
+500s while the identical character in the body is fine. `alert_title()` is
+ASCII-only for that reason; the arrows live in the body.
 
 ### Quote sources, in order
 
