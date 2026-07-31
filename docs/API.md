@@ -4,8 +4,8 @@ Three surfaces, one broker client behind all of them:
 
 | Surface | Who uses it | Where |
 | --- | --- | --- |
-| **MCP tools** (31) | Claude Desktop, by voice | `mcp_server.py` over stdio |
-| **HTTP API** (37 endpoints across 35 paths) | the deck's UI, scripts, curl | `server.py` on `:8787` |
+| **MCP tools** (36) | Claude Desktop, by voice | `mcp_server.py` over stdio |
+| **HTTP API** (42 endpoints across 39 paths) | the deck's UI, scripts, curl | `server.py` on `:8787` |
 | **SSE stream** | anything wanting push instead of poll | `GET /api/stream` |
 
 The MCP server is a thin HTTP client of the second one, so anything here is
@@ -57,6 +57,34 @@ they carry the constraints inline — read `mcp_server.py` for the full text.
 | `get_research` | `kind`, `symbol` | `kind`: `profile`, `rating`, `target`, `flow`, `earnings`, `dividend`, `filings`, `eps`, `peers`, `financials`. For `financials` set `statement` to `indicators`/`income`/`cashflow`/`balance`/`alert`. |
 | `run_screener` | `kind` | `gainers`, `losers`, `active`, `sectors`, `dividend`, `52whl`. |
 | `get_signals` | — | TraderDaddy Pro: market health, put/call ratios, conviction. `configured: false` without `TD_API_KEY`. |
+| `get_gamma` | `symbol` | Dealer-gamma structure: spot, regime, flip, max-gamma pin, key levels, heaviest strikes. |
+
+**`get_gamma` is a positioning map, not a forecast.** Heavy gamma marks where
+price often *reacts* on arrival; it never means price will travel there. The flip
+is a regime boundary — above it dealer hedging dampens moves, below it amplifies
+them. If `flip_split` is true the two upstream models disagree about which side
+price is on, so the regime call is genuinely uncertain and should be reported
+that way rather than resolved silently. A cold non-index name is computed
+upstream on first call (~2-4s); `td.levels()` caches for 5 minutes.
+
+### Alerts
+
+| Tool | Required | Notes |
+| --- | --- | --- |
+| `list_alerts` | — | Every alert with its resolved level and state, plus watcher and delivery status. |
+| `create_alert` | `symbol`, `level`, `direction` | `level` is a number **or** a live dealer level: `flip`, `pin`, `wall_above`, `wall_below`. `direction` is the side price must end on. `note`, `repeat` optional. |
+| `delete_alert` | `alert_id` | Id comes from `list_alerts`. |
+| `test_alert_delivery` | — | Sends a test notification to prove the delivery path works. |
+
+A dynamic level is re-resolved from TDPro on every check, which is the point —
+native alert systems freeze a number, and dealer structure moves daily. Alerts
+fire on a **crossing**, not a comparison: one armed on the wrong side of a level
+starts `pending` and arms only once price returns, so it reports a genuine break
+instead of firing instantly. A moving level can never fire an alert on its own.
+
+**Alerts are not evaluated by MCP.** A stdio server only runs while Claude
+Desktop is talking to it; the watching is sidecar's own background thread. These
+tools arm and inspect only.
 
 ### Watchlists
 
@@ -187,6 +215,16 @@ is applied, so leaving off a limit price doesn't dodge it.
 `category`: `US_STOCK` (default), `US_ETF`, `US_OPTION`, `US_CRYPTO`,
 `US_FUTURES`, `US_EVENT`.
 
+### Structure & alerts
+
+| Method | Path | Query / body |
+| --- | --- | --- |
+| GET | `/api/gex/{symbol}` | — (symbol must match `^[A-Za-z]{1,6}$`) |
+| GET | `/api/alerts` | — |
+| POST | `/api/alerts` | `{symbol, level, direction, note?, repeat?}` |
+| DELETE | `/api/alerts/{alert_id}` | — |
+| POST | `/api/alerts/test` | — |
+
 ### Research, screening, watchlists
 
 | Method | Path | Query / body |
@@ -243,7 +281,7 @@ same quantity as the entry.
 | --- | --- | --- |
 | GET | `/api/signals` | TraderDaddy snapshot |
 | GET | `/api/chat/status` | Credential kind and model |
-| POST | `/api/chat` | SSE stream of a chat turn |
+| POST | `/api/chat` | SSE stream of a chat turn. Body takes an optional `symbol` — the focused gamma name, whose levels ride along with the turn so voice questions need no ticker. |
 
 The chat panel has **no order tools** — see rule 3 in [CLAUDE.md](../CLAUDE.md).
 

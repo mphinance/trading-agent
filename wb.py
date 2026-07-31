@@ -109,6 +109,20 @@ class Webull:
     def data(self) -> DataClient:
         return self._data
 
+    def data_client(self) -> DataClient:
+        """Market-data client, for quotes on symbols you don't hold.
+
+        Separately ENTITLED from the trade client: market data needs a
+        subscription in the regional Webull app, so these calls can refuse even
+        when positions and balances work. Callers must degrade rather than treat
+        it as guaranteed — `quotes.py` falls back to portfolio prices and TDPro
+        spot, and `md.py` surfaces the error per symbol.
+
+        Still read-only: DataClient exposes quotes, bars, research and screeners
+        and no order surface whatsoever. The order path is `orders.py` alone.
+        """
+        return self._data
+
     def _cached(self, key: str, fn, ttl: float = CACHE_TTL_SEC):
         now = time.monotonic()
         hit = self._cache.get(key)

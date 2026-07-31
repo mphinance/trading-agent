@@ -25,7 +25,26 @@ ticket carries a hash of the exact payload, so what gets confirmed out loud is
 byte-for-byte what reaches the broker. Set SIDECAR_ORDER_CONFIRM=0 on the
 sidecar side if you'd rather skip that and have `place_order_now` work directly.
 
+**Why stdio and not a remote connector.** Claude Desktop launches a stdio server
+as a subprocess on your own machine, which is already on the tailnet, so it can
+reach venus with no public hostname, no TLS, and no auth layer to get wrong. A
+remote connector would mean exposing sidecar to the internet — and sidecar has
+no authentication at all (rule 1), which matters far more now that it can trade.
+`supermcp` is the repo that already solved OAuth; if this ever needs to be
+reachable off the tailnet, it belongs there rather than bolted on here.
+
+**MCP cannot be where alerts live.** A stdio server only runs while Claude
+Desktop is talking to it, so an alert evaluated here would fire only during a
+conversation. The watching is done by sidecar's own background thread
+(`watcher.py`); the alert tools here just arm and inspect.
+
 Run:  ./mcp.sh          (or: python mcp_server.py)
+
+Claude Desktop config — either form works:
+
+    { "mcpServers": { "sidecar": {
+        "command": "/path/to/webull-sidecar/mcp.sh",
+        "env": { "SIDECAR_URL": "http://100.113.21.73:8787" } } } }
 """
 
 from __future__ import annotations
@@ -251,6 +270,73 @@ def get_signals() -> dict:
     community conviction scores for held names. Returns configured=false if no
     TD_API_KEY is set."""
     return _get("/api/signals")
+
+
+@mcp.tool()
+def get_gamma(symbol: str) -> Any:
+    """Dealer-gamma structure for one symbol: spot, regime, gamma flip, max-gamma
+    pin, key levels and the heaviest strikes near spot.
+
+    A positioning map, NOT a forecast. Heavy gamma marks where price often
+    reacts on arrival; it never means price will travel there. The flip is a
+    regime boundary — above it dealer hedging dampens moves, below it amplifies
+    them. If `flip_split` is true the two models disagree about which side price
+    is on, so say the regime call is uncertain rather than picking one.
+
+    A cold non-index name is computed upstream on first call (~2-4s).
+    """
+    return _get(f"/api/gex/{symbol.strip().upper()}")
+
+
+# ---------------------------------------------------------------------------
+# Alerts
+#
+# Arming and inspection only. The watching itself is sidecar's background
+# thread: a stdio MCP server runs only while Claude Desktop is talking to it,
+# so an alert evaluated here would fire only during a conversation.
+
+
+@mcp.tool()
+def list_alerts() -> Any:
+    """Every price alert with its currently resolved level and state, plus
+    watcher and delivery status."""
+    return _get("/api/alerts")
+
+
+@mcp.tool()
+def create_alert(symbol: str, level: str | float, direction: str,
+                 note: str = "", repeat: bool = False) -> Any:
+    """Arm a price alert.
+
+    `level` is either a number (e.g. 743.5) or a LIVE dealer level re-read on
+    every check: 'flip', 'pin', 'wall_above', 'wall_below'.
+    `direction` is the side price must end on: 'below' for a breakdown, 'above'
+    for a breakout. Fires once unless repeat=True.
+
+    An alert on a level price has ALREADY passed starts 'pending' and arms only
+    once price returns to the other side, so it reports a genuine break rather
+    than firing instantly.
+    """
+    # `level` must accept both arms: a model asked for "when SPY breaks 743"
+    # sends the number, and for "when SPY loses the flip" sends the word.
+    # Typing it as str alone rejects the numeric case outright.
+    return _post("/api/alerts", {
+        "symbol": symbol.strip().upper(), "level": level,
+        "direction": direction.strip().lower(), "note": note, "repeat": repeat,
+    })
+
+
+@mcp.tool()
+def delete_alert(alert_id: str) -> Any:
+    """Delete an alert by its id (from list_alerts)."""
+    return _call("DELETE", f"/api/alerts/{alert_id}")
+
+
+@mcp.tool()
+def test_alert_delivery() -> Any:
+    """Send a test notification to prove the delivery path works. Use when the
+    user doubts alerts would actually reach them."""
+    return _post("/api/alerts/test")
 
 
 # ---------------------------------------------------------------------------
