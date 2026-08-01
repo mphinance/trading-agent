@@ -110,43 +110,9 @@ from another desk are rarely still relevant.
 | `TD_API_KEY` | — | `td_live_…`; lights up the TraderDaddy panels and dealer gamma. |
 | `SIDECAR_STATE_DIR` | `~/.local/state/webull-sidecar` | Where `alerts.json` lives. |
 | `SIDECAR_URL` | `http://127.0.0.1:8787` | Read by `mcp_server.py` to find sidecar. |
+| `SIDECAR_MCP_TIMEOUT` | `30` | Seconds `mcp_server.py` waits on a sidecar call. |
 | `SIDECAR_TRADING` | `1` | `0` disables the order path. See [Trading](#trading) for the rest. |
 | `NTFY_SERVER` | `https://ntfy.sh` | Override only for a self-hosted ntfy. |
-
-## Tests
-
-```bash
-pip install -r requirements-dev.txt
-pytest -q                    # 123 tests, ~3s, no network and no credentials
-```
-
-CI runs on every push and PR (`.github/workflows/ci.yml`): the suite on python
-3.10 and 3.13 (the range the Webull SDK's `>=3.8,<3.14` pin allows), a
-`compileall` pass to catch syntax errors in modules no test imports, the UI
-checks with node present, and a scan for credential-shaped strings.
-
-**`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
-SDK and the Agent SDK are stubbed in `tests/conftest.py` and excluded: the first
-pulls paho-mqtt, which needs a compiler and pins the python version, and the
-second shells out to a `claude` binary that only ships via npm. Installing
-either would make CI a test of that dependency rather than of this code, and
-nothing worth asserting needs them.
-
-The suite is hermetic — no network, no broker, no credentials. The live ntfy.sh
-delivery check stays a manual step (`notify.py --test`), because a green build
-must not depend on a third-party service being up.
-
-What it actually pins down, rather than syntax:
-
-| Area | The property under test |
-| --- | --- |
-| `alerts.py` | A break is a crossing, not a comparison; a moving level never fires an alert by itself; a dead TDPro resolves to `None`, never a remembered number |
-| `td.py` | Compaction stays small; put walls survive the ranking; `flip_split` only when the two models straddle spot; gated apex degrades |
-| `quotes.py` | Source order and tagging; a refused snapshot latches off instead of retrying every tick |
-| `notify.py` | The topic never appears in `status()`; fan-out survives one dead channel; titles stay ASCII for ntfy's latin-1 headers |
-| `server.py` | Symbol validation; full watcher lifecycle armed → re-pend → re-arm → fire; one-shot never re-fires |
-| `mcp_server.py` | **No order-shaped tool is ever exposed**; `level` accepts a number or a name |
-| `static/` | The page script parses; no duplicate top-level declarations; every `$("id")` exists |
 
 ## Layout
 
@@ -165,11 +131,16 @@ notify.py        Alert delivery: ntfy (no signup) and/or Telegram
 mcp_server.py    Claude Desktop MCP server (thin client over the HTTP API)
 mcp.sh           What Claude Desktop spawns
 server.py        FastAPI routes
+run.sh           Launcher — sources ../.env.*, binds loopback unless told otherwise
 tests/           pytest suite — hermetic, no network, no broker, no credentials
 .github/         CI — see below
 static/          Single-page UI, no build step
 deploy/          systemd unit + installer (Tailscale-bound)
+requirements.txt      Runtime deps. Unpinned except `mcp>=2`.
+requirements-dev.txt  Test deps. Deliberately not a superset — see Tests and CI.
 docs/API.md      Full MCP tool + HTTP route + SSE stream reference
+docs/webull-api/ Vendored Webull OpenAPI protocol reference (endpoints, rate
+                 limits, MQTT streaming) — upstream's words, not ours
 ```
 
 `md.py` and `quotes.py` both read prices and are not redundant. `md.py` is the
@@ -181,53 +152,66 @@ Substituting a source is right for an alert and wrong for research.
 ## Tests and CI
 
 ```bash
-pip install -r requirements-dev.txt && pytest -q      # 175 tests, ~1.5s
+pip install -r requirements-dev.txt && pytest -q      # 176 tests, ~2s
 ```
 
-Hermetic: no network, no broker, no credentials. The Webull SDK and the Agent
-SDK are stubbed in `tests/conftest.py` — `requirements-dev.txt` is deliberately
-not a superset of `requirements.txt`, because one needs a compiler and the other
-shells out to an npm-only binary, and CI should test this code rather than their
-builds.
+Hermetic: no network, no broker, no credentials. The broker is stubbed and the
+alert store is redirected to a temp dir, so a test run cannot reach your account
+or eat your armed alerts. Run it before any push.
 
-| File | Covers |
+**`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
+SDK and the Agent SDK are stubbed in `tests/conftest.py` and excluded: the first
+pulls paho-mqtt, which needs a compiler, and the second shells out to a `claude`
+binary that only ships via npm. Installing either would make CI a test of that
+dependency rather than of this code.
+
+What the suite pins down, rather than syntax:
+
+| File | The property under test |
 | --- | --- |
-| `tests/test_orders.py` | The order path: payload shapes, the caps, the ticket handshake |
-| `tests/test_alerts.py` | Both crossing invariants from rule 4d, and the store |
-| `tests/test_mcp.py` | The MCP surface, and that `place_order` takes only a ticket |
-| `tests/test_docs.py` | `docs/API.md` vs the code, and rule 3 asserted structurally |
-| `tests/test_notify.py` | That the ntfy topic never reaches `status()` |
-| `tests/test_quotes.py`, `tests/test_td_levels.py`, `tests/test_server.py` | Price fallback chain, gamma compaction, routes |
-| `tests/test_static.py` | The single-page UI parses — there is no bundler |
+| `test_orders.py` | Payload shapes Webull actually accepts; the caps, including a market order priced *before* the cap; the ticket handshake — replay, expiry, tampering, and a broker rejection freeing the ticket |
+| `test_mcp.py` | `place_order` takes **only** a ticket, so nothing can construct and fire in one call; the caps are not reimplemented in the MCP layer; the server holds no credentials |
+| `test_alerts.py` | A break is a crossing, not a comparison; a moving level never fires an alert by itself; a dead TDPro resolves to `None`, never a remembered number |
+| `test_docs.py` | `docs/API.md` matches the code both ways; `chat.py` cannot import `orders.py`; no broker write lives outside `orders.py` |
+| `test_notify.py` | The ntfy topic never appears in `status()`; fan-out survives one dead channel; titles stay ASCII for ntfy's latin-1 headers |
+| `test_td_levels.py` | Compaction stays small; put walls survive the ranking; `flip_split` only when the two models straddle spot |
+| `test_quotes.py` | Source order and tagging; a refused snapshot latches off instead of retrying every tick |
+| `test_server.py` | Symbol validation; watcher lifecycle armed → re-pend → re-arm → fire; one-shot never re-fires |
+| `test_static.py` | The page script parses; no duplicate top-level declarations; every `$("id")` exists; the alert row's select stays shrinkable so it cannot push the Arm button out of its card |
 
+`.github/workflows/ci.yml` runs three jobs on every push and PR:
 
-No network, no credentials, no account: the broker is stubbed and the alert
-store is redirected to a temp dir. Run them before any push.
+- **test** — `pytest -q` on **Python 3.10 and 3.14**, plus a `compileall` pass to
+  catch a syntax error in a module no test imports. 3.14 is the end most likely
+  to break first on a `cryptography` or `grpcio` wheel.
+- **static** — the UI check with node present, so `node --check` is not skipped.
+  There is no bundler; this is the only thing between a typo in
+  `static/index.html` and a blank panel.
+- **secrets** — scans for credential-shaped strings. The doc placeholders must
+  not trip it, so each pattern requires enough entropy to be a genuine key.
 
-`.github/workflows/ci.yml` runs all three on **Python 3.10 and 3.14** — the two
-ends of the range the docs claim, and 3.14 is the one most likely to break first
-on a `cryptography` or `grpcio` wheel. It also byte-compiles every module, runs
-`ruff` on errors only (`E9,F63,F7,F82` — not a style gate), and smoke-tests that
-`server.py` builds its route table and `mcp_server.py` enumerates its tools.
-
-That last one is not hypothetical. **mcp 2.0 renamed `FastMCP` to `MCPServer`
-and dropped `mcp.server.fastmcp`.** Because `requirements.txt` is unpinned, CI
-installed 2.0 and a `mcp_server.py` written against 1.x failed to import — a
-break that arrived from upstream with no commit here. `tests/test_mcp.py`
-imports the module directly rather than using `pytest.importorskip`, precisely
-so that fails the build instead of skipping quietly.
-
-A second job scans for credential-shaped strings and asserts no `.env` or 2FA
-token file has become tracked — rule 2 and rule 5, enforced rather than
-remembered.
+`test_mcp.py` imports `mcp_server` directly rather than using
+`pytest.importorskip`. That matters: **mcp 2.0 renamed `FastMCP` to `MCPServer`
+and dropped `mcp.server.fastmcp`**, and because `requirements.txt` is otherwise
+unpinned, CI resolved 2.0 and a module written against 1.x failed to import — a
+break that arrived from upstream with no commit here. A skip would have gone
+green over a server that could not start. `mcp>=2` is now pinned for that reason.
 
 ## Deploy (Tailscale-bound, starts at boot)
 
 ```bash
 rsync -az --exclude __pycache__ --exclude .venv sidecar/ host:~/webull/sidecar/
-rsync -az .env.webull .env.anthropic host:~/webull/     # chmod 600 on arrival
+rsync -az .env.webull .env.anthropic .env.notify host:~/webull/   # chmod 600 on arrival
+ssh host '~/webull/sidecar/.venv/bin/pip install -r ~/webull/sidecar/requirements.txt'
 ssh host '~/webull/sidecar/deploy/install.sh'
 ```
+
+**The pip step is not optional on an upgrade.** rsync copies files, not
+packages, so a host that predates a dependency change starts and then fails at
+import — `mcp>=2` and `httpx` both arrived with the order path and the MCP
+server. `/api/health` is the check afterwards: it reports `trading`,
+`confirm_required` and the stream state, so you can see which build is actually
+running rather than assuming.
 
 `install.sh` reads the host's Tailscale IP, writes `deploy/sidecar.env`, installs
 a **user** systemd unit, and enables it. It **refuses to run without a Tailscale

@@ -3,9 +3,10 @@
 #
 # Run ON the target host:  ~/webull/sidecar/deploy/install.sh
 #
-# Binds to the tailnet address, never 0.0.0.0 — sidecar has no authentication
-# and holds live brokerage credentials, so only your own Tailscale devices
-# should be able to read the account through it.
+# Binds to the tailnet address, never 0.0.0.0 — sidecar has no authentication,
+# holds live brokerage credentials, and can place orders, so only your own
+# Tailscale devices should be able to reach it. Anything that can reach this
+# port can trade the account.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
