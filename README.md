@@ -69,7 +69,7 @@ npm i -g @anthropic-ai/claude-code              # the `claude` binary; chat need
 # credentials — copy from the old box or reissue; none of this is in git
 vi ../.env.webull ../.env.anthropic
 
-python3 notify.py --setup                       # alerts: mints an ntfy topic
+./.venv/bin/python notify.py --setup            # alerts: mints an ntfy topic
 ./run.sh
 ```
 
@@ -221,11 +221,34 @@ Two channels, either or both, configured in `../.env.notify`.
 ntfy.sh instance is all that's needed. On the box sidecar runs on:
 
 ```bash
-python3 notify.py --setup      # mints a topic, writes ../.env.notify (0600)
+./.venv/bin/python notify.py --setup   # mints a topic, writes ../.env.notify (0600)
 # install the ntfy app, subscribe to the topic it printed, then:
-python3 notify.py --test       # send a test — repeatable
-python3 notify.py              # show which channels are configured
+./.venv/bin/python notify.py --test    # send a test — repeatable
+./.venv/bin/python notify.py           # show which channels are configured
 ```
+
+**Use the venv's python, not `python3`.** The system python3 has none of this
+project's dependencies, so `python3 notify.py` dies on `import requests` before
+it does anything. The script prints its own re-invocation commands using
+whichever interpreter is running it, so copy them from its output.
+
+**Getting the topic onto the phone: `--qr`, not copy-paste.**
+
+```bash
+./.venv/bin/python notify.py --qr   # scannable subscribe URL
+```
+
+A 32-hex-character topic invites a typo, and a typo silently subscribes you to
+a topic nobody publishes to — it looks identical to a working setup until an
+alert never arrives. The other shortcuts are worse: pasting it into a chat, a
+note or an email puts a credential somewhere permanent and searchable. A QR is
+on screen for seconds and lands in the app directly.
+
+**To rotate**, delete the `NTFY_TOPIC` line from `../.env.notify`, re-run
+`--setup`, re-scan `--qr`, and restart sidecar. Do that if the topic was ever
+pasted, screenshotted, or on camera — anyone holding it can both read your
+alerts and **publish** to it, and a spoofed "SPY broke below flip" is
+indistinguishable from a real one.
 
 `--setup` deliberately does **not** send a test. You cannot subscribe to a topic
 before it exists, so a test fired at that moment always beats the phone to it
