@@ -59,7 +59,30 @@ from mcp.server.fastmcp import FastMCP
 SIDECAR_URL = os.environ.get("SIDECAR_URL", "http://127.0.0.1:8787").rstrip("/")
 TIMEOUT = float(os.environ.get("SIDECAR_MCP_TIMEOUT", "30"))
 
-mcp = FastMCP("webull-sidecar")
+INSTRUCTIONS = """Access to the user's Webull account through the sidecar app, \
+plus TraderDaddy Pro dealer-gamma structure and price alerts.
+
+This server CAN place, modify and cancel orders, and it spends real money.
+Ordering is two-step and must stay that way: call preview_order (or
+preview_option_order) first, read the returned `summary` and cost estimate back
+to the user, and only call place_order with the ticket_id once they have
+explicitly said yes. Never call place_order on your own initiative, and never to
+test whether it works. Tickets are single-use and expire after 120 seconds.
+
+Orders are also capped server-side. A rejection comes back as a plain sentence
+naming the cap it broke — relay it rather than retrying with different numbers.
+
+Dealer gamma is a map of where option hedging sits, NOT a forecast. Heavy gamma
+marks where price often reacts on arrival; it never means price will travel
+there, and a wall above spot is not a reason to be long. If a level read comes
+back with flip_split set, the two models disagree about which side of the flip
+price is on, so say the regime call is uncertain rather than picking one.
+
+Alerts are evaluated by sidecar's own background thread, not here — this server
+only arms and inspects them, so an alert keeps working after the conversation
+ends."""
+
+mcp = FastMCP("webull-sidecar", instructions=INSTRUCTIONS)
 
 
 class SidecarDown(RuntimeError):

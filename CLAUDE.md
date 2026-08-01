@@ -251,13 +251,10 @@ mcp.sh         What Claude Desktop spawns
 server.py      FastAPI routes
 static/        Single-page UI, no build step
 deploy/        systemd unit + Tailscale-bound installer
-test_orders.py Order-path tests against a stub broker — no network, no account
-test_alerts.py Alert crossing logic: the two invariants in rule 4d, plus the store
-test_docs.py   Keeps docs/API.md honest, and asserts rule 3 structurally —
-               chat.py cannot import orders.py, and no module outside orders.py
-               calls a broker write
-.github/       CI: both tests on Python 3.10 and 3.14, errors-only lint, and a
-               secret scan. Runs on every push and PR; needs no credentials.
+tests/         pytest suite, hermetic — the Webull and Agent SDKs are stubbed
+               in conftest.py so CI needs neither a compiler nor a broker
+.github/       CI on Python 3.10 and 3.14, a compileall pass, the UI check with
+               node present, and a credential scan. Every push and PR.
 docs/API.md    Generated-from-code reference: MCP tools, HTTP routes, SSE event
                shapes, the ticket handshake. Regenerate it if you add a route or
                a tool — a stale API doc is worse than none.
@@ -270,16 +267,37 @@ then portfolio, then TDPro spot — so the alert watcher keeps working when mark
 data is unentitled. Substituting a source is right for an alert and wrong for
 research; that's why they're separate.
 
+## Tests
+
+`pip install -r requirements-dev.txt && pytest -q`. CI runs the same on every
+push and PR. The suite is hermetic — no network, no broker, no credentials —
+because a green build must not depend on TDPro or ntfy.sh being up.
+
+Two rules if you touch it:
+
+- **`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
+  SDK and the Agent SDK are stubbed in `tests/conftest.py`, so CI never installs
+  them: one needs a compiler and pins the python version, the other shells out
+  to an npm-only binary. Do not "fix" this by installing the real ones.
+- **The tests encode the decisions in the rules above, not just behaviour.**
+  `test_orders.py` pins the ticket handshake and the caps (rule 3),
+  `test_mcp.py` asserts the order tools exist but that `place_order` only ever
+  takes a ticket, `test_notify.py` asserts the ntfy topic never reaches
+  `status()` (rule 4d/5), and `test_alerts.py` pins both crossing properties
+  (rule 4d). If a rule here changes, the test is the other half of the change —
+  `test_mcp.py` used to assert that NO order tool existed, and rewriting it was
+  part of reversing rule 3, not an afterthought.
+
 ## Status
 
 Verified against the live account: positions, guardrails, TDPro signals, chat.
 
 **The order path, market data, streaming and the MCP server have NOT been
 exercised against the live account.** They are tested end to end against a stub
-broker — `test_orders.py` covers payload shapes, guards, and the ticket
-lifecycle, `test_alerts.py` covers the crossing invariants, and `test_docs.py`
-catches a module that no longer imports; the MCP server was driven over stdio
-through preview → confirm → place → cancel. That proves the wiring, not the broker's acceptance of it.
+broker — `tests/test_orders.py` covers payload shapes, guards, and the ticket
+lifecycle, `tests/test_alerts.py` covers the crossing invariants, and
+`tests/test_docs.py` catches a module that no longer imports; the MCP server was
+driven over stdio through preview → confirm → place → cancel. That proves the wiring, not the broker's acceptance of it.
 Webull's own field-level validation, fractional-share and extended-hours rules,
 and option-strategy handling are unproven here. First live order should be one
 share of something cheap, placed with Webull Desktop open so you can watch it

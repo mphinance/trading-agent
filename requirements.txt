@@ -32,3 +32,8 @@ claude-agent-sdk
 # HTTP client it uses to reach sidecar.
 mcp
 httpx
+
+# Optional. Powers `notify.py --qr`, which puts the ntfy subscribe URL on screen
+# as a QR so the topic never has to be typed, pasted into a chat, or read off a
+# stream. Pure python, no compiler. Without it --qr prints the URL instead.
+qrcode

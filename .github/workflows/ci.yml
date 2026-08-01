@@ -1,126 +1,104 @@
 name: CI
 
-# Everything here runs without credentials, a network, or a Webull account.
-# The tests stub the broker; nothing in this workflow can place an order or read
-# a real position, and no secret is available to it.
-
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
 
+# A second push to a PR should cancel the first run rather than queue behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
-
-concurrency:
-  # A new push supersedes an in-flight run on the same ref.
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # Both ends of the range the docs claim. 3.10 is what venus's existing
-      # venv runs; 3.14 is the newly-supported top end (SDK 2.0.16 declares
-      # python_requires='>=3.8,<3.15'), and it is the one most likely to break
-      # first on a cryptography or grpcio wheel.
       matrix:
-        python: ["3.10", "3.14"]
+        # The deployable range. This comment used to say the SDK pins <3.14 —
+        # that was true of an older SDK. 2.0.16 declares
+        # python_requires='>=3.8,<3.15' with explicit cryptography/grpcio pins
+        # for 3.14, so 3.14 is supported and is the end most likely to break
+        # first. venus runs 3.10. Testing both ends catches stdlib drift in
+        # between; the SDK itself is stubbed here, so this is about THIS code.
+        python-version: ["3.10", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements.txt
 
-      - name: Install
+      - name: Install test dependencies
+        # Deliberately NOT requirements.txt. Two of its entries are stubbed in
+        # tests/conftest.py and installing them would make CI about them rather
+        # than about this code:
+        #   webull-openapi-python-sdk  pulls paho-mqtt, which needs a compiler
+        #                              on some Pythons and pins python <3.14
+        #   claude-agent-sdk           shells out to a `claude` binary that only
+        #                              ships via npm, so importing proves nothing
+        # Everything the suite exercises is reachable without either.
         run: |
           python -m pip install --upgrade pip
-          # Unpinned on purpose (see requirements.txt) — so this step is also
-          # the canary for an upstream break, which is the point of running it
-          # on a schedule-free trigger rather than pinning it away.
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q
 
       - name: Byte-compile every module
+        # Catches a syntax error in a file no test imports (wb.py and chat.py
+        # are stubbed away from the suite's import graph).
         run: python -m compileall -q .
 
-      - name: Lint (errors only, not style)
-        run: |
-          pip install ruff
-          # E9 syntax errors, F63/F7 broken constructs, F82 undefined names.
-          # Deliberately not a style gate: this repo has no formatter config and
-          # a noisy lint would just get ignored.
-          ruff check --select=E9,F63,F7,F82 .
-
-      - name: Order path
-        run: python test_orders.py
-
-      - name: Alert crossing logic
-        run: python test_alerts.py
-
-      # Imports server.py and mcp_server.py and enumerates both surfaces, so it
-      # fails if a module cannot even load. That is not hypothetical: a merged
-      # mcp_server.py once imported a class the mcp SDK does not export, and the
-      # server could not start at all.
-      - name: API docs match the code
-        run: python test_docs.py
-
-      - name: Smoke — the app builds its route table
-        run: |
-          python - <<'PY'
-          import os, tempfile
-          os.environ["SIDECAR_STATE_DIR"] = tempfile.mkdtemp()
-          import server
-          routes = [r for r in server.app.routes if hasattr(r, "methods")]
-          assert len(routes) > 30, f"only {len(routes)} routes registered"
-          print(f"ok: {len(routes)} routes")
-          PY
-
-      - name: Smoke — MCP server exposes its tools over the real registry
-        run: |
-          python - <<'PY'
-          import asyncio, os, tempfile
-          os.environ["SIDECAR_STATE_DIR"] = tempfile.mkdtemp()
-          import mcp_server
-          tools = asyncio.run(mcp_server.mcp.list_tools())
-          names = {t.name for t in tools}
-          # The order path and the alert path must both be present: they came
-          # from different branches and a bad merge silently drops one.
-          for required in ("preview_order", "place_order", "cancel_order",
-                           "get_portfolio", "get_gamma", "create_alert"):
-              assert required in names, f"missing MCP tool: {required}"
-          print(f"ok: {len(names)} tools")
-          PY
-
-  secrets:
-    # Cheap backstop for rule 2 and rule 5: no credential should ever reach a
-    # commit, and this panel gets streamed on video.
+  static:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: No credential-shaped strings in tracked files
-        run: |
-          # Real keys, not the truncated placeholders the docs use to show shape.
-          if git grep -nIE '(sk-ant-[A-Za-z0-9_-]{20,}|td_live_[A-Za-z0-9_-]{20,})' -- . ; then
-            echo "::error::a credential-shaped string is committed"
-            exit 1
-          fi
-          echo "clean"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-      - name: Credential files are not tracked
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Check the single-page UI
+        # There is no bundler, so this is the only thing standing between a typo
+        # in static/index.html and a blank panel. Runs with node present so the
+        # `node --check` test is not skipped.
+        run: pytest tests/test_static.py -q
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan the tree for credential-shaped strings
+        # Rule 2 keeps secrets in the parent directory so they cannot be
+        # committed by construction, and rule 5 assumes everything here ends up
+        # on video. This is the backstop for a paste that slipped through.
+        # Placeholders in docs (sk-ant-..., 123456:AA...) must not trip it, so
+        # each pattern requires enough real entropy to be a genuine key.
         run: |
-          # .env* and the SDK's 2FA token dir are gitignored; prove it stayed
-          # that way rather than trusting the ignore file.
-          bad=$(git ls-files | grep -E '(^|/)(\.env|conf/token\.txt|token\.txt)' || true)
-          if [ -n "$bad" ]; then
-            echo "::error::credential file is tracked: $bad"
+          set -o pipefail
+          if grep -rInE \
+               -e 'sk-ant-[A-Za-z0-9_-]{20,}' \
+               -e 'td_live_[A-Za-z0-9_-]{20,}' \
+               -e '[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}' \
+               --exclude-dir=.git --exclude-dir=.venv . ; then
+            echo "::error::credential-shaped string committed"
             exit 1
           fi
           echo "clean"

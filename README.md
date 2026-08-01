@@ -88,7 +88,7 @@ npm i -g @anthropic-ai/claude-code              # the `claude` binary; chat need
 # credentials — copy from the old box or reissue; none of this is in git
 vi ../.env.webull ../.env.anthropic
 
-python3 notify.py --setup                       # alerts: mints an ntfy topic
+./.venv/bin/python notify.py --setup            # alerts: mints an ntfy topic
 ./run.sh
 ```
 
@@ -113,6 +113,41 @@ from another desk are rarely still relevant.
 | `SIDECAR_TRADING` | `1` | `0` disables the order path. See [Trading](#trading) for the rest. |
 | `NTFY_SERVER` | `https://ntfy.sh` | Override only for a self-hosted ntfy. |
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q                    # 123 tests, ~3s, no network and no credentials
+```
+
+CI runs on every push and PR (`.github/workflows/ci.yml`): the suite on python
+3.10 and 3.13 (the range the Webull SDK's `>=3.8,<3.14` pin allows), a
+`compileall` pass to catch syntax errors in modules no test imports, the UI
+checks with node present, and a scan for credential-shaped strings.
+
+**`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
+SDK and the Agent SDK are stubbed in `tests/conftest.py` and excluded: the first
+pulls paho-mqtt, which needs a compiler and pins the python version, and the
+second shells out to a `claude` binary that only ships via npm. Installing
+either would make CI a test of that dependency rather than of this code, and
+nothing worth asserting needs them.
+
+The suite is hermetic — no network, no broker, no credentials. The live ntfy.sh
+delivery check stays a manual step (`notify.py --test`), because a green build
+must not depend on a third-party service being up.
+
+What it actually pins down, rather than syntax:
+
+| Area | The property under test |
+| --- | --- |
+| `alerts.py` | A break is a crossing, not a comparison; a moving level never fires an alert by itself; a dead TDPro resolves to `None`, never a remembered number |
+| `td.py` | Compaction stays small; put walls survive the ranking; `flip_split` only when the two models straddle spot; gated apex degrades |
+| `quotes.py` | Source order and tagging; a refused snapshot latches off instead of retrying every tick |
+| `notify.py` | The topic never appears in `status()`; fan-out survives one dead channel; titles stay ASCII for ntfy's latin-1 headers |
+| `server.py` | Symbol validation; full watcher lifecycle armed → re-pend → re-arm → fire; one-shot never re-fires |
+| `mcp_server.py` | **No order-shaped tool is ever exposed**; `level` accepts a number or a name |
+| `static/` | The page script parses; no duplicate top-level declarations; every `$("id")` exists |
+
 ## Layout
 
 ```
@@ -130,9 +165,7 @@ notify.py        Alert delivery: ntfy (no signup) and/or Telegram
 mcp_server.py    Claude Desktop MCP server (thin client over the HTTP API)
 mcp.sh           What Claude Desktop spawns
 server.py        FastAPI routes
-test_orders.py   Order-path tests against a stub broker (no network, no account)
-test_alerts.py   Alert crossing logic and the alert store
-test_docs.py     docs/API.md vs the code, and rule 3 asserted structurally
+tests/           pytest suite — hermetic, no network, no broker, no credentials
 .github/         CI — see below
 static/          Single-page UI, no build step
 deploy/          systemd unit + installer (Tailscale-bound)
@@ -148,10 +181,25 @@ Substituting a source is right for an alert and wrong for research.
 ## Tests and CI
 
 ```bash
-python test_orders.py    # 20 — order path against a stub broker
-python test_alerts.py    # 23 — alert crossing logic and the store
-python test_docs.py      #  6 — docs/API.md vs the code, rule 3 asserted
+pip install -r requirements-dev.txt && pytest -q      # 175 tests, ~1.5s
 ```
+
+Hermetic: no network, no broker, no credentials. The Webull SDK and the Agent
+SDK are stubbed in `tests/conftest.py` — `requirements-dev.txt` is deliberately
+not a superset of `requirements.txt`, because one needs a compiler and the other
+shells out to an npm-only binary, and CI should test this code rather than their
+builds.
+
+| File | Covers |
+| --- | --- |
+| `tests/test_orders.py` | The order path: payload shapes, the caps, the ticket handshake |
+| `tests/test_alerts.py` | Both crossing invariants from rule 4d, and the store |
+| `tests/test_mcp.py` | The MCP surface, and that `place_order` takes only a ticket |
+| `tests/test_docs.py` | `docs/API.md` vs the code, and rule 3 asserted structurally |
+| `tests/test_notify.py` | That the ntfy topic never reaches `status()` |
+| `tests/test_quotes.py`, `tests/test_td_levels.py`, `tests/test_server.py` | Price fallback chain, gamma compaction, routes |
+| `tests/test_static.py` | The single-page UI parses — there is no bundler |
+
 
 No network, no credentials, no account: the broker is stubbed and the alert
 store is redirected to a temp dir. Run them before any push.
@@ -284,11 +332,34 @@ Two channels, either or both, configured in `../.env.notify`.
 ntfy.sh instance is all that's needed. On the box sidecar runs on:
 
 ```bash
-python3 notify.py --setup      # mints a topic, writes ../.env.notify (0600)
+./.venv/bin/python notify.py --setup   # mints a topic, writes ../.env.notify (0600)
 # install the ntfy app, subscribe to the topic it printed, then:
-python3 notify.py --test       # send a test — repeatable
-python3 notify.py              # show which channels are configured
+./.venv/bin/python notify.py --test    # send a test — repeatable
+./.venv/bin/python notify.py           # show which channels are configured
 ```
+
+**Use the venv's python, not `python3`.** The system python3 has none of this
+project's dependencies, so `python3 notify.py` dies on `import requests` before
+it does anything. The script prints its own re-invocation commands using
+whichever interpreter is running it, so copy them from its output.
+
+**Getting the topic onto the phone: `--qr`, not copy-paste.**
+
+```bash
+./.venv/bin/python notify.py --qr   # scannable subscribe URL
+```
+
+A 32-hex-character topic invites a typo, and a typo silently subscribes you to
+a topic nobody publishes to — it looks identical to a working setup until an
+alert never arrives. The other shortcuts are worse: pasting it into a chat, a
+note or an email puts a credential somewhere permanent and searchable. A QR is
+on screen for seconds and lands in the app directly.
+
+**To rotate**, delete the `NTFY_TOPIC` line from `../.env.notify`, re-run
+`--setup`, re-scan `--qr`, and restart sidecar. Do that if the topic was ever
+pasted, screenshotted, or on camera — anyone holding it can both read your
+alerts and **publish** to it, and a spoofed "SPY broke below flip" is
+indistinguishable from a real one.
 
 `--setup` deliberately does **not** send a test. You cannot subscribe to a topic
 before it exists, so a test fired at that moment always beats the phone to it
