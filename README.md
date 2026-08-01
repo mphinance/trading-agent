@@ -93,6 +93,41 @@ from another desk are rarely still relevant.
 | `SIDECAR_URL` | `http://127.0.0.1:8787` | Read by `mcp_server.py` to find sidecar. |
 | `NTFY_SERVER` | `https://ntfy.sh` | Override only for a self-hosted ntfy. |
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q                    # 123 tests, ~3s, no network and no credentials
+```
+
+CI runs on every push and PR (`.github/workflows/ci.yml`): the suite on python
+3.10 and 3.13 (the range the Webull SDK's `>=3.8,<3.14` pin allows), a
+`compileall` pass to catch syntax errors in modules no test imports, the UI
+checks with node present, and a scan for credential-shaped strings.
+
+**`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
+SDK and the Agent SDK are stubbed in `tests/conftest.py` and excluded: the first
+pulls paho-mqtt, which needs a compiler and pins the python version, and the
+second shells out to a `claude` binary that only ships via npm. Installing
+either would make CI a test of that dependency rather than of this code, and
+nothing worth asserting needs them.
+
+The suite is hermetic — no network, no broker, no credentials. The live ntfy.sh
+delivery check stays a manual step (`notify.py --test`), because a green build
+must not depend on a third-party service being up.
+
+What it actually pins down, rather than syntax:
+
+| Area | The property under test |
+| --- | --- |
+| `alerts.py` | A break is a crossing, not a comparison; a moving level never fires an alert by itself; a dead TDPro resolves to `None`, never a remembered number |
+| `td.py` | Compaction stays small; put walls survive the ranking; `flip_split` only when the two models straddle spot; gated apex degrades |
+| `quotes.py` | Source order and tagging; a refused snapshot latches off instead of retrying every tick |
+| `notify.py` | The topic never appears in `status()`; fan-out survives one dead channel; titles stay ASCII for ntfy's latin-1 headers |
+| `server.py` | Symbol validation; full watcher lifecycle armed → re-pend → re-arm → fire; one-shot never re-fires |
+| `mcp_server.py` | **No order-shaped tool is ever exposed**; `level` accepts a number or a name |
+| `static/` | The page script parses; no duplicate top-level declarations; every `$("id")` exists |
+
 ## Layout
 
 ```
