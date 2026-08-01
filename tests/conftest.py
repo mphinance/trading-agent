@@ -41,11 +41,26 @@ def _install_stubs() -> None:
     if "webull" not in sys.modules:
         for mod in ("webull", "webull.core", "webull.core.client",
                     "webull.trade", "webull.trade.trade_client",
-                    "webull.data", "webull.data.data_client"):
+                    "webull.data", "webull.data.data_client",
+                    "webull.data.common", "webull.data.common.category"):
             sys.modules[mod] = types.ModuleType(mod)
         sys.modules["webull.core.client"].ApiClient = object
         sys.modules["webull.trade.trade_client"].TradeClient = object
         sys.modules["webull.data.data_client"].DataClient = object
+
+        # md.py imports Category at module level to map a position's
+        # instrument_type onto a market-data category. Only the enum member
+        # NAMES are used, so a namespace of stand-ins is enough — and keeping
+        # it here means md.py needs no test-only branch.
+        class _Cat:
+            def __init__(self, name): self.name = name
+
+        category = sys.modules["webull.data.common.category"]
+        category.Category = type("Category", (), {
+            name: _Cat(name) for name in
+            ("US_STOCK", "US_ETF", "US_OPTION", "US_CRYPTO", "US_FUTURES",
+             "US_EVENT", "HK_STOCK", "HK_ETF", "CN_STOCK", "HK_FUTURES")
+        })
 
 
 _install_stubs()

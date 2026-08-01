@@ -20,10 +20,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The Webull SDK pins python >=3.8,<3.14, so that is the range sidecar
-        # can actually be deployed on. venus runs 3.10; 3.13 is the ceiling.
-        # Testing both ends catches syntax and stdlib drift in between.
-        python-version: ["3.10", "3.13"]
+        # The deployable range. This comment used to say the SDK pins <3.14 —
+        # that was true of an older SDK. 2.0.16 declares
+        # python_requires='>=3.8,<3.15' with explicit cryptography/grpcio pins
+        # for 3.14, so 3.14 is supported and is the end most likely to break
+        # first. venus runs 3.10. Testing both ends catches stdlib drift in
+        # between; the SDK itself is stubbed here, so this is about THIS code.
+        python-version: ["3.10", "3.14"]
 
     steps:
       - uses: actions/checkout@v4

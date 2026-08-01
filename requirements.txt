@@ -1,9 +1,9 @@
 # sidecar dependencies.
 #
-# Python must be >=3.8,<3.14 — webull-openapi-python-sdk pins it. venus defaults
-# to 3.14, so it runs on a python3.10 venv:
+# Python 3.8-3.14. SDK 2.0.16 declares python_requires='>=3.8,<3.15' with
+# explicit cryptography/grpcio pins for 3.14, so the default python3 is fine:
 #
-#     python3.10 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+#     python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
 #
 # Unpinned on purpose: this is a personal tool on two machines, not a
 # distributed package, and pinning here would mean maintaining it. If a
@@ -13,9 +13,9 @@
 fastapi
 uvicorn
 
-# Webull broker API (read-only calls only — see rule 3 in CLAUDE.md).
-# Pulls in paho-mqtt for its streaming client, which needs build tools on some
-# Pythons; that stream is not used today.
+# Webull broker API — reads AND the order path (see rule 3 in CLAUDE.md).
+# Pulls in paho-mqtt and grpcio for the streaming clients, which stream.py does
+# use; both need build tools on some Pythons.
 webull-openapi-python-sdk
 
 # TraderDaddy Pro JSON-RPC, Telegram, and ntfy all go over plain HTTP
@@ -28,8 +28,14 @@ requests
 claude-agent-sdk
 
 # Claude Desktop MCP server (mcp_server.py). Only needed on the machine running
-# Claude Desktop, which may not be the machine running sidecar.
-mcp
+# Claude Desktop, which may not be the machine running sidecar. httpx is the
+# HTTP client it uses to reach sidecar.
+#
+# Pinned to >=2 because 2.0 renamed FastMCP to MCPServer and dropped
+# mcp.server.fastmcp. mcp_server.py targets the 2.x API, so an older install
+# fails at import — this is the one dependency where the floor is load-bearing.
+mcp>=2
+httpx
 
 # Optional. Powers `notify.py --qr`, which puts the ntfy subscribe URL on screen
 # as a QR so the topic never has to be typed, pasted into a chat, or read off a

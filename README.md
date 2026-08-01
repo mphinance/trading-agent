@@ -1,10 +1,27 @@
 # sidecar
 
 A companion deck for Webull Desktop. Live positions, P&L, portfolio guardrails,
-TraderDaddy Pro signals, and a Claude chat panel — in a browser window you park
-*beside* the Webull app. **Read-only: sidecar cannot place, modify, or cancel
-an order.** It only ever reads your account; all trading still happens in
-Webull Desktop itself.
+TraderDaddy Pro signals, dealer-gamma structure, live price alerts, and a Claude
+chat panel — in a browser window you park *beside* the Webull app.
+
+It also ships an **MCP server**, so Claude Desktop can read the account, arm
+alerts, and place orders on your behalf. The rig it's built for is three windows:
+
+| Window | Does |
+| --- | --- |
+| **Webull Desktop** | Charts, manual trading, the thing you already trust |
+| **sidecar** | The deck — positions, guardrails, gamma, alerts |
+| **Claude Desktop** | Voice. Connected to sidecar's MCP server. |
+
+You say *"what am I holding?"*, *"where's the flip on SPY?"*, or *"buy two ONDS
+at eight forty."* Claude calls sidecar, sidecar calls Webull.
+
+**sidecar can place orders.** Ordering is two-step by default — Claude previews,
+reads the order back, and only sends after you say yes — and every order runs a
+notional cap and a quantity cap first. See [Trading](#trading).
+
+📖 **[docs/API.md](docs/API.md)** — every MCP tool, every HTTP route, the ticket
+handshake, and the SSE stream format.
 
 ![sidecar](docs/screenshot.png)
 
@@ -33,12 +50,14 @@ OpenAPI. Nothing it shows depends on the desktop app running at all.
 ```
 
 **Loopback only by default, and that default is load-bearing.** This process
-holds live brokerage credentials, with **no authentication of any kind**.
-sidecar is read-only — it never places, modifies, or cancels an order — but
-binding it to `0.0.0.0` still lets anyone on the network read the account's
-balances and positions. To reach it from other machines, bind it to a
-**Tailscale** address (see Deploy) — device-authenticated, encrypted, invisible
-to the LAN and the internet.
+holds live brokerage credentials, with **no authentication of any kind**, and it
+can now trade. Binding it to `0.0.0.0` hands anyone on the network the ability
+to read your balances *and place orders in your account*. To reach it from other
+machines, bind it to a **Tailscale** address (see Deploy) — device-authenticated,
+encrypted, invisible to the LAN and the internet. `deploy/install.sh` refuses to
+run without one.
+
+If you want the deck without the order path, start it with `SIDECAR_TRADING=0`.
 
 ### Credentials
 
@@ -62,7 +81,7 @@ env files exist. `../` means the directory *containing* the repo, not the repo.
 ```bash
 git clone git@github.com:mphinance/webull-sidecar.git
 cd webull-sidecar
-python3.10 -m venv .venv                        # >=3.8,<3.14 (Webull SDK pins it)
+python3 -m venv .venv                           # 3.8-3.14 all fine on SDK 2.0.16
 ./.venv/bin/pip install -r requirements.txt
 npm i -g @anthropic-ai/claude-code              # the `claude` binary; chat needs it
 
@@ -91,6 +110,7 @@ from another desk are rarely still relevant.
 | `TD_API_KEY` | — | `td_live_…`; lights up the TraderDaddy panels and dealer gamma. |
 | `SIDECAR_STATE_DIR` | `~/.local/state/webull-sidecar` | Where `alerts.json` lives. |
 | `SIDECAR_URL` | `http://127.0.0.1:8787` | Read by `mcp_server.py` to find sidecar. |
+| `SIDECAR_TRADING` | `1` | `0` disables the order path. See [Trading](#trading) for the rest. |
 | `NTFY_SERVER` | `https://ntfy.sh` | Override only for a self-hosted ntfy. |
 
 ## Tests
@@ -131,19 +151,75 @@ What it actually pins down, rather than syntax:
 ## Layout
 
 ```
-wb.py            Webull SDK wrapper — credentials, caching, rate-limit handling (read-only)
+wb.py            Webull client — credentials, account/order reads, caching, rate limits
+md.py            Market data, research, screeners, watchlists (600/min bucket)
+orders.py        The order path — guards, preview/confirm tickets, place/replace/cancel
+stream.py        MQTT quote push + gRPC trade events, bridged to SSE
 risk.py          Portfolio guardrails
 td.py            TraderDaddy Pro client (direct JSON-RPC, no MCP library) + dealer-gamma levels
-chat.py          Claude chat via the Agent SDK; injects live state into each turn
+chat.py          In-app Claude chat via the Agent SDK. Read-only, no order path.
 alerts.py        Alert store + crossing logic (levels can BE the dealer structure)
 quotes.py        Last price, with a source chain: Webull data -> portfolio -> TDPro spot
 watcher.py       Background thread that evaluates alerts and delivers them
 notify.py        Alert delivery: ntfy (no signup) and/or Telegram
 mcp_server.py    Claude Desktop MCP server (thin client over the HTTP API)
+mcp.sh           What Claude Desktop spawns
 server.py        FastAPI routes
+tests/           pytest suite — hermetic, no network, no broker, no credentials
+.github/         CI — see below
 static/          Single-page UI, no build step
 deploy/          systemd unit + installer (Tailscale-bound)
+docs/API.md      Full MCP tool + HTTP route + SSE stream reference
 ```
+
+`md.py` and `quotes.py` both read prices and are not redundant. `md.py` is the
+full market-data surface (quotes, depth, bars, chains, research) and reports
+failure; `quotes.py` is a last-price cache that falls back through portfolio and
+TDPro spot so the alert watcher survives an unentitled market-data subscription.
+Substituting a source is right for an alert and wrong for research.
+
+## Tests and CI
+
+```bash
+pip install -r requirements-dev.txt && pytest -q      # 175 tests, ~1.5s
+```
+
+Hermetic: no network, no broker, no credentials. The Webull SDK and the Agent
+SDK are stubbed in `tests/conftest.py` — `requirements-dev.txt` is deliberately
+not a superset of `requirements.txt`, because one needs a compiler and the other
+shells out to an npm-only binary, and CI should test this code rather than their
+builds.
+
+| File | Covers |
+| --- | --- |
+| `tests/test_orders.py` | The order path: payload shapes, the caps, the ticket handshake |
+| `tests/test_alerts.py` | Both crossing invariants from rule 4d, and the store |
+| `tests/test_mcp.py` | The MCP surface, and that `place_order` takes only a ticket |
+| `tests/test_docs.py` | `docs/API.md` vs the code, and rule 3 asserted structurally |
+| `tests/test_notify.py` | That the ntfy topic never reaches `status()` |
+| `tests/test_quotes.py`, `tests/test_td_levels.py`, `tests/test_server.py` | Price fallback chain, gamma compaction, routes |
+| `tests/test_static.py` | The single-page UI parses — there is no bundler |
+
+
+No network, no credentials, no account: the broker is stubbed and the alert
+store is redirected to a temp dir. Run them before any push.
+
+`.github/workflows/ci.yml` runs all three on **Python 3.10 and 3.14** — the two
+ends of the range the docs claim, and 3.14 is the one most likely to break first
+on a `cryptography` or `grpcio` wheel. It also byte-compiles every module, runs
+`ruff` on errors only (`E9,F63,F7,F82` — not a style gate), and smoke-tests that
+`server.py` builds its route table and `mcp_server.py` enumerates its tools.
+
+That last one is not hypothetical. **mcp 2.0 renamed `FastMCP` to `MCPServer`
+and dropped `mcp.server.fastmcp`.** Because `requirements.txt` is unpinned, CI
+installed 2.0 and a `mcp_server.py` written against 1.x failed to import — a
+break that arrived from upstream with no commit here. `tests/test_mcp.py`
+imports the module directly rather than using `pytest.importorskip`, precisely
+so that fails the build instead of skipping quietly.
+
+A second job scans for credential-shaped strings and asserts no `.env` or 2FA
+token file has become tracked — rule 2 and rule 5, enforced rather than
+remembered.
 
 ## Deploy (Tailscale-bound, starts at boot)
 
@@ -164,9 +240,11 @@ failure, and orders after `tailscaled` so the bind doesn't race at startup.
 
 ### Host prerequisites — both bit on the first deploy
 
-- **Python must be `>=3.8,<3.14`.** The Webull SDK pins this. Ubuntu 22.04 with
-  a newer default python3 needs an explicit `python3.10 -m venv .venv`; `run.sh`
-  prefers `./.venv/bin/uvicorn` when present.
+- **Python 3.8-3.14.** This used to top out below 3.14; SDK 2.0.16 declares
+  `python_requires='>=3.8,<3.15'` and pins cryptography/grpcio explicitly for
+  3.14, so a modern default python3 is fine now. `run.sh` still prefers
+  `./.venv/bin/uvicorn` when a venv is present, and an existing `python3.10`
+  venv needs no rebuild.
 - **The `claude` CLI must be installed** (`npm i -g @anthropic-ai/claude-code`).
   The *Python* Agent SDK shells out to it and does **not** bundle a binary — only
   the TypeScript SDK does. Without it, chat fails at runtime, not at install.
@@ -350,17 +428,29 @@ Settings → Developer → Edit Config:
 {
   "mcpServers": {
     "sidecar": {
-      "command": "/path/to/webull-sidecar/.venv/bin/python",
-      "args": ["/path/to/webull-sidecar/mcp_server.py"],
+      "command": "/path/to/webull-sidecar/mcp.sh",
       "env": { "SIDECAR_URL": "http://100.113.21.73:8787" }
     }
   }
 }
 ```
 
-`pip install mcp`, then restart Claude Desktop. Tools: `get_portfolio`,
-`get_gamma`, `get_signals`, `list_alerts`, `create_alert`, `delete_alert`,
-`test_alert_delivery`. No order tool, and there must never be one.
+`pip install mcp httpx`, then restart Claude Desktop. Start sidecar first — this
+is a bridge to it, not a second broker client.
+
+**36 tools**, all listed in [docs/API.md](docs/API.md):
+
+| Group | Tools |
+| --- | --- |
+| Account | `get_portfolio`, `get_activities`, `get_market_calendar`, `get_health` |
+| Market data | `get_quote`, `get_bars`, `get_order_book`, `get_time_and_sales`, `get_order_flow`, `get_auction_imbalance` |
+| Options | `get_option_chain`, `get_option_quote` |
+| Structure | `get_gamma`, `get_signals` |
+| Research | `get_research`, `run_screener` |
+| Watchlists | `get_watchlists`, `get_watchlist_items`, `create_watchlist`, `add_to_watchlist`, `remove_from_watchlist` |
+| Alerts | `list_alerts`, `create_alert`, `delete_alert`, `test_alert_delivery` |
+| Orders (read) | `get_open_orders`, `get_order_history`, `get_trading_config` |
+| Orders (write) | `preview_order`, `preview_option_order`, `place_order`, `discard_ticket`, `replace_order`, `cancel_order`, `cancel_all_orders`, `place_order_now` |
 
 - **stdio, not a remote connector.** Claude Desktop launches it as a subprocess
   on your own machine, which is already on the tailnet — so no public hostname,
@@ -375,6 +465,61 @@ Settings → Developer → Edit Config:
 - **`level` must accept a string or a number.** Typed as `str` alone, "alert me
   when SPY breaks 743" fails schema validation before it reaches the server,
   because the model sends `743` as a number. Caught in testing; both arms now.
+- **The order tools are safe here precisely because it's a thin client.** The
+  caps and the preview→confirm handshake live in `orders.py`, so voice trades
+  get them for free. An MCP server with its own Webull client would need a
+  second 2FA token file, would race the deck for the same 2 req/2s account
+  budget, and would drift from the deck's guards. Don't build one.
+
+## Trading
+
+The order path lives in `orders.py` and nowhere else.
+
+**Two steps, by design.** `preview_order` validates, runs the caps, asks Webull
+to price it, and stages a *ticket* holding a SHA-256 of the exact payload.
+`place_order(ticket_id)` sends it. No single call can both build and fire an
+order, and what you confirm out loud is byte-for-byte what reaches the broker.
+Tickets are single-use and expire after 120 seconds.
+
+Spoken, that's:
+
+> **You:** buy two ONDS at eight forty
+> **Claude:** *(preview_order)* BUY 2 ONDS @ 8.40 DAY CORE — estimated cost
+> $16.80, buying power effect −$16.80. Send it?
+> **You:** yes
+> **Claude:** *(place_order)* Sent.
+
+**What's supported:** market, limit, stop, stop-limit, trailing stop; brackets
+(take-profit and stop-loss attached to the entry, sent as a Webull combo);
+TWAP/VWAP/POV algo orders (US only); single- and multi-leg options — verticals,
+straddles, condors; replace and cancel; cancel-all.
+
+**What the guards do.** Caps run server-side on every path, so they apply to
+voice, HTTP, and anything else equally. `replace` re-runs them (amending an
+order can raise exposure); `cancel` never does (reducing risk is always
+allowed). Market orders are priced from the live quote before the cap is
+checked, so you can't dodge it by leaving off a limit price.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIDECAR_TRADING` | `1` | `0` disables the order path entirely — the kill switch. |
+| `SIDECAR_ORDER_CONFIRM` | `1` | `0` allows one-shot placement, skipping the ticket handshake. |
+| `SIDECAR_MAX_NOTIONAL` | `2500` | Max $ per order. Rejected before Webull sees it. |
+| `SIDECAR_MAX_QUANTITY` | `10000` | Max shares/contracts per order. |
+| `SIDECAR_MAX_BP_FRACTION` | `1.0` | Cap an order at this fraction of buying power. |
+| `SIDECAR_SYMBOL_ALLOWLIST` | — | Comma-separated. Empty means any symbol. |
+
+**What is *not* wired to the order path:** the in-app chat panel. It holds
+`WebFetch`/`WebSearch`, so it reads text written by strangers, and a component
+with attacker-controllable input should not hold your account. It can propose a
+trade; it cannot send one. Claude Desktop over MCP is a different case — it acts
+on your voice, not on a page it fetched.
+
+> **Not exercised against a live account yet.** The order path is tested end to
+> end against a stub broker (`test_orders.py`, plus an MCP stdio run through
+> preview → confirm → place → cancel). That proves the wiring, not Webull's
+> acceptance of it. Make the first real order one share of something cheap, with
+> Webull Desktop open to watch it land.
 
 ## Voice (verified 2026-07-31)
 
@@ -465,15 +610,29 @@ Palette and forms follow the dataviz method rather than taste:
 
 ## Notes from building it
 
-- **Rate limits are tight and real.** Balance and positions are capped at
-  **2 requests / 2 seconds each**. One portfolio poll spends that entire budget
-  (one call per endpoint per account × 2 accounts), so `/api/portfolio` and
-  `/api/signals` firing together on page load reliably 429s. Fixed with a lock so
-  concurrent callers share one fetch, plus retry-with-backoff and a stale
-  fallback that serves the last good snapshot rather than a 500. The UI shows
-  `stale` in the header when that happens — it never presents old numbers as live.
+- **The tight rate limit is one bucket, not the whole API.** This cost an hour
+  because the 2 req/2s figure got generalised. US region, from Webull's own
+  reference:
+
+  | Bucket | Limit |
+  | --- | --- |
+  | Order query — *and this is where balance and positions live* | **2 req / 2s** |
+  | Market data | 600 req / min |
+  | Order place / replace / cancel | 600 req / min |
+  | Auth create/check | 10 req / 30s |
+
+  So the account endpoints are ~100x scarcer than quotes. `wb.py` guards the
+  scarce bucket with a lock (concurrent callers share one fetch),
+  retry-with-backoff, and a stale fallback that serves the last good snapshot
+  rather than a 500 — the UI shows `stale` in the header rather than presenting
+  old numbers as live. `md.py` is a separate cache on the generous bucket, which
+  is why live quotes can refresh every second without starving the portfolio
+  poll. Keep them separate.
 - **Buying power is shared across accounts**, so totals use `max()`, not `sum()`.
   Summing double-counts the same dollars.
-- **No market data subscription is required** for any of this — positions and
-  balances are trading-API surface, not quotes. Quotes would need a non-display
-  entitlement; see `../docs/README.md`.
+- **Positions and balances need no market data subscription** — they're
+  trading-API surface. *Quotes are different*: `md.py`, the streaming feeds, and
+  anything in the MCP server returning a price need a market data subscription
+  in the regional Webull app, and a non-display entitlement for some uses; see
+  `../docs/README.md`. `quotes.py` falls back to portfolio prices and TDPro spot
+  so alerts survive without it. The order path needs none of it.
