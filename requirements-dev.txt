@@ -1,0 +1,29 @@
+# Test dependencies.
+#
+#     pip install -r requirements-dev.txt && pytest -q
+#
+# Deliberately NOT a superset of requirements.txt. Two runtime dependencies are
+# stubbed in tests/conftest.py and excluded here on purpose:
+#
+#   webull-openapi-python-sdk  pulls paho-mqtt, which needs a compiler on some
+#                              Pythons and pins python <3.14. Installing it
+#                              would make CI a test of that build, not of this
+#                              code, and nothing worth asserting needs it.
+#   claude-agent-sdk           shells out to a `claude` binary that only ships
+#                              via npm, so importing it proves nothing a test
+#                              can act on. chat.py's testable logic is the
+#                              prompt formatting, which needs no SDK.
+#
+# The suite is hermetic: no network, no broker, no credentials. The live
+# ntfy.sh delivery check stays a manual step, because a green build must not
+# depend on a third-party service being up.
+
+pytest
+pytest-asyncio
+
+# Exercised directly by the tests
+fastapi
+httpx          # starlette's TestClient
+requests
+mcp            # mcp_server.py tool surface
+qrcode         # notify.py --qr

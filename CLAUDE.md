@@ -195,6 +195,24 @@ static/        Single-page UI, no build step
 deploy/        systemd unit + Tailscale-bound installer
 ```
 
+## Tests
+
+`pip install -r requirements-dev.txt && pytest -q`. CI runs the same on every
+push and PR. The suite is hermetic — no network, no broker, no credentials —
+because a green build must not depend on TDPro or ntfy.sh being up.
+
+Two rules if you touch it:
+
+- **`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
+  SDK and the Agent SDK are stubbed in `tests/conftest.py`, so CI never installs
+  them: one needs a compiler and pins the python version, the other shells out
+  to an npm-only binary. Do not "fix" this by installing the real ones.
+- **The tests encode the decisions in the rules above, not just behaviour.**
+  `test_mcp.py` asserts no order-shaped tool exists (rule 3), `test_notify.py`
+  asserts the ntfy topic never reaches `status()` (rule 4d/5), and
+  `test_alerts.py` pins both crossing properties (rule 4d). If a rule here
+  changes, the test is the other half of the change.
+
 ## Status
 
 Working and verified against the live account: positions, guardrails, TDPro
