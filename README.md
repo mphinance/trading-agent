@@ -210,10 +210,12 @@ on a `cryptography` or `grpcio` wheel. It also byte-compiles every module, runs
 `ruff` on errors only (`E9,F63,F7,F82` — not a style gate), and smoke-tests that
 `server.py` builds its route table and `mcp_server.py` enumerates its tools.
 
-That last one is not hypothetical. A version of `mcp_server.py` once imported a
-class the `mcp` SDK does not export, so the server could not start at all — a
-smoke test that merely *imports* it catches that class of break, and unpinned
-requirements mean it can arrive from upstream without a commit here.
+That last one is not hypothetical. **mcp 2.0 renamed `FastMCP` to `MCPServer`
+and dropped `mcp.server.fastmcp`.** Because `requirements.txt` is unpinned, CI
+installed 2.0 and a `mcp_server.py` written against 1.x failed to import — a
+break that arrived from upstream with no commit here. `tests/test_mcp.py`
+imports the module directly rather than using `pytest.importorskip`, precisely
+so that fails the build instead of skipping quietly.
 
 A second job scans for credential-shaped strings and asserts no `.env` or 2FA
 token file has become tracked — rule 2 and rule 5, enforced rather than

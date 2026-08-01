@@ -11,9 +11,13 @@ the load-bearing assertions moved rather than disappeared. What must hold now:
 
 Deliberately NOT `importorskip`. `mcp` is in requirements-dev.txt, so a failure
 to import means this module is broken, not absent — and a skip would hide it.
-That is not hypothetical: a version of mcp_server.py imported a class the SDK
-does not export, this file skipped itself, and CI went green over a server that
-could not start.
+
+That is not hypothetical, and the example is this file's own history. mcp 2.0
+renamed `FastMCP` to `MCPServer` and dropped `mcp.server.fastmcp`. A version of
+mcp_server.py written against 1.x imported the old path; because `requirements`
+is unpinned, CI installed 2.0 and the import failed. With `importorskip` that
+would have skipped silently and the run would have gone green over a server that
+could not start. Without it, CI failed on the first push. Keep it that way.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ async def tools():
 
 
 def schema_of(tool):
-    """FastMCP exposes the JSON Schema as `inputSchema`; tolerate either name."""
+    """The SDK has used both `inputSchema` and `input_schema`; tolerate either."""
     return getattr(tool, "inputSchema", None) or getattr(tool, "input_schema")
 
 
@@ -165,7 +169,7 @@ async def test_create_alert_requires_the_three_things_that_define_an_alert():
 async def test_an_unreachable_sidecar_names_the_url_and_the_likely_cause(monkeypatch):
     """A dead sidecar must be distinguishable from a rejected order.
 
-    FastMCP wraps a raising tool in ToolError and hands the message to the
+    The SDK wraps a raising tool in a tool error and hands the message to the
     model, so the message is the whole user-facing surface here — it has to say
     where it tried and what to do about it.
     """

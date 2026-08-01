@@ -25,5 +25,5 @@ pytest-asyncio
 fastapi
 httpx          # starlette's TestClient
 requests
-mcp            # mcp_server.py tool surface
+mcp>=2         # mcp_server.py tool surface; 2.0 renamed FastMCP -> MCPServer
 qrcode         # notify.py --qr

@@ -40,7 +40,7 @@ Related repos, and why this isn't merged into them:
 - **Push:** MQTT (`paho`, via `DataStreamingClient`) for quotes, gRPC (via
   `TradeEventsClient`) for order/position/fill events — so a fill you make in
   Webull Desktop shows up here in about a second instead of on the next poll.
-- **Voice:** `mcp_server.py` on the official `mcp` SDK (FastMCP), stdio
+- **Voice:** `mcp_server.py` on the official `mcp` SDK (`MCPServer`), stdio
   transport, for Claude Desktop. Browser-side mic is separate — see rule 4c.
 - **Signals:** TraderDaddy Pro over plain JSON-RPC (`POST /api/v1/mcp`). No MCP
   client library — the endpoint takes a bare `tools/call` with no handshake.

@@ -54,7 +54,7 @@ import os
 from typing import Any
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 SIDECAR_URL = os.environ.get("SIDECAR_URL", "http://127.0.0.1:8787").rstrip("/")
 TIMEOUT = float(os.environ.get("SIDECAR_MCP_TIMEOUT", "30"))
@@ -82,7 +82,7 @@ Alerts are evaluated by sidecar's own background thread, not here — this serve
 only arms and inspects them, so an alert keeps working after the conversation
 ends."""
 
-mcp = FastMCP("webull-sidecar", instructions=INSTRUCTIONS)
+mcp = MCPServer(name="webull-sidecar", instructions=INSTRUCTIONS)
 
 
 class SidecarDown(RuntimeError):
