@@ -53,11 +53,14 @@ Related repos, and why this isn't merged into them:
 ## Critical design rules
 
 ### 1. Loopback or Tailscale. Never 0.0.0.0.
-This app has **no authentication** and holds live brokerage credentials. Even
-though it's read-only, binding it to a LAN lets any device on the wifi read the
-account's balances and positions. `deploy/install.sh` *refuses to run* without a
-Tailscale IP rather than falling back — the guardrail is in code, not in a
-comment. Live on venus at `100.113.21.73:8787`, tailnet-only.
+This app has **no authentication**, holds live brokerage credentials, and can
+place orders. Binding it to a LAN lets any device on the wifi read the account's
+balances and positions *and trade with them*. `deploy/install.sh` *refuses to
+run* without a Tailscale IP rather than falling back — the guardrail is in code,
+not in a comment. Live on venus at `100.113.21.73:8787`, tailnet-only.
+
+This rule got more load-bearing when rule 3 changed. `SIDECAR_TRADING=0` is the
+lever if you ever need the deck somewhere less private.
 
 ### 2. Secrets live outside the repo, and only in files
 `../.env.webull`, `../.env.anthropic` and `../.env.telegram` sit in the **parent**
@@ -249,6 +252,12 @@ server.py      FastAPI routes
 static/        Single-page UI, no build step
 deploy/        systemd unit + Tailscale-bound installer
 test_orders.py Order-path tests against a stub broker — no network, no account
+test_alerts.py Alert crossing logic: the two invariants in rule 4d, plus the store
+test_docs.py   Keeps docs/API.md honest, and asserts rule 3 structurally —
+               chat.py cannot import orders.py, and no module outside orders.py
+               calls a broker write
+.github/       CI: both tests on Python 3.10 and 3.14, errors-only lint, and a
+               secret scan. Runs on every push and PR; needs no credentials.
 docs/API.md    Generated-from-code reference: MCP tools, HTTP routes, SSE event
                shapes, the ticket handshake. Regenerate it if you add a route or
                a tool — a stale API doc is worse than none.
@@ -268,8 +277,9 @@ Verified against the live account: positions, guardrails, TDPro signals, chat.
 **The order path, market data, streaming and the MCP server have NOT been
 exercised against the live account.** They are tested end to end against a stub
 broker — `test_orders.py` covers payload shapes, guards, and the ticket
-lifecycle; the MCP server was driven over stdio through preview → confirm →
-place → cancel. That proves the wiring, not the broker's acceptance of it.
+lifecycle, `test_alerts.py` covers the crossing invariants, and `test_docs.py`
+catches a module that no longer imports; the MCP server was driven over stdio
+through preview → confirm → place → cancel. That proves the wiring, not the broker's acceptance of it.
 Webull's own field-level validation, fractional-share and extended-hours rules,
 and option-strategy handling are unproven here. First live order should be one
 share of something cheap, placed with Webull Desktop open so you can watch it

@@ -131,6 +131,9 @@ mcp_server.py    Claude Desktop MCP server (thin client over the HTTP API)
 mcp.sh           What Claude Desktop spawns
 server.py        FastAPI routes
 test_orders.py   Order-path tests against a stub broker (no network, no account)
+test_alerts.py   Alert crossing logic and the alert store
+test_docs.py     docs/API.md vs the code, and rule 3 asserted structurally
+.github/         CI — see below
 static/          Single-page UI, no build step
 deploy/          systemd unit + installer (Tailscale-bound)
 docs/API.md      Full MCP tool + HTTP route + SSE stream reference
@@ -141,6 +144,32 @@ full market-data surface (quotes, depth, bars, chains, research) and reports
 failure; `quotes.py` is a last-price cache that falls back through portfolio and
 TDPro spot so the alert watcher survives an unentitled market-data subscription.
 Substituting a source is right for an alert and wrong for research.
+
+## Tests and CI
+
+```bash
+python test_orders.py    # 20 — order path against a stub broker
+python test_alerts.py    # 23 — alert crossing logic and the store
+python test_docs.py      #  6 — docs/API.md vs the code, rule 3 asserted
+```
+
+No network, no credentials, no account: the broker is stubbed and the alert
+store is redirected to a temp dir. Run them before any push.
+
+`.github/workflows/ci.yml` runs all three on **Python 3.10 and 3.14** — the two
+ends of the range the docs claim, and 3.14 is the one most likely to break first
+on a `cryptography` or `grpcio` wheel. It also byte-compiles every module, runs
+`ruff` on errors only (`E9,F63,F7,F82` — not a style gate), and smoke-tests that
+`server.py` builds its route table and `mcp_server.py` enumerates its tools.
+
+That last one is not hypothetical. A version of `mcp_server.py` once imported a
+class the `mcp` SDK does not export, so the server could not start at all — a
+smoke test that merely *imports* it catches that class of break, and unpinned
+requirements mean it can arrive from upstream without a commit here.
+
+A second job scans for credential-shaped strings and asserts no `.env` or 2FA
+token file has become tracked — rule 2 and rule 5, enforced rather than
+remembered.
 
 ## Deploy (Tailscale-bound, starts at boot)
 
