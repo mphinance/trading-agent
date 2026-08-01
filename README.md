@@ -247,28 +247,55 @@ failure, and orders after `tailscaled` so the bind doesn't race at startup.
 `RELATED` currently maps `ONDL → ONDS` (leveraged ETF and its underlying). Extend
 that dict as the book changes — the check is only as good as the map.
 
-## Claude / Agent SDK gotchas (verified 2026-07-16)
+## Trading
 
-- **`claude setup-token` produces a token starting `sk-ant-oat…`, which is NOT an
-  API key.** It shares the `sk-ant-` prefix and the ~108-char length of a real
-  API key, so every structural check passes — but putting it in
-  `ANTHROPIC_API_KEY` yields `401 invalid x-api-key`, because OAuth tokens don't
-  go in the `x-api-key` header. It belongs in `CLAUDE_CODE_OAUTH_TOKEN`. Cost us
-  an hour; the credential was fine the whole time.
-- **The Agent SDK reports auth failures uselessly.** It raised
-  `Claude Code returned an error result: success`. The real signal was in the
-  message stream: an `AssistantMessage` with `error='authentication_failed'`.
-  When debugging auth, test the credential **directly** against the API — the
-  clean `401` tells you more than the SDK does.
-- **`total_cost_usd` is reported even on the OAuth token**, where the
-  subscription covers it. Don't render it as money owed; the UI labels it
-  "subscription — no charge (would bill ~$X on API)".
-- **WebFetch upgrades `http://` to `https://`**, so it cannot read a plain-HTTP
-  loopback server. Don't have the model fetch state this app already holds —
-  `chat.py` injects portfolio/signals into the turn instead. Faster, no tool
-  round-trip, guaranteed current.
-- **`setting_sources=[]`** keeps the user's `~/.claude` config (CLAUDE.md,
-  skills) out of a panel that gets streamed on video.
+The order path lives in `orders.py` and nowhere else.
+
+**Two steps, by design.** `preview_order` validates, runs the caps, asks Webull
+to price it, and stages a *ticket* holding a SHA-256 of the exact payload.
+`place_order(ticket_id)` sends it. No single call can both build and fire an
+order, and what you confirm out loud is byte-for-byte what reaches the broker.
+Tickets are single-use and expire after 120 seconds.
+
+Spoken, that's:
+
+> **You:** buy two ONDS at eight forty
+> **Claude:** *(preview_order)* BUY 2 ONDS @ 8.40 DAY CORE — estimated cost
+> $16.80, buying power effect −$16.80. Send it?
+> **You:** yes
+> **Claude:** *(place_order)* Sent.
+
+**What's supported:** market, limit, stop, stop-limit, trailing stop; brackets
+(take-profit and stop-loss attached to the entry, sent as a Webull combo);
+TWAP/VWAP/POV algo orders (US only); single- and multi-leg options — verticals,
+straddles, condors; replace and cancel; cancel-all.
+
+**What the guards do.** Caps run server-side on every path, so they apply to
+voice, HTTP, and anything else equally. `replace` re-runs them (amending an
+order can raise exposure); `cancel` never does (reducing risk is always
+allowed). Market orders are priced from the live quote before the cap is
+checked, so you can't dodge it by leaving off a limit price.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIDECAR_TRADING` | `1` | `0` disables the order path entirely — the kill switch. |
+| `SIDECAR_ORDER_CONFIRM` | `1` | `0` allows one-shot placement, skipping the ticket handshake. |
+| `SIDECAR_MAX_NOTIONAL` | `2500` | Max $ per order. Rejected before Webull sees it. |
+| `SIDECAR_MAX_QUANTITY` | `10000` | Max shares/contracts per order. |
+| `SIDECAR_MAX_BP_FRACTION` | `1.0` | Cap an order at this fraction of buying power. |
+| `SIDECAR_SYMBOL_ALLOWLIST` | — | Comma-separated. Empty means any symbol. |
+
+**What is *not* wired to the order path:** the in-app chat panel. It holds
+`WebFetch`/`WebSearch`, so it reads text written by strangers, and a component
+with attacker-controllable input should not hold your account. It can propose a
+trade; it cannot send one. Claude Desktop over MCP is a different case — it acts
+on your voice, not on a page it fetched.
+
+> **Not exercised against a live account yet.** The order path is tested end to
+> end against a stub broker (`test_orders.py`, plus an MCP stdio run through
+> preview → confirm → place → cancel). That proves the wiring, not Webull's
+> acceptance of it. Make the first real order one share of something cheap, with
+> Webull Desktop open to watch it land.
 
 ## Alerts
 
@@ -455,56 +482,6 @@ is a bridge to it, not a second broker client.
   second 2FA token file, would race the deck for the same 2 req/2s account
   budget, and would drift from the deck's guards. Don't build one.
 
-## Trading
-
-The order path lives in `orders.py` and nowhere else.
-
-**Two steps, by design.** `preview_order` validates, runs the caps, asks Webull
-to price it, and stages a *ticket* holding a SHA-256 of the exact payload.
-`place_order(ticket_id)` sends it. No single call can both build and fire an
-order, and what you confirm out loud is byte-for-byte what reaches the broker.
-Tickets are single-use and expire after 120 seconds.
-
-Spoken, that's:
-
-> **You:** buy two ONDS at eight forty
-> **Claude:** *(preview_order)* BUY 2 ONDS @ 8.40 DAY CORE — estimated cost
-> $16.80, buying power effect −$16.80. Send it?
-> **You:** yes
-> **Claude:** *(place_order)* Sent.
-
-**What's supported:** market, limit, stop, stop-limit, trailing stop; brackets
-(take-profit and stop-loss attached to the entry, sent as a Webull combo);
-TWAP/VWAP/POV algo orders (US only); single- and multi-leg options — verticals,
-straddles, condors; replace and cancel; cancel-all.
-
-**What the guards do.** Caps run server-side on every path, so they apply to
-voice, HTTP, and anything else equally. `replace` re-runs them (amending an
-order can raise exposure); `cancel` never does (reducing risk is always
-allowed). Market orders are priced from the live quote before the cap is
-checked, so you can't dodge it by leaving off a limit price.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `SIDECAR_TRADING` | `1` | `0` disables the order path entirely — the kill switch. |
-| `SIDECAR_ORDER_CONFIRM` | `1` | `0` allows one-shot placement, skipping the ticket handshake. |
-| `SIDECAR_MAX_NOTIONAL` | `2500` | Max $ per order. Rejected before Webull sees it. |
-| `SIDECAR_MAX_QUANTITY` | `10000` | Max shares/contracts per order. |
-| `SIDECAR_MAX_BP_FRACTION` | `1.0` | Cap an order at this fraction of buying power. |
-| `SIDECAR_SYMBOL_ALLOWLIST` | — | Comma-separated. Empty means any symbol. |
-
-**What is *not* wired to the order path:** the in-app chat panel. It holds
-`WebFetch`/`WebSearch`, so it reads text written by strangers, and a component
-with attacker-controllable input should not hold your account. It can propose a
-trade; it cannot send one. Claude Desktop over MCP is a different case — it acts
-on your voice, not on a page it fetched.
-
-> **Not exercised against a live account yet.** The order path is tested end to
-> end against a stub broker (`test_orders.py`, plus an MCP stdio run through
-> preview → confirm → place → cancel). That proves the wiring, not Webull's
-> acceptance of it. Make the first real order one share of something cheap, with
-> Webull Desktop open to watch it land.
-
 ## Voice (verified 2026-07-31)
 
 Click the 🎙 button or press **Ctrl+Space**, speak, and stop. The transcript
@@ -531,6 +508,29 @@ lands in the chat box and sends itself; the reply is read back aloud. A turn you
   a near-miss in the transcript, and to say which it used.
 - `continuous = false` — one utterance per press. A hot mic on a streamed desk
   is not wanted.
+
+## Claude / Agent SDK gotchas (verified 2026-07-16)
+
+- **`claude setup-token` produces a token starting `sk-ant-oat…`, which is NOT an
+  API key.** It shares the `sk-ant-` prefix and the ~108-char length of a real
+  API key, so every structural check passes — but putting it in
+  `ANTHROPIC_API_KEY` yields `401 invalid x-api-key`, because OAuth tokens don't
+  go in the `x-api-key` header. It belongs in `CLAUDE_CODE_OAUTH_TOKEN`. Cost us
+  an hour; the credential was fine the whole time.
+- **The Agent SDK reports auth failures uselessly.** It raised
+  `Claude Code returned an error result: success`. The real signal was in the
+  message stream: an `AssistantMessage` with `error='authentication_failed'`.
+  When debugging auth, test the credential **directly** against the API — the
+  clean `401` tells you more than the SDK does.
+- **`total_cost_usd` is reported even on the OAuth token**, where the
+  subscription covers it. Don't render it as money owed; the UI labels it
+  "subscription — no charge (would bill ~$X on API)".
+- **WebFetch upgrades `http://` to `https://`**, so it cannot read a plain-HTTP
+  loopback server. Don't have the model fetch state this app already holds —
+  `chat.py` injects portfolio/signals into the turn instead. Faster, no tool
+  round-trip, guaranteed current.
+- **`setting_sources=[]`** keeps the user's `~/.claude` config (CLAUDE.md,
+  skills) out of a panel that gets streamed on video.
 
 ## TraderDaddy API gotchas (verified 2026-07-16)
 
@@ -616,7 +616,8 @@ Palette and forms follow the dataviz method rather than taste:
   Summing double-counts the same dollars.
 - **Positions and balances need no market data subscription** — they're
   trading-API surface. *Quotes are different*: `md.py`, the streaming feeds, and
-  anything in the MCP server returning a price need a market data subscription
-  in the regional Webull app, and a non-display entitlement for some uses; see
-  `../docs/README.md`. `quotes.py` falls back to portfolio prices and TDPro spot
-  so alerts survive without it. The order path needs none of it.
+  anything in the MCP server returning a price need a paid market data
+  subscription in the regional Webull app; see
+  [`docs/webull-api/README.md`](docs/webull-api/README.md). `quotes.py` falls
+  back to portfolio prices and TDPro spot so alerts survive without it. The
+  order path needs none of it.
