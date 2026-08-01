@@ -110,43 +110,9 @@ from another desk are rarely still relevant.
 | `TD_API_KEY` | — | `td_live_…`; lights up the TraderDaddy panels and dealer gamma. |
 | `SIDECAR_STATE_DIR` | `~/.local/state/webull-sidecar` | Where `alerts.json` lives. |
 | `SIDECAR_URL` | `http://127.0.0.1:8787` | Read by `mcp_server.py` to find sidecar. |
+| `SIDECAR_MCP_TIMEOUT` | `30` | Seconds `mcp_server.py` waits on a sidecar call. |
 | `SIDECAR_TRADING` | `1` | `0` disables the order path. See [Trading](#trading) for the rest. |
 | `NTFY_SERVER` | `https://ntfy.sh` | Override only for a self-hosted ntfy. |
-
-## Tests
-
-```bash
-pip install -r requirements-dev.txt
-pytest -q                    # 123 tests, ~3s, no network and no credentials
-```
-
-CI runs on every push and PR (`.github/workflows/ci.yml`): the suite on python
-3.10 and 3.13 (the range the Webull SDK's `>=3.8,<3.14` pin allows), a
-`compileall` pass to catch syntax errors in modules no test imports, the UI
-checks with node present, and a scan for credential-shaped strings.
-
-**`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
-SDK and the Agent SDK are stubbed in `tests/conftest.py` and excluded: the first
-pulls paho-mqtt, which needs a compiler and pins the python version, and the
-second shells out to a `claude` binary that only ships via npm. Installing
-either would make CI a test of that dependency rather than of this code, and
-nothing worth asserting needs them.
-
-The suite is hermetic — no network, no broker, no credentials. The live ntfy.sh
-delivery check stays a manual step (`notify.py --test`), because a green build
-must not depend on a third-party service being up.
-
-What it actually pins down, rather than syntax:
-
-| Area | The property under test |
-| --- | --- |
-| `alerts.py` | A break is a crossing, not a comparison; a moving level never fires an alert by itself; a dead TDPro resolves to `None`, never a remembered number |
-| `td.py` | Compaction stays small; put walls survive the ranking; `flip_split` only when the two models straddle spot; gated apex degrades |
-| `quotes.py` | Source order and tagging; a refused snapshot latches off instead of retrying every tick |
-| `notify.py` | The topic never appears in `status()`; fan-out survives one dead channel; titles stay ASCII for ntfy's latin-1 headers |
-| `server.py` | Symbol validation; full watcher lifecycle armed → re-pend → re-arm → fire; one-shot never re-fires |
-| `mcp_server.py` | **No order-shaped tool is ever exposed**; `level` accepts a number or a name |
-| `static/` | The page script parses; no duplicate top-level declarations; every `$("id")` exists |
 
 ## Layout
 
@@ -165,11 +131,16 @@ notify.py        Alert delivery: ntfy (no signup) and/or Telegram
 mcp_server.py    Claude Desktop MCP server (thin client over the HTTP API)
 mcp.sh           What Claude Desktop spawns
 server.py        FastAPI routes
+run.sh           Launcher — sources ../.env.*, binds loopback unless told otherwise
 tests/           pytest suite — hermetic, no network, no broker, no credentials
 .github/         CI — see below
 static/          Single-page UI, no build step
 deploy/          systemd unit + installer (Tailscale-bound)
+requirements.txt      Runtime deps. Unpinned except `mcp>=2`.
+requirements-dev.txt  Test deps. Deliberately not a superset — see Tests and CI.
 docs/API.md      Full MCP tool + HTTP route + SSE stream reference
+docs/webull-api/ Vendored Webull OpenAPI protocol reference (endpoints, rate
+                 limits, MQTT streaming) — upstream's words, not ours
 ```
 
 `md.py` and `quotes.py` both read prices and are not redundant. `md.py` is the
@@ -181,53 +152,66 @@ Substituting a source is right for an alert and wrong for research.
 ## Tests and CI
 
 ```bash
-pip install -r requirements-dev.txt && pytest -q      # 175 tests, ~1.5s
+pip install -r requirements-dev.txt && pytest -q      # 176 tests, ~2s
 ```
 
-Hermetic: no network, no broker, no credentials. The Webull SDK and the Agent
-SDK are stubbed in `tests/conftest.py` — `requirements-dev.txt` is deliberately
-not a superset of `requirements.txt`, because one needs a compiler and the other
-shells out to an npm-only binary, and CI should test this code rather than their
-builds.
+Hermetic: no network, no broker, no credentials. The broker is stubbed and the
+alert store is redirected to a temp dir, so a test run cannot reach your account
+or eat your armed alerts. Run it before any push.
 
-| File | Covers |
+**`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
+SDK and the Agent SDK are stubbed in `tests/conftest.py` and excluded: the first
+pulls paho-mqtt, which needs a compiler, and the second shells out to a `claude`
+binary that only ships via npm. Installing either would make CI a test of that
+dependency rather than of this code.
+
+What the suite pins down, rather than syntax:
+
+| File | The property under test |
 | --- | --- |
-| `tests/test_orders.py` | The order path: payload shapes, the caps, the ticket handshake |
-| `tests/test_alerts.py` | Both crossing invariants from rule 4d, and the store |
-| `tests/test_mcp.py` | The MCP surface, and that `place_order` takes only a ticket |
-| `tests/test_docs.py` | `docs/API.md` vs the code, and rule 3 asserted structurally |
-| `tests/test_notify.py` | That the ntfy topic never reaches `status()` |
-| `tests/test_quotes.py`, `tests/test_td_levels.py`, `tests/test_server.py` | Price fallback chain, gamma compaction, routes |
-| `tests/test_static.py` | The single-page UI parses — there is no bundler |
+| `test_orders.py` | Payload shapes Webull actually accepts; the caps, including a market order priced *before* the cap; the ticket handshake — replay, expiry, tampering, and a broker rejection freeing the ticket |
+| `test_mcp.py` | `place_order` takes **only** a ticket, so nothing can construct and fire in one call; the caps are not reimplemented in the MCP layer; the server holds no credentials |
+| `test_alerts.py` | A break is a crossing, not a comparison; a moving level never fires an alert by itself; a dead TDPro resolves to `None`, never a remembered number |
+| `test_docs.py` | `docs/API.md` matches the code both ways; `chat.py` cannot import `orders.py`; no broker write lives outside `orders.py` |
+| `test_notify.py` | The ntfy topic never appears in `status()`; fan-out survives one dead channel; titles stay ASCII for ntfy's latin-1 headers |
+| `test_td_levels.py` | Compaction stays small; put walls survive the ranking; `flip_split` only when the two models straddle spot |
+| `test_quotes.py` | Source order and tagging; a refused snapshot latches off instead of retrying every tick |
+| `test_server.py` | Symbol validation; watcher lifecycle armed → re-pend → re-arm → fire; one-shot never re-fires |
+| `test_static.py` | The page script parses; no duplicate top-level declarations; every `$("id")` exists; the alert row's select stays shrinkable so it cannot push the Arm button out of its card |
 
+`.github/workflows/ci.yml` runs three jobs on every push and PR:
 
-No network, no credentials, no account: the broker is stubbed and the alert
-store is redirected to a temp dir. Run them before any push.
+- **test** — `pytest -q` on **Python 3.10 and 3.14**, plus a `compileall` pass to
+  catch a syntax error in a module no test imports. 3.14 is the end most likely
+  to break first on a `cryptography` or `grpcio` wheel.
+- **static** — the UI check with node present, so `node --check` is not skipped.
+  There is no bundler; this is the only thing between a typo in
+  `static/index.html` and a blank panel.
+- **secrets** — scans for credential-shaped strings. The doc placeholders must
+  not trip it, so each pattern requires enough entropy to be a genuine key.
 
-`.github/workflows/ci.yml` runs all three on **Python 3.10 and 3.14** — the two
-ends of the range the docs claim, and 3.14 is the one most likely to break first
-on a `cryptography` or `grpcio` wheel. It also byte-compiles every module, runs
-`ruff` on errors only (`E9,F63,F7,F82` — not a style gate), and smoke-tests that
-`server.py` builds its route table and `mcp_server.py` enumerates its tools.
-
-That last one is not hypothetical. **mcp 2.0 renamed `FastMCP` to `MCPServer`
-and dropped `mcp.server.fastmcp`.** Because `requirements.txt` is unpinned, CI
-installed 2.0 and a `mcp_server.py` written against 1.x failed to import — a
-break that arrived from upstream with no commit here. `tests/test_mcp.py`
-imports the module directly rather than using `pytest.importorskip`, precisely
-so that fails the build instead of skipping quietly.
-
-A second job scans for credential-shaped strings and asserts no `.env` or 2FA
-token file has become tracked — rule 2 and rule 5, enforced rather than
-remembered.
+`test_mcp.py` imports `mcp_server` directly rather than using
+`pytest.importorskip`. That matters: **mcp 2.0 renamed `FastMCP` to `MCPServer`
+and dropped `mcp.server.fastmcp`**, and because `requirements.txt` is otherwise
+unpinned, CI resolved 2.0 and a module written against 1.x failed to import — a
+break that arrived from upstream with no commit here. A skip would have gone
+green over a server that could not start. `mcp>=2` is now pinned for that reason.
 
 ## Deploy (Tailscale-bound, starts at boot)
 
 ```bash
 rsync -az --exclude __pycache__ --exclude .venv sidecar/ host:~/webull/sidecar/
-rsync -az .env.webull .env.anthropic host:~/webull/     # chmod 600 on arrival
+rsync -az .env.webull .env.anthropic .env.notify host:~/webull/   # chmod 600 on arrival
+ssh host '~/webull/sidecar/.venv/bin/pip install -r ~/webull/sidecar/requirements.txt'
 ssh host '~/webull/sidecar/deploy/install.sh'
 ```
+
+**The pip step is not optional on an upgrade.** rsync copies files, not
+packages, so a host that predates a dependency change starts and then fails at
+import — `mcp>=2` and `httpx` both arrived with the order path and the MCP
+server. `/api/health` is the check afterwards: it reports `trading`,
+`confirm_required` and the stream state, so you can see which build is actually
+running rather than assuming.
 
 `install.sh` reads the host's Tailscale IP, writes `deploy/sidecar.env`, installs
 a **user** systemd unit, and enables it. It **refuses to run without a Tailscale
@@ -263,28 +247,55 @@ failure, and orders after `tailscaled` so the bind doesn't race at startup.
 `RELATED` currently maps `ONDL → ONDS` (leveraged ETF and its underlying). Extend
 that dict as the book changes — the check is only as good as the map.
 
-## Claude / Agent SDK gotchas (verified 2026-07-16)
+## Trading
 
-- **`claude setup-token` produces a token starting `sk-ant-oat…`, which is NOT an
-  API key.** It shares the `sk-ant-` prefix and the ~108-char length of a real
-  API key, so every structural check passes — but putting it in
-  `ANTHROPIC_API_KEY` yields `401 invalid x-api-key`, because OAuth tokens don't
-  go in the `x-api-key` header. It belongs in `CLAUDE_CODE_OAUTH_TOKEN`. Cost us
-  an hour; the credential was fine the whole time.
-- **The Agent SDK reports auth failures uselessly.** It raised
-  `Claude Code returned an error result: success`. The real signal was in the
-  message stream: an `AssistantMessage` with `error='authentication_failed'`.
-  When debugging auth, test the credential **directly** against the API — the
-  clean `401` tells you more than the SDK does.
-- **`total_cost_usd` is reported even on the OAuth token**, where the
-  subscription covers it. Don't render it as money owed; the UI labels it
-  "subscription — no charge (would bill ~$X on API)".
-- **WebFetch upgrades `http://` to `https://`**, so it cannot read a plain-HTTP
-  loopback server. Don't have the model fetch state this app already holds —
-  `chat.py` injects portfolio/signals into the turn instead. Faster, no tool
-  round-trip, guaranteed current.
-- **`setting_sources=[]`** keeps the user's `~/.claude` config (CLAUDE.md,
-  skills) out of a panel that gets streamed on video.
+The order path lives in `orders.py` and nowhere else.
+
+**Two steps, by design.** `preview_order` validates, runs the caps, asks Webull
+to price it, and stages a *ticket* holding a SHA-256 of the exact payload.
+`place_order(ticket_id)` sends it. No single call can both build and fire an
+order, and what you confirm out loud is byte-for-byte what reaches the broker.
+Tickets are single-use and expire after 120 seconds.
+
+Spoken, that's:
+
+> **You:** buy two ONDS at eight forty
+> **Claude:** *(preview_order)* BUY 2 ONDS @ 8.40 DAY CORE — estimated cost
+> $16.80, buying power effect −$16.80. Send it?
+> **You:** yes
+> **Claude:** *(place_order)* Sent.
+
+**What's supported:** market, limit, stop, stop-limit, trailing stop; brackets
+(take-profit and stop-loss attached to the entry, sent as a Webull combo);
+TWAP/VWAP/POV algo orders (US only); single- and multi-leg options — verticals,
+straddles, condors; replace and cancel; cancel-all.
+
+**What the guards do.** Caps run server-side on every path, so they apply to
+voice, HTTP, and anything else equally. `replace` re-runs them (amending an
+order can raise exposure); `cancel` never does (reducing risk is always
+allowed). Market orders are priced from the live quote before the cap is
+checked, so you can't dodge it by leaving off a limit price.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIDECAR_TRADING` | `1` | `0` disables the order path entirely — the kill switch. |
+| `SIDECAR_ORDER_CONFIRM` | `1` | `0` allows one-shot placement, skipping the ticket handshake. |
+| `SIDECAR_MAX_NOTIONAL` | `2500` | Max $ per order. Rejected before Webull sees it. |
+| `SIDECAR_MAX_QUANTITY` | `10000` | Max shares/contracts per order. |
+| `SIDECAR_MAX_BP_FRACTION` | `1.0` | Cap an order at this fraction of buying power. |
+| `SIDECAR_SYMBOL_ALLOWLIST` | — | Comma-separated. Empty means any symbol. |
+
+**What is *not* wired to the order path:** the in-app chat panel. It holds
+`WebFetch`/`WebSearch`, so it reads text written by strangers, and a component
+with attacker-controllable input should not hold your account. It can propose a
+trade; it cannot send one. Claude Desktop over MCP is a different case — it acts
+on your voice, not on a page it fetched.
+
+> **Not exercised against a live account yet.** The order path is tested end to
+> end against a stub broker (`test_orders.py`, plus an MCP stdio run through
+> preview → confirm → place → cancel). That proves the wiring, not Webull's
+> acceptance of it. Make the first real order one share of something cheap, with
+> Webull Desktop open to watch it land.
 
 ## Alerts
 
@@ -471,56 +482,6 @@ is a bridge to it, not a second broker client.
   second 2FA token file, would race the deck for the same 2 req/2s account
   budget, and would drift from the deck's guards. Don't build one.
 
-## Trading
-
-The order path lives in `orders.py` and nowhere else.
-
-**Two steps, by design.** `preview_order` validates, runs the caps, asks Webull
-to price it, and stages a *ticket* holding a SHA-256 of the exact payload.
-`place_order(ticket_id)` sends it. No single call can both build and fire an
-order, and what you confirm out loud is byte-for-byte what reaches the broker.
-Tickets are single-use and expire after 120 seconds.
-
-Spoken, that's:
-
-> **You:** buy two ONDS at eight forty
-> **Claude:** *(preview_order)* BUY 2 ONDS @ 8.40 DAY CORE — estimated cost
-> $16.80, buying power effect −$16.80. Send it?
-> **You:** yes
-> **Claude:** *(place_order)* Sent.
-
-**What's supported:** market, limit, stop, stop-limit, trailing stop; brackets
-(take-profit and stop-loss attached to the entry, sent as a Webull combo);
-TWAP/VWAP/POV algo orders (US only); single- and multi-leg options — verticals,
-straddles, condors; replace and cancel; cancel-all.
-
-**What the guards do.** Caps run server-side on every path, so they apply to
-voice, HTTP, and anything else equally. `replace` re-runs them (amending an
-order can raise exposure); `cancel` never does (reducing risk is always
-allowed). Market orders are priced from the live quote before the cap is
-checked, so you can't dodge it by leaving off a limit price.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `SIDECAR_TRADING` | `1` | `0` disables the order path entirely — the kill switch. |
-| `SIDECAR_ORDER_CONFIRM` | `1` | `0` allows one-shot placement, skipping the ticket handshake. |
-| `SIDECAR_MAX_NOTIONAL` | `2500` | Max $ per order. Rejected before Webull sees it. |
-| `SIDECAR_MAX_QUANTITY` | `10000` | Max shares/contracts per order. |
-| `SIDECAR_MAX_BP_FRACTION` | `1.0` | Cap an order at this fraction of buying power. |
-| `SIDECAR_SYMBOL_ALLOWLIST` | — | Comma-separated. Empty means any symbol. |
-
-**What is *not* wired to the order path:** the in-app chat panel. It holds
-`WebFetch`/`WebSearch`, so it reads text written by strangers, and a component
-with attacker-controllable input should not hold your account. It can propose a
-trade; it cannot send one. Claude Desktop over MCP is a different case — it acts
-on your voice, not on a page it fetched.
-
-> **Not exercised against a live account yet.** The order path is tested end to
-> end against a stub broker (`test_orders.py`, plus an MCP stdio run through
-> preview → confirm → place → cancel). That proves the wiring, not Webull's
-> acceptance of it. Make the first real order one share of something cheap, with
-> Webull Desktop open to watch it land.
-
 ## Voice (verified 2026-07-31)
 
 Click the 🎙 button or press **Ctrl+Space**, speak, and stop. The transcript
@@ -547,6 +508,29 @@ lands in the chat box and sends itself; the reply is read back aloud. A turn you
   a near-miss in the transcript, and to say which it used.
 - `continuous = false` — one utterance per press. A hot mic on a streamed desk
   is not wanted.
+
+## Claude / Agent SDK gotchas (verified 2026-07-16)
+
+- **`claude setup-token` produces a token starting `sk-ant-oat…`, which is NOT an
+  API key.** It shares the `sk-ant-` prefix and the ~108-char length of a real
+  API key, so every structural check passes — but putting it in
+  `ANTHROPIC_API_KEY` yields `401 invalid x-api-key`, because OAuth tokens don't
+  go in the `x-api-key` header. It belongs in `CLAUDE_CODE_OAUTH_TOKEN`. Cost us
+  an hour; the credential was fine the whole time.
+- **The Agent SDK reports auth failures uselessly.** It raised
+  `Claude Code returned an error result: success`. The real signal was in the
+  message stream: an `AssistantMessage` with `error='authentication_failed'`.
+  When debugging auth, test the credential **directly** against the API — the
+  clean `401` tells you more than the SDK does.
+- **`total_cost_usd` is reported even on the OAuth token**, where the
+  subscription covers it. Don't render it as money owed; the UI labels it
+  "subscription — no charge (would bill ~$X on API)".
+- **WebFetch upgrades `http://` to `https://`**, so it cannot read a plain-HTTP
+  loopback server. Don't have the model fetch state this app already holds —
+  `chat.py` injects portfolio/signals into the turn instead. Faster, no tool
+  round-trip, guaranteed current.
+- **`setting_sources=[]`** keeps the user's `~/.claude` config (CLAUDE.md,
+  skills) out of a panel that gets streamed on video.
 
 ## TraderDaddy API gotchas (verified 2026-07-16)
 
@@ -632,7 +616,8 @@ Palette and forms follow the dataviz method rather than taste:
   Summing double-counts the same dollars.
 - **Positions and balances need no market data subscription** — they're
   trading-API surface. *Quotes are different*: `md.py`, the streaming feeds, and
-  anything in the MCP server returning a price need a market data subscription
-  in the regional Webull app, and a non-display entitlement for some uses; see
-  `../docs/README.md`. `quotes.py` falls back to portfolio prices and TDPro spot
-  so alerts survive without it. The order path needs none of it.
+  anything in the MCP server returning a price need a paid market data
+  subscription in the regional Webull app; see
+  [`docs/webull-api/README.md`](docs/webull-api/README.md). `quotes.py` falls
+  back to portfolio prices and TDPro spot so alerts survive without it. The
+  order path needs none of it.

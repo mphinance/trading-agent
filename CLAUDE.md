@@ -204,7 +204,9 @@ users* needs prior approval — personal use only.
 
 ## Gotchas that will cost you an hour
 
-All verified 2026-07-16 and documented at length in the README:
+Documented at length in the README. Most were verified 2026-07-16; the rate-limit
+buckets and the Python version were re-verified 2026-08-01 against SDK 2.0.16 and
+webull-inc's own reference, and both had been recorded wrong before that:
 
 - **The tight rate limit is one bucket, not all of them.** US region:
   order query (which is where balance and positions live) is **2 req / 2s**,
@@ -249,15 +251,25 @@ notify.py      Alert delivery: ntfy (no signup) and/or Telegram
 mcp_server.py  Claude Desktop MCP server (stdio, thin client over the HTTP API)
 mcp.sh         What Claude Desktop spawns
 server.py      FastAPI routes
+run.sh         Launcher — sources ../.env.*, binds loopback unless told otherwise
 static/        Single-page UI, no build step
 deploy/        systemd unit + Tailscale-bound installer
 tests/         pytest suite, hermetic — the Webull and Agent SDKs are stubbed
                in conftest.py so CI needs neither a compiler nor a broker
 .github/       CI on Python 3.10 and 3.14, a compileall pass, the UI check with
                node present, and a credential scan. Every push and PR.
+requirements.txt      Runtime. Unpinned except `mcp>=2` — 2.0 renamed FastMCP
+                      to MCPServer, so below that floor the import fails.
+requirements-dev.txt  Test deps. NOT a superset — see Tests.
+pytest.ini            testpaths=tests, asyncio_mode=auto
 docs/API.md    Generated-from-code reference: MCP tools, HTTP routes, SSE event
                shapes, the ticket handshake. Regenerate it if you add a route or
-               a tool — a stale API doc is worse than none.
+               a tool — a stale API doc is worse than none, and tests/test_docs.py
+               fails the build if it drifts.
+docs/webull-api/  Vendored Webull OpenAPI protocol reference (endpoints, rate
+                  limits, MQTT streaming). Upstream's words, not ours — when it
+                  disagrees with our notes, check the live API before trusting
+                  either.
 ```
 
 Two modules read prices and they are not redundant. `md.py` is the full market
@@ -313,3 +325,11 @@ Deployed on venus (`100.113.21.73:8787`) as a boot-enabled user service. The
 local Crostini copy binds `127.0.0.1`, which the ChromeOS browser **cannot
 reach** — Chrome lives outside the container, and only `penguin` is on the
 tailnet, not ChromeOS itself.
+
+**venus runs whatever was last rsynced, not whatever is on `main`.** Nothing
+redeploys it automatically, so after the order path landed the running service
+was still a build with no `orders.py` in it. Check `/api/health` — it reports
+`trading` and `confirm_required` — before assuming the deck you are looking at
+has the guards this file describes. Redeploy with the rsync + `install.sh` in
+the README, and note that the new deps (`mcp>=2`, `httpx`) mean
+`pip install -r requirements.txt` has to run there too, not just a file copy.

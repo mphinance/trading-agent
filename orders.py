@@ -16,8 +16,9 @@ the reasoning should survive the person who wrote it:
    real surface. Notional cap, quantity cap, optional symbol allowlist and the
    buying-power check all run server-side on every path, including replace.
 
-3. **Chat cannot reach this module.** `chat.py` gets read-only tools plus the
-   ability to *stage* a ticket for you to confirm in the UI. It holds WebFetch
+3. **Chat cannot reach this module.** `chat.py` gets read-only tools and no
+   path here at all — it can describe a trade, and you place it in Webull
+   Desktop or by voice through Claude Desktop. It holds WebFetch
    and WebSearch, which means any page it reads is an untrusted instruction
    source — a model that can both read the web and place orders is a
    prompt-injection target with your account as the payload. Flip

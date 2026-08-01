@@ -2,12 +2,14 @@
 # sidecar launcher.
 #
 # Binds to 127.0.0.1 by default. SIDECAR_HOST can widen that — but read this
-# first: sidecar has NO AUTHENTICATION and holds live brokerage credentials.
-# It's read-only (it never places orders), but account balances and positions
-# still shouldn't leak to the LAN. Binding it to 0.0.0.0 lets anyone on the
-# network read the account. The supported way to reach it from other machines
-# is a Tailscale IP (100.x.y.z), which is device-authenticated and invisible
-# to the LAN and the internet.
+# first: sidecar has NO AUTHENTICATION, holds live brokerage credentials, and
+# CAN PLACE ORDERS. Binding it to 0.0.0.0 lets anyone on the network read the
+# account's balances and positions *and trade with them*. The supported way to
+# reach it from other machines is a Tailscale IP (100.x.y.z), which is
+# device-authenticated and invisible to the LAN and the internet.
+#
+# SIDECAR_TRADING=0 turns the order path off if you need the deck somewhere
+# less private. See "Trading" in the README for the rest of the guards.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -27,8 +29,9 @@ for d in "$HOME/.nvm/versions/node"/*/bin "$HOME/.local/bin" /usr/local/bin; do
 done
 export PATH
 
-# Prefer the project venv when present (venus builds one on python3.10, since
-# the Webull SDK requires >=3.8,<3.14 and that box defaults to 3.14).
+# Prefer the project venv when present. venus's was built on python3.10 back
+# when the SDK pinned <3.14; SDK 2.0.16 declares '>=3.8,<3.15', so a fresh venv
+# on the system python is fine now and the old one needs no rebuild.
 UVICORN="uvicorn"
 [ -x ./.venv/bin/uvicorn ] && UVICORN="./.venv/bin/uvicorn"
 

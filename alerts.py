@@ -8,7 +8,11 @@ instead reference `flip`, `pin`, `wall_above` or `wall_below`, which are
 re-resolved from TDPro on every evaluation. That is the whole point; a static
 level is supported too, but it is the boring case.
 
-Read-only, like the rest of sidecar: an alert notifies, it never trades.
+An alert notifies; it never trades. sidecar as a whole *can* trade now
+(`orders.py`), but nothing in this module or in `watcher.py` touches that path —
+a level being crossed is information, not an instruction. Keep it that way:
+auto-execution off a moving dealer level is a different product with a very
+different failure mode.
 
 Two properties are load-bearing and easy to destroy by "simplifying" this:
 

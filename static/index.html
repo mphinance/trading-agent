@@ -240,7 +240,12 @@
                     border: 1px solid var(--border-strong); color: var(--text-primary);
                     border-radius: 8px; padding: 6px 9px; font-family: var(--font);
                     font-size: 12px; text-transform: uppercase; }
-  .gex-head select { text-transform: none; flex: 0 0 auto; }
+  /* `width: auto` is load-bearing: the global `select { width: 100% }` rule
+     (which the chat model picker needs) makes flex-basis:auto resolve to the
+     full row, and `flex: 0 0` then refuses to shrink it — so the Arm button
+     was pushed 135px outside the card and the whole page scrolled sideways.
+     Size it to its content and let it shrink. */
+  .gex-head select { text-transform: none; flex: 0 1 auto; width: auto; }
   #al-level { text-transform: none; }
 
   .al-row { display: flex; align-items: center; gap: 8px; font-size: 12px;
@@ -385,7 +390,7 @@
     </div>
   </div>
 
-  <footer>LOOPBACK ONLY · LIVE BROKERAGE CREDENTIALS · READ-ONLY</footer>
+  <footer id="footer">LOOPBACK OR TAILSCALE ONLY · NO AUTH · LIVE BROKERAGE CREDENTIALS</footer>
 </div>
 
 <script>
@@ -1101,7 +1106,22 @@ $("suggest").addEventListener("click", e => {
   if (q) chatSend(q);
 });
 
+/* The footer used to hardcode "READ-ONLY". It stayed on screen for a while
+   after that stopped being true, which is the worst kind of stale on a panel
+   that gets streamed. Read the real setting instead so it cannot drift again. */
+async function loadTradingBadge() {
+  try {
+    const c = await (await fetch("/api/orders/config")).json();
+    const bits = ["LOOPBACK OR TAILSCALE ONLY", "NO AUTH", "LIVE BROKERAGE CREDENTIALS"];
+    if (!c.trading_enabled) bits.push("TRADING OFF");
+    else bits.push(`TRADING ON · CAP ${money(c.max_notional)}/ORDER` +
+                   (c.require_confirm ? " · CONFIRM REQUIRED" : " · NO CONFIRM STEP"));
+    $("footer").textContent = bits.join(" · ");
+  } catch { /* leave the static text; a missing route is not worth a red banner */ }
+}
+
 refresh(); refreshSignals(); chatStatus(); loadGex(gexSymbol); loadAlerts();
+loadTradingBadge();
 // Matches the watcher's own poll, so a fire shows up within a tick of firing.
 setInterval(loadAlerts, 15000);
 setInterval(refresh, 10000);        // Webull caps balance/positions at 2 req / 2s
