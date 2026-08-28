@@ -109,6 +109,12 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
             )
             audit_notes.append(f"EXECUTION FAILED: {prop.id} - {e}")
 
+    # Broadcast execution results to active channels (Telegram/Discord/Webhook)
+    from vesper.bot.manager import channel_manager
+    if channel_manager.active_channels:
+        for res in results:
+            await channel_manager.broadcast_execution(res)
+
     audit_entry = {
         "node": "executor_node",
         "timestamp": _now(),

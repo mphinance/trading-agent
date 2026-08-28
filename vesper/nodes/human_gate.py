@@ -12,7 +12,7 @@ from langgraph.types import interrupt
 logger = logging.getLogger(__name__)
 
 
-def human_gate_node(state: TradingState) -> Dict[str, Any]:
+async def human_gate_node(state: TradingState) -> Dict[str, Any]:
     """Halts execution to present structured trade proposals for explicit approval."""
     proposals = state.get("proposals", [])
     if not proposals:
@@ -27,6 +27,12 @@ def human_gate_node(state: TradingState) -> Dict[str, Any]:
 
     logger.info(f"-> [HumanGateNode] {len(proposals)} proposal(s) awaiting approval.")
     
+    # Broadcast to configured channels (Telegram, Discord, Webhooks)
+    from vesper.bot.manager import channel_manager
+    if channel_manager.active_channels:
+        for p in proposals:
+            await channel_manager.broadcast_proposal(p)
+
     # Check if human decision already provided (e.g. via CLI or resume)
     decision = state.get("human_decision")
     if not decision:
@@ -39,9 +45,9 @@ def human_gate_node(state: TradingState) -> Dict[str, Any]:
                 "asset": p.asset_type,
                 "action": f"{p.side} {p.quantity} @ ${p.limit_price:.2f}",
                 "stop_loss": f"${p.stop_loss:.2f}" if p.stop_loss else "N/A",
-                "target": f"${p.profit_target:.2f}" if p.profit_target else "N/A",
-                "estimated_cost": f"${p.estimated_cost:,.2f}",
-                "max_risk": f"${p.max_risk:,.2f}",
+                "target": f"${p.target_price:.2f}" if p.target_price else "N/A",
+                "estimated_cost": f"${(p.limit_price or 0.0) * p.quantity:,.2f}",
+                "max_risk": f"${p.max_risk_usd:,.2f}",
             })
         
         # In interactive graph execution, interrupt with the card details
