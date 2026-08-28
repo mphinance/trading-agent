@@ -179,8 +179,23 @@ Sentiment Analysis Guide 2026*). Highlights:
   variants nightly, only activate ones clearing a win-rate/reward:risk bar
   for the next session — ties Module 4 and Module 5 into an actual gate on
   what `scanner_node` runs, not just a score after the fact.
-- Also flagged: risk-segmented playbook "personas," hedge-vs-directional
-  options flow classification, and a list of not-yet-queried notebooks
-  (TraderDaddy Pro docs, IBKR API guide, MCP server directory, Michael's own
-  stated trading strategies) that looked relevant but weren't pulled in this
-  pass.
+- Also flagged: risk-segmented playbook "personas" and hedge-vs-directional
+  options flow classification.
+
+**Follow-up pass** queried four more notebooks (IBKR API guide, financial
+data/infra reference, MCP server directory, and Michael's own trading-
+strategy notes). The standout: **`momentum_squeeze` is coded as a breakout
+filter, but Michael's actual documented strategy explicitly trades mean-
+reversion pullbacks instead** (Keltner "Action Zone" + RSI(2) reset, not
+EMA-stack breakout) — see `docs/IDEAS_BACKLOG.md` for the exact rule set.
+That same notebook describes four whole strategies with zero code today (an
+ADX/IV option-style router, a premium-recycling "free share" engine, a
+delta-neutral "Thega" volatility harvest, and a YieldMax `$ULTY` collar-
+following play) plus portfolio-level risk rules (15% trailing NLV stop,
+underlying-price-keyed option stops, capital-allocation buckets) not in
+`vesper/risk.py`. The IBKR pass surfaced concrete, load-bearing gotchas
+(single-session-per-account lockout, weekly forced 2FA reset, silent
+`CLOSE_WAIT` socket rot, no open/close semantics) for whenever Phase 4's
+`ibkr_broker.py` gets built. Full detail, plus named MCP servers worth
+connecting (SEC EDGAR, ShareSeer, Polymarket) and data-API notes, in
+`docs/IDEAS_BACKLOG.md`.

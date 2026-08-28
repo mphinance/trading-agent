@@ -116,24 +116,170 @@ failure/paging instead of silent log lines, a voice-triggered kill switch.
   layer, mostly redundant with what TraderDaddy/TickerTrace already provide
   here but worth knowing about as a fallback).
 
-## Notebooks not yet queried — flagged, not pulled
+## ⭐ Michael's own documented strategy vs. what's actually coded
 
-Michael's NotebookLM account has ~95 notebooks; most are ticker-specific
-research or unrelated to this repo. These looked plausibly relevant to
-Vesper specifically and weren't queried in this pass — worth a follow-up if
-wanted:
+Queried *The Investing and Trading Strategies of MPHinance* (Michael's own
+notes, heavily influenced by Simon Ree's *The Tao of Trading*) against the
+three playbooks that exist today (`0dte_flow`, `momentum_squeeze`,
+`institutional_convergence`). This is the highest-signal finding of the
+whole research pass: **`momentum_squeeze` doesn't run the strategy it's named
+after**, and four entire strategies from Michael's own methodology have no
+code at all.
+
+### `momentum_squeeze` is coded as breakout entry; Michael's actual rule is the opposite
+
+`vesper/nodes/playbooks.py` currently drafts a proposal on
+`tech.ema_stack == "BULLISH" or tech.rsi_14 > 50` — that's a breakout/momentum
+continuation filter. Michael's actual rule (per Simon Ree's methodology)
+explicitly **avoids breakouts as false-breakout traps** and trades **mean-
+reversion pullbacks** instead ("Bounce 2.0"):
+- Trend filter: EMA stack bullish (`8 > 21 > 34 > 55 > 89`) **and** `ADX(13) ≥ 20`
+- Pullback trigger: price back inside the Keltner Channel "Action Zone"
+  (±1 ATR of the 21 EMA, Keltner length 14, 2x ATR multiplier)
+- Momentum exhaustion: Slow Stochastic(8,3) ≤ 40
+- Entry: `RSI(2)` dips below 10 then crosses back above it, confirmed by a
+  daily close above the pullback's low candle
+- Exit: 50% of size at +2 ATR, remaining 25% at +3 ATR
+
+This is a precise, backtestable rule set, not a vague preference — worth
+either rewriting `momentum_squeeze` to match it or renaming the current
+breakout logic to something else so the two don't get confused.
+
+### Four strategies with zero code today
+
+1. **ADX/IV option-style router.** A decision matrix: `ADX(13) < 20` + `IV <
+   70%` → Wheel (sell CSPs); `ADX ≥ 20` + `IV < 70%` → LEAPS; `ADX ≥ 20` + `IV
+   ≥ 70%` → Synthetic long (buy call + sell put, same strike, ~4x leveraged
+   stock-equivalent without margin interest); `ADX < 20` + `IV < 70%` → buy
+   shares outright ("Training Wheels"). A clean `playbooks_node` addition —
+   the inputs (ADX, IV) are already computable from existing data.
+2. **Premium-recycling "free share" engine.** Sweep 100% of realized options-
+   selling/day-trading profit into buying shares of the underlying or a
+   stabilizer (`SGOV`/`NTSX`) until a full 100-share block accumulates,
+   becoming a permanent zero-cost-basis holding. This is a portfolio-state
+   machine, not a signal — would live closer to Module 5's outcome tracking
+   than to `playbooks_node`.
+3. **"Thega" delta-neutral volatility harvesting.** For high-IV binary events
+   (earnings, biotech catalysts): buy 100 shares + sell 1 ATM covered call +
+   sell 3 ATM cash-secured puts, netting `Δ_call − 3×Δ_put ≈ 0`. Harvests
+   theta/vega crush direction-indifferently. Needs live per-contract delta
+   from Webull's options chain — not currently pulled into any node.
+4. **YieldMax `$ULTY` collar-following.** Covered-call ETFs like `$ULTY` are
+   structurally forced to buy protective puts against their concentrated
+   holdings; parse their daily holdings file, find the exact strikes they
+   bought puts at, and sell cash-secured puts at those same strikes — if
+   assigned, shares transfer in at a YieldMax-subsidized discount. Needs a
+   daily holdings-file scraper; nothing else here reads ETF holdings data
+   today.
+
+### Rules that should tighten `0dte_flow`
+
+- Only run single-stock weeklies where IV > 70% (ideally >100%) — targets
+  2-4% weekly ROC.
+- Sell puts at 0.30 delta, or at major put-wall open interest strikes.
+- Reject wide-spread chains (e.g. $5 strike intervals on a $6 stock).
+- Earnings week: sell ATM CSPs for the vega, buy-to-close the day after IV
+  collapses.
+
+### Portfolio-level risk rules not in `vesper/risk.py` today
+
+- **15% trailing NLV stop**, peak-to-trough on total portfolio value — closes
+  everything and pauses all trading 24h if hit. This is a portfolio-wide kill
+  condition on top of `execution_guard.py`'s per-order caps, not a
+  replacement for them.
+- Swing option stops keyed to the **underlying's** price level (close below
+  200 SMA / 34 EMA / lower Keltner band), not a fixed percentage on the
+  option contract itself — Michael's notes explicitly call fixed-% option
+  stops whipsaw-prone.
+- Capital allocation buckets: 15% sector/thematic swings, 15% equity options
+  (max one open long option position at a time), 20% wheel-stock allocation.
+- Tax rule: route 25% of high-yield distributions (`$MSTY`/`$ULTY`) to
+  `$SGOV` automatically.
+
+None of this is scoped into a Module yet — it's a strong case for a
+dedicated "Michael's Edge" module once Modules 0-5 are stable, since unlike
+the rest of this backlog, it's not speculative: it's strategy Michael already
+trades manually and trusts.
+
+## IBKR broker integration — concrete gotchas for Phase 4
+
+Queried *Interactive Brokers API Automation and 2FA Integration Guide*.
+Genuinely load-bearing if/when `vesper/brokers/ibkr_broker.py` gets built
+(mirroring `public_broker.py`'s shape per `ROADMAP.md` Phase 4):
+
+- **One session per account, globally.** TWS, Gateway, Client Portal Web API,
+  and mobile all fight over a single login slot — checking a position on your
+  phone kicks the running bot offline. Fix: create a **separate IBKR user**
+  for the bot (no withdrawal rights, IP-restricted), never share credentials
+  with the account you check manually.
+- **Weekly forced reset.** IBKR does a mandatory crypto/session reset every
+  Saturday night. Paper accounts without 2FA can auto-restart cleanly
+  (`ColdRestartTime` in Gateway config); **live accounts need a human to
+  acknowledge 2FA on the IBKey app at least once a week** — this can't be
+  fully unattended.
+- **Daily soft-restart, not logoff.** Configure Gateway/IBC for auto-restart
+  (reuses cached credentials) rather than auto-logoff, or 2FA is needed
+  daily instead of weekly.
+- **A nightly 30s-5min blackout** where the socket stays connected but no
+  data flows and orders fail silently — any position held through it needs
+  an exchange-side bracket/stop, since the API is blind during the window.
+- **`CLOSE_WAIT` socket rot**: a dropped connection that isn't cleanly closed
+  leaves the process looking alive (PID present, systemd "running") while
+  actually doing nothing. Needs an external watchdog checking `ss -tnp`, not
+  just a process-alive check.
+- **No open/close semantics.** IBKR's API only knows `BUY`/`SELL`, not "buy
+  to open" — a SELL larger than your current long silently becomes a short.
+  The risk layer must track net position itself, same as
+  `execution_guard.py` already should for any broker.
+- **CBOE's "390 rule"**: average more than 1 option order/minute across a
+  month and the account gets reclassified "professional" — materially higher
+  data fees, worse execution priority. A rate cap belongs in the guard layer
+  if IBKR options ever go live.
+- Pacing: max 60 historical-data requests per 10 minutes (Error 162 if
+  exceeded); 100 concurrent streaming quotes by default; Docker/WSL2 needs
+  Gateway's loopback-only restriction lifted or a `socat` relay.
+
+## Data/infrastructure APIs — mostly institutional-scale, one exception
+
+Queried *Financial Markets Data APIs and Trading Infrastructure Reference*.
+Most of what's covered (ORATS SVI vol-surface fitting, ThetaData's local
+terminal architecture, DTN IQFeed raw TCP ticks, Cboe DataShop TBT via
+SFTP/Snowflake, SpiderRock MLink) is genuinely institutional-grade — overkill
+for this system per the same "not hedge-fund scale" filter applied
+throughout this backlog. **One exception worth flagging**: FlashAlpha/ORATS
+compute **Vanna (VEX) and Charm (CHEX) exposure** alongside the Delta/Gamma
+exposure this system already tracks via TraderDaddy's dealer gamma (GEX).
+Same conceptual family as GEX, just second/third-order — worth checking
+whether TraderDaddy already exposes these before building anything new.
+
+## MCP servers worth connecting
+
+Queried *Model Context Protocol Server Directory* against what's already
+connected (webull, momentum, tickertrace, traderdaddy, tradingview,
+context7). Concrete, non-redundant, named servers:
+
+- **SEC EDGAR** (Stefano Amorelli) — programmatic 10-K/10-Q text mining,
+  executive change filings. Could cross-reference against `tickertrace`'s
+  institutional flow for "big buyer + risk-factor change" convergence.
+- **ShareSeer** — real-time SEC filings plus **Form 4 insider trading data**.
+  Same cross-reference value as EDGAR, more real-time.
+- **Polymarket** — prediction-market pricing as a real-time probability
+  matrix for macro events (Fed decisions, FDA approvals) — a genuinely
+  different signal type from anything currently ingested.
+- **LunarCrush** — social sentiment/hype metrics, token-efficient for LLM
+  consumption. Relevant if the sentiment-analysis idea above ever gets built.
+- **QuantConnect** — cloud-scale backtesting on an institutional engine;
+  candidate alternative/complement to `vectorbt` for Module 4 specifically.
+- Lower priority for a personal system: **Alpaca** (redundant broker, already
+  have Webull+Public.com), **FIXParser** (institutional order routing,
+  not relevant at retail scale), **dune-analytics-mcp**/**Twelve Data**
+  (on-chain and macro feeds — only relevant if this ever goes multi-asset).
+
+## Notebooks not queried — deliberately out of scope for this pass
 
 - *Modern API-First Brokerage and Algorithmic Trading Systems*
-- *Financial Markets Data APIs and Trading Infrastructure Reference*
-- *TraderDaddy Pro Docs & How-Tos* (TraderDaddy is already a core dependency
-  here — this one specifically might surface tools/endpoints not yet wired in)
-- *Interactive Brokers API Automation and 2FA Integration Guide* (relevant to
-  Phase 4's planned IBKR broker integration)
+- *TraderDaddy Pro Docs & How-Tos* (worth a look someday since TraderDaddy is
+  already a core dependency — might surface unused endpoints)
 - *The Only Trading Library You'll Ever Need*
-- *Model Context Protocol Server Directory* (could surface more MCP servers
-  worth connecting)
 - *The End of the Hedge: Global Macro and Regime Shifts*
 - *Global Financial Markets: Volatility, Derivatives, and Risk*
-- *The Investing and Trading Strategies of MPHinance* (personal strategy
-  notes — could ground playbook design in Michael's own stated edge rather
-  than generic patterns)
