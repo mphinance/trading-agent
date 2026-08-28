@@ -1,5 +1,6 @@
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 from vesper.leveraged import get_leveraged_etfs, get_primary_2x
 from vesper.skills_engine import create_new_skill, SKILLS_DIR
 from vesper.state import TechnicalAudit, MarketRegime, TradingState
@@ -53,7 +54,13 @@ async def test_playbooks_node_generates_2x_leveraged_proposal():
         "audit_trail": [],
     }
 
-    res = await playbooks_node(state)
+    # playbooks_node deliberately refuses to fabricate a price for the
+    # leveraged proxy (it used to reuse the underlying's price, which is wrong
+    # for a different instrument) — it fetches a real quote instead, so the
+    # test has to supply one rather than relying on network/credentials.
+    with patch("vesper.account.fetch_live_equity", return_value=50000.0), \
+         patch("vesper.nodes.playbooks._fetch_live_quote", return_value=45.0):
+        res = await playbooks_node(state)
     props = res.get("proposals", [])
     assert len(props) >= 2  # Primary NVDA equity + 2x leveraged alternate
 
@@ -65,8 +72,42 @@ async def test_playbooks_node_generates_2x_leveraged_proposal():
     # Verify 2x leveraged proxy proposal
     proxy_prop = next(p for p in props if p.asset_type == "LEVERAGED_ETF")
     assert proxy_prop is not None
+    assert proxy_prop.limit_price == 45.0  # the proxy's own quote, not NVDA's price
     assert proxy_prop.quantity < nvda_prop.quantity  # Scaled down position for equal risk budget
     assert proxy_prop.max_risk < nvda_prop.max_risk
+
+
+@pytest.mark.asyncio
+async def test_playbooks_node_skips_proxy_without_live_quote():
+    """No fabricated price: if a real quote for the leveraged proxy isn't
+    available, the proxy proposal must not be drafted at all."""
+    state: TradingState = {
+        "session_id": "test-session",
+        "mode": "dry_run",
+        "selected_playbook": "all",
+        "target_ticker": "NVDA",
+        "regime": MarketRegime(posture="NEUTRAL", health_score=4.0, spy_spot=580.0, spy_gamma_flip=575.0),
+        "candidates": [],
+        "technicals": {
+            "NVDA": TechnicalAudit(
+                ticker="NVDA", close=120.0, rsi_14=65.0, rsi_state="NEUTRAL",
+                ema_stack="BULLISH", atr_14=4.0, composite_score=8.5,
+            )
+        },
+        "options_audits": {},
+        "proposals": [],
+        "risk_assessments": [],
+        "human_decision": None,
+        "execution_results": [],
+        "reflection_notes": [],
+        "audit_trail": [],
+    }
+
+    with patch("vesper.account.fetch_live_equity", return_value=50000.0), \
+         patch("vesper.nodes.playbooks._fetch_live_quote", return_value=None):
+        res = await playbooks_node(state)
+    props = res.get("proposals", [])
+    assert all(p.asset_type != "LEVERAGED_ETF" for p in props)
 
 
 def test_skills_engine_skill_creation():

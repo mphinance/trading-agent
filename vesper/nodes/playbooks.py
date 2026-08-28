@@ -2,26 +2,46 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
+from vesper.account import fetch_live_equity
 from vesper.state import TradingState, OrderProposal
 from vesper.risk import RiskEnforcer
 
 logger = logging.getLogger(__name__)
 
 
+def _fetch_live_quote(symbol: str) -> Optional[float]:
+    """Blocking — wrap in asyncio.to_thread. Returns None (never a guess) if
+    Webull isn't configured or the quote can't be fetched."""
+    try:
+        from wb import Webull
+        from md import Market
+
+        wb = Webull()
+        if not wb.configured:
+            return None
+        snap = Market(wb).snapshot([symbol])
+        last = (snap.get(symbol) or {}).get("last")
+        return float(last) if last else None
+    except Exception as e:
+        logger.warning(f"Could not fetch live quote for {symbol}: {e}")
+        return None
+
+
 async def playbooks_node(state: TradingState) -> Dict[str, Any]:
     """Applies domain playbooks to draft high-conviction order proposals."""
     logger.info("-> [PlaybooksNode] Applying strategy playbooks to candidates...")
-    
+
     proposals: List[OrderProposal] = []
     technicals = state.get("technicals", {})
     options_audits = state.get("options_audits", {})
     regime = state.get("regime")
-    account_equity = 10000.0  # Default base equity
+    account_equity = await asyncio.to_thread(fetch_live_equity) if technicals else 0.0
     audit_notes = []
 
     for ticker, tech in technicals.items():
@@ -98,25 +118,40 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                 from vesper.leveraged import get_primary_2x
                 proxy_2x = get_primary_2x(ticker)
                 if proxy_2x and proxy_2x != ticker:
-                    # Scale down position by 2x to maintain equal risk budget
-                    proxy_shares = max(1, shares // 2)
-                    proxy_cost = round(proxy_shares * entry_price * 0.5, 2)  # approximate vehicle price
-                    proxy_prop = OrderProposal(
-                        id=f"prop-2x-{uuid.uuid4().hex[:6]}",
-                        ticker=proxy_2x,
-                        asset_type="LEVERAGED_ETF",
-                        side="BUY",
-                        order_type="LIMIT",
-                        quantity=proxy_shares,
-                        limit_price=entry_price,
-                        stop_loss=round(stop_loss * 0.85, 2),
-                        profit_target=round(profit_target * 1.30, 2),
-                        estimated_cost=proxy_cost,
-                        max_risk=round(total_risk * 0.5, 2),
-                        risk_reward_ratio=2.5,
-                    )
-                    proposals.append(proxy_prop)
-                    audit_notes.append(f"Drafted 2x Leveraged Alternate: {proxy_2x} ({proxy_shares} shares)")
+                    # The leveraged ETF trades at its own price, unrelated to the
+                    # underlying's — using entry_price here (as an earlier pass
+                    # did) would draft a LIMIT order for the wrong instrument at
+                    # the wrong price, and that fabricated number would flow
+                    # straight into ExecutionGuard's notional-cap check as if it
+                    # were real. Fetch a real quote or skip the proxy entirely;
+                    # never guess a price for something that gets guarded on it.
+                    proxy_price = await asyncio.to_thread(_fetch_live_quote, proxy_2x)
+                    if proxy_price is None:
+                        audit_notes.append(
+                            f"Skipped 2x Leveraged Alternate for {ticker} ({proxy_2x}): no live quote available"
+                        )
+                    else:
+                        # Scale down position by 2x to maintain equal risk budget
+                        proxy_shares = max(1, shares // 2)
+                        proxy_cost = round(proxy_shares * proxy_price, 2)
+                        proxy_prop = OrderProposal(
+                            id=f"prop-2x-{uuid.uuid4().hex[:6]}",
+                            ticker=proxy_2x,
+                            asset_type="LEVERAGED_ETF",
+                            side="BUY",
+                            order_type="LIMIT",
+                            quantity=proxy_shares,
+                            limit_price=proxy_price,
+                            stop_loss=round(proxy_price * (1 - RiskEnforcer.STOP_LOSS_0DTE_PCT * 0.85), 2),
+                            profit_target=round(proxy_price * (1 + RiskEnforcer.TAKE_PROFIT_0DTE_PCT * 1.30), 2),
+                            estimated_cost=proxy_cost,
+                            max_risk=round(total_risk * 0.5, 2),
+                            risk_reward_ratio=2.5,
+                        )
+                        proposals.append(proxy_prop)
+                        audit_notes.append(
+                            f"Drafted 2x Leveraged Alternate: {proxy_2x} ({proxy_shares} shares @ ${proxy_price:.2f})"
+                        )
 
     audit_entry = {
         "node": "playbooks_node",

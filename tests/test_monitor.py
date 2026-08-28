@@ -2,9 +2,15 @@
 
 import pytest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from vesper.monitor import PositionMonitor, MonitoredPosition, ExitTrigger
+
+
+@pytest.fixture(autouse=True)
+def _clean_guard_env(monkeypatch):
+    for var in ("VESPER_TRADING", "VESPER_MAX_NOTIONAL", "VESPER_MAX_QUANTITY", "VESPER_SYMBOL_ALLOWLIST"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def test_take_profit_trigger():
@@ -112,3 +118,50 @@ async def test_execute_exit_cascade_dry_run():
     assert res.ticker == "NVDA"
     assert res.filled_quantity == 10
     assert res.filled_price == 160.0
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_cascade_live_places_guarded_order(monkeypatch):
+    """Pins the guard call signature — this is a real place_order call behind
+    ExecutionGuard, not the old broken guard.preview(symbol=..., ...)/ticket.ok
+    shape that would have raised TypeError before ever reaching the broker."""
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(symbol="NVDA", quantity=10, entry_price=100.0, current_price=160.0)
+    trigger = ExitTrigger(
+        position=pos, reason="TAKE_PROFIT", sell_quantity=10, est_proceeds=1600.0, pnl_pct=0.60,
+    )
+
+    mock_wb = MagicMock()
+    mock_wb.accounts.return_value = [{"account_id": "ACC1"}]
+    mock_wb.portfolio.return_value = {"totals": {"buying_power": 100000.0}}
+    mock_wb.trade.order_v2.place_order.return_value = {"data": {"order_id": "ORD123"}}
+
+    with patch("wb.Webull", return_value=mock_wb):
+        res = await monitor.execute_exit_cascade(trigger, live=True)
+
+    assert res.status == "SUBMITTED"
+    mock_wb.trade.order_v2.place_order.assert_called_once()
+    call_kwargs = mock_wb.trade.order_v2.place_order.call_args.kwargs
+    assert call_kwargs["account_id"] == "ACC1"
+    assert call_kwargs["stock_order_sub_request"]["action"] == "SELL"
+    assert call_kwargs["stock_order_sub_request"]["quantity"] == 10
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_cascade_live_blocked_by_kill_switch(monkeypatch):
+    """VESPER_TRADING defaults off — a live exit trigger must not reach the
+    broker at all, and must report BLOCKED_BY_GUARDRAIL rather than crash."""
+    monkeypatch.delenv("VESPER_TRADING", raising=False)
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(symbol="NVDA", quantity=10, entry_price=100.0, current_price=55.0)
+    trigger = ExitTrigger(
+        position=pos, reason="STOP_LOSS", sell_quantity=10, est_proceeds=550.0, pnl_pct=-0.45,
+    )
+
+    mock_wb = MagicMock()
+    with patch("wb.Webull", return_value=mock_wb):
+        res = await monitor.execute_exit_cascade(trigger, live=True)
+
+    assert res.status == "BLOCKED_BY_GUARDRAIL"
+    mock_wb.trade.order_v2.place_order.assert_not_called()

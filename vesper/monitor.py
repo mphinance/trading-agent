@@ -13,7 +13,7 @@ from datetime import datetime, timezone, time
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
-from vesper.execution_guard import guard
+from vesper.execution_guard import guard, GuardError, TradingDisabled
 from vesper.bot.manager import channel_manager
 from vesper.state import OrderProposal, ExecutionResult
 
@@ -162,7 +162,10 @@ class PositionMonitor:
                     qty = int(p.get("quantity", 0))
                     cost = float(p.get("cost_price", 0.0) or p.get("last_price", 0.0))
                     last = float(p.get("last_price", cost))
-                    is_opt = p.get("asset_type") == "OPTION" or len(sym) > 6
+                    # wb.py's position dict uses "instrument_type", not "asset_type" —
+                    # the latter key never exists, so this used to silently fall back
+                    # to the length heuristic alone every time.
+                    is_opt = p.get("instrument_type") == "OPTION" or len(sym) > 6
                     positions.append(
                         MonitoredPosition(
                             symbol=sym,
@@ -217,69 +220,80 @@ class PositionMonitor:
             await channel_manager.broadcast_execution(res)
             return res
 
-        # Live Execution Guard Handshake
-        ticket = guard.preview(
-            symbol=pos.symbol,
-            side="SELL",
-            quantity=proposal.quantity,
-            price=pos.current_price,
-            order_type="MARKET",
-            broker="webull",
-        )
+        # Live Execution Guard Handshake — SELL is a risk-reducing side, but it
+        # still goes through the same guard as every other order: a SELL with
+        # a fat-fingered quantity is exactly as capable of doing damage as a
+        # BUY, and the guard has no notion of "this one's safe."
+        payload = {
+            "symbol": pos.symbol,
+            "side": "SELL",
+            "quantity": proposal.quantity,
+            "limit_price": pos.current_price,
+            "order_type": "MARKET",
+            "asset_type": pos.asset_type,
+        }
 
-        if not ticket.ok:
-            return ExecutionResult(
-                order_proposal_id=proposal.id,
-                ticker=pos.symbol,
-                status="BLOCKED_BY_GUARDRAIL",
-                message=f"Exit blocked by guardrail: {ticket.rejection_reason}",
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
-
-        # Place live sell order via Webull
         try:
             from wb import Webull
             wb = Webull()
-            placed = guard.place(
-                ticket_id=ticket.ticket_id,
-                symbol=pos.symbol,
-                side="SELL",
-                quantity=proposal.quantity,
-                price=pos.current_price,
-                order_type="MARKET",
-                broker="webull",
-                sender=lambda: wb.trade.order_v2.place_order(
-                    account_id=wb.accounts()[0]["account_id"],
+
+            def _fetch_bp_and_account():
+                account_id = wb.accounts()[0]["account_id"]
+                try:
+                    bp = wb.portfolio()["totals"]["buying_power"]
+                except Exception:
+                    bp = None
+                return account_id, bp
+
+            account_id, buying_power = await asyncio.to_thread(_fetch_bp_and_account)
+
+            ticket = guard.preview(proposal.id, payload, live_buying_power=buying_power)
+
+            place_res = await asyncio.to_thread(
+                guard.place,
+                ticket.id,
+                payload,
+                lambda: wb.trade.order_v2.place_order(
+                    account_id=account_id,
                     stock_order_sub_request={
                         "symbol": pos.symbol,
                         "action": "SELL",
                         "order_type": "MARKET",
                         "quantity": proposal.quantity,
-                    }
-                )
+                    },
+                ),
             )
             res = ExecutionResult(
                 order_proposal_id=proposal.id,
                 ticker=pos.symbol,
-                status="SUBMITTED" if placed.ok else "FAILED",
-                client_order_id=ticket.ticket_id,
-                webull_order_id=placed.order_id,
-                filled_quantity=proposal.quantity if placed.ok else 0,
-                filled_price=pos.current_price,
-                message=f"Live {trigger.reason} exit order submitted",
+                status="SUBMITTED",
+                client_order_id=ticket.id,
+                message=f"Live {trigger.reason} exit order placed: {place_res.get('data', place_res) if isinstance(place_res, dict) else place_res}",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+            await channel_manager.broadcast_execution(res)
+            return res
+        except (GuardError, TradingDisabled) as e:
+            res = ExecutionResult(
+                order_proposal_id=proposal.id,
+                ticker=pos.symbol,
+                status="BLOCKED_BY_GUARDRAIL",
+                message=f"Exit blocked by guardrail: {e}",
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
             await channel_manager.broadcast_execution(res)
             return res
         except Exception as e:
             logger.error(f"Live exit cascade execution error: {e}")
-            return ExecutionResult(
+            res = ExecutionResult(
                 order_proposal_id=proposal.id,
                 ticker=pos.symbol,
                 status="FAILED",
                 message=str(e),
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
+            await channel_manager.broadcast_execution(res)
+            return res
 
     async def run_monitoring_cycle(self, live: bool = False) -> List[ExecutionResult]:
         """Runs a single evaluation sweep across all positions."""
@@ -312,7 +326,11 @@ class PositionMonitor:
             if trigger:
                 res = await self.execute_exit_cascade(trigger, live=live)
                 results.append(res)
-                if pos.symbol in self.tracked_positions:
+                # Only drop tracking state (peak gain, breakeven lock) once the
+                # exit actually happened — a BLOCKED/FAILED result means the
+                # position is still open, and re-adding it fresh next cycle
+                # would silently reset an already-armed breakeven stop.
+                if res.status in ("SUBMITTED", "DRY_RUN_SIMULATED") and pos.symbol in self.tracked_positions:
                     del self.tracked_positions[pos.symbol]
 
         return results
