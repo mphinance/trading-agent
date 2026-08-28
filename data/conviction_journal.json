@@ -414,5 +414,83 @@
     "entry_ts": 1787948499,
     "resolved": false,
     "resolutions": {}
+  },
+  {
+    "id": "DUO:20260828211531",
+    "ticker": "DUO",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 79.3 | EMA Stack: NEUTRAL",
+    "signals": "RSI_neutral,EMA_NEUTRAL",
+    "entry_price": 0.96,
+    "entry_date": "2026-08-28T21:15:31.327633+00:00",
+    "entry_ts": 1787951731,
+    "resolved": false,
+    "resolutions": {}
+  },
+  {
+    "id": "QNRX:20260828211531",
+    "ticker": "QNRX",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 64.8 | EMA Stack: NEUTRAL",
+    "signals": "RSI_neutral,EMA_NEUTRAL",
+    "entry_price": 6.12,
+    "entry_date": "2026-08-28T21:15:31.329624+00:00",
+    "entry_ts": 1787951731,
+    "resolved": false,
+    "resolutions": {}
+  },
+  {
+    "id": "COOT:20260828211531",
+    "ticker": "COOT",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 54.4 | EMA Stack: NEUTRAL",
+    "signals": "RSI_neutral,EMA_NEUTRAL",
+    "entry_price": 0.46,
+    "entry_date": "2026-08-28T21:15:31.330760+00:00",
+    "entry_ts": 1787951731,
+    "resolved": false,
+    "resolutions": {}
+  },
+  {
+    "id": "DUO:20260828211531",
+    "ticker": "DUO",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 79.3 | EMA Stack: NEUTRAL",
+    "signals": "RSI_neutral,EMA_NEUTRAL",
+    "entry_price": 0.96,
+    "entry_date": "2026-08-28T21:15:31.332185+00:00",
+    "entry_ts": 1787951731,
+    "resolved": false,
+    "resolutions": {}
+  },
+  {
+    "id": "QNRX:20260828211531",
+    "ticker": "QNRX",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 64.8 | EMA Stack: NEUTRAL",
+    "signals": "RSI_neutral,EMA_NEUTRAL",
+    "entry_price": 6.12,
+    "entry_date": "2026-08-28T21:15:31.333298+00:00",
+    "entry_ts": 1787951731,
+    "resolved": false,
+    "resolutions": {}
+  },
+  {
+    "id": "COOT:20260828211531",
+    "ticker": "COOT",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 54.4 | EMA Stack: NEUTRAL",
+    "signals": "RSI_neutral,EMA_NEUTRAL",
+    "entry_price": 0.46,
+    "entry_date": "2026-08-28T21:15:31.334259+00:00",
+    "entry_ts": 1787951731,
+    "resolved": false,
+    "resolutions": {}
   }
 ]

@@ -104,8 +104,13 @@ class Webull:
         self._last_good: dict | None = None
         self._last_error: str | None = None
 
-    # -- shared handles ---------------------------------------------------
-    # md.py / orders.py / stream.py reuse these rather than re-authenticating.
+    @property
+    def configured(self) -> bool:
+        try:
+            k, s, _ = credentials()
+            return bool(k and s)
+        except Exception:
+            return False
 
     @property
     def api(self) -> ApiClient:

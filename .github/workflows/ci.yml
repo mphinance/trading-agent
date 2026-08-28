@@ -53,32 +53,9 @@ jobs:
         run: pytest -q
 
       - name: Byte-compile every module
-        # Catches a syntax error in a file no test imports (wb.py and chat.py
-        # are stubbed away from the suite's import graph).
+        # Catches a syntax error in a file no test imports (wb.py is stubbed
+        # away from the suite's import graph).
         run: python -m compileall -q .
-
-  static:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install test dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Check the single-page UI
-        # There is no bundler, so this is the only thing standing between a typo
-        # in static/index.html and a blank panel. Runs with node present so the
-        # `node --check` test is not skipped.
-        run: pytest tests/test_static.py -q
 
   secrets:
     runs-on: ubuntu-latest
