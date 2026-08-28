@@ -90,13 +90,49 @@ See [`docs/TIERS_AND_FUNNEL.md`](docs/TIERS_AND_FUNNEL.md) for the complete **St
 
 ---
 
-### 🧠 Module 5: Conviction Journal Closed-Loop Feedback
-- [ ] **Auto-Log on Proposal**:
-  - `reflection_node` writes every `OrderProposal` to `data/conviction_journal.json` tagged with source and selected playbook.
-- [ ] **Automated Resolution**:
-  - Auto-fetch current price after 1/5/10 days to score prediction accuracy and P&L.
-- [ ] **Dynamic Strategy Weighting**:
-  - Feed resolved hit-rates back into `Candidate.score` and playbook prioritization.
+### 🧠 Module 5: Outcome Memory — Winners, Losers, and the Ones We Didn't Take
+Full design in [`docs/OUTCOME_MEMORY_PLAN.md`](docs/OUTCOME_MEMORY_PLAN.md) — most
+of this already exists (`mcp_server/conviction.py`'s log/resolve/scorecard,
+already wired from `reflection_node`; `mcp_server/knowledge.py`'s persistent
+ChromaDB at `data/chromadb/`). This is fix-and-extend, not build-from-scratch.
+
+**ChromaDB decision**: keep the structured journal (JSON today, sqlite if
+volume ever demands it) for win-rate filtering/aggregation — that's what it's
+good at, and `conviction.py`'s own docstring already made this call. Add a new
+`trade_memory` collection to the **existing** Chroma client (not a second
+database) for semantic "have I seen a setup like this before" recall over
+free-text thesis/reasoning. Structured facts live as metadata on the vector
+entry so a semantic hit can still be filtered by outcome.
+
+- [ ] **Phase 1 — fix the foundation.** Find and kill the duplicate-entry bug
+      in `reflection_node`/`log_conviction` (live journal already has exact
+      dupes — likely a LangGraph replay, not confirmed). Fix `reflection_node`
+      to read `side` off the matched `OrderProposal` instead of guessing
+      direction from a substring in `res.message` (currently mislabels every
+      rejected/blocked BUY as bearish). Add `origin`/`playbook`/
+      `regime_posture`/`session_id` fields to the journal entry shape.
+- [ ] **Phase 2 — log what we didn't take.** `risk_gate_node` logs a rejected
+      proposal (`origin=REJECTED_BY_RISK_GATE`, `not_taken_reason=err`)
+      instead of silently dropping it. Same for `REJECTED_BY_USER`. Candidates
+      that never became a proposal at all (`NOT_PROPOSED`) come last — it's
+      the expensive one, needs a lighter-weight log path than a full
+      `log_conviction()` price-fetch per declined candidate.
+- [ ] **Phase 3 — close the resolution loop automatically.** Nothing in
+      `vesper/` calls `resolve_convictions()` today; it only runs if someone
+      asks a chat agent. Call it from `reflection_node` or a scheduled tick.
+- [ ] **Phase 4 — semantic layer.** `ingest_outcome()` reusing
+      `knowledge.py`'s `_get_chroma()`/`_embed_texts()` against the new
+      `trade_memory` collection; `recall_similar_setups(thesis_text)` for
+      `playbooks_node` to query before drafting, and as an MCP tool mirroring
+      `search_knowledge()`.
+- [ ] **Phase 5 — feed it back into scoring.** Adjust `Candidate.score` using
+      resolved hit-rate of similar past setups / the playbook's own win rate.
+      This is the step that changes behavior, not just remembers it.
+
+Open decisions (not mine): resolution horizons for a 0DTE rejected signal
+(1/5/10 days doesn't fit same-day), whether declined-candidate logging needs
+trimming for volume, and whether Phase 5 just nudges `Candidate.score` or
+actually deprioritizes a losing playbook outright.
 
 ---
 
