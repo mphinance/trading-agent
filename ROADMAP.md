@@ -80,9 +80,9 @@ for the Starter (Dealer-HUD) vs. Pro (TDPro MCP + Vesper) ecosystem split.
   session state or any node** — dead flag.
 - **`vesper/whop.py` (Whop licensing client) is never imported anywhere** —
   not actually integrated despite the commit that introduced it.
-- **`requirements.txt` predates the Vesper migration** — missing `langgraph`,
-  `pydantic`, `python-dotenv`, `typing_extensions`, which `vesper/` actually
-  imports. A clean install can't run `vesper.py`.
+- ~~`requirements.txt` predates the Vesper migration~~ — fixed, now has
+  `langgraph`, `pydantic>=2.0`, `python-dotenv>=1.0`, `typing_extensions>=4.0`,
+  `chromadb>=0.5`.
 - **`vesper/morning.py` silently falls back to hardcoded placeholder SPY/QQQ
   levels** if TraderDaddy is unconfigured or the fetch fails, with no
   "STALE"/"UNAVAILABLE" label distinguishing a real number from a fallback
@@ -129,6 +129,11 @@ dealer-gamma-flip crossing exit for SPY calls. Goes through
 - [x] Walk-forward validation: `walk_forward_test()` with $K$-fold in-sample/out-of-sample windowing and consistency metrics.
 - [x] Universe sweeping: `sweep_strategy()` across candidate stock lists. Tested in `tests/test_backtest.py`.
 
+Spot-checked `_compute_stats` (highest-risk function — a wrong Sharpe/
+drawdown formula would silently mislead every result): Sharpe/Sortino/CAGR/
+max-drawdown/profit-factor are textbook-correct with proper divide-by-zero
+guards. Did not review the full 1292 lines.
+
 ### ✅ Module 5 — Outcome Memory (winners, losers, and the ones we didn't take) (done)
 Most of the plumbing already exists — this is fix-and-extend, not
 build-from-scratch: `mcp_server/conviction.py` already has a working
@@ -164,6 +169,14 @@ metadata so a semantic hit can still be filtered by outcome.
       resolved win rates and calibration adjustments, dynamically scaling proposal
       sizing and conviction in `playbooks_node`.
 
+Verified independently: dedup is real (UUID suffix + dedup-on-load/save by
+id and semantic tuple), `get_playbook_performance()` reads the exact schema
+`log_conviction()` writes (checked both sides), `reflection_node` reads
+direction off `prop.side` not message-sniffing, all four origins get logged
+with guards against double-counting a proposal appearing in multiple state
+lists, and `trade_memory` reuses `knowledge.py`'s existing Chroma client
+rather than duplicating it.
+
 ### ✅ Module 6 — Leveraged ETF Proxy & Skills Library (done)
 `playbooks_node` queries `data/leveraged_etfs.db` for risk-scaled 2x
 alternates (fetches a **real quote** for the proxy ticker via `md.Market` —
@@ -173,11 +186,27 @@ integrates `mcp_server/vcp_screener`/`screener` and TickerTrace flows.
 `vesper/skills_engine.py` does path-traversal-validated autonomous skill
 authoring. 5 tests in `tests/test_leveraged_and_skills.py`.
 
-### ✅ Module 7 — Paper Ledger & Remote Kill Switch (done)
-- [x] Append every simulated fill to `data/paper_ledger.json`, mark to
-      market daily with `vesper/paper_ledger.py` and `vesper paper --mark`.
+### 🟡 Module 7 — Paper Ledger (opens-only) & Remote Kill Switch (done)
 - [x] `vesper halt` CLI + `vesper resume` + `/halt` bot command for instant
       remote freezing, integrated into `ExecutionGuard` and CLI telemetry.
+      Reviewed: file-based, atomic write (tmp + `os.replace`), checked in
+      `execution_guard._validate` before the trading-enabled check.
+- [x] `record_paper_fill()` logs every `DRY_RUN_SIMULATED` fill from
+      `executor.py`. Had a real bug (fixed): only debited cash on BUY/LONG,
+      never credited it on SELL/SHORT — would have double-counted proceeds
+      the moment a short position closed. Fixed, `tests/test_paper_ledger_and_halt.py`
+      passes.
+- [ ] **`close_paper_position()` and `mark_to_market()` are never called from
+      any node.** `mark_to_market` is reachable manually via `vesper paper
+      --mark`; `close_paper_position` is called from nowhere but its own
+      test. Net effect: every paper fill opens a position that nothing ever
+      closes — `vesper/monitor.py`'s exit-cascade dry-run fills don't call
+      `close_paper_position`, so paper positions accumulate open forever
+      instead of tracking real round-trip P&L. Needs `monitor.py`'s dry-run
+      exit path wired to `close_paper_position`, matched by ticker/proposal
+      to the open fill it's closing — `record_paper_fill` currently has no
+      open-vs-close distinction, so a naive wire-up would open a *new*
+      position instead of closing the existing one.
 
 ---
 
