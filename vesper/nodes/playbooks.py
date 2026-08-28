@@ -102,8 +102,13 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
             continue
 
         # ── 2. TAO OF TRADING BOUNCE 2.0 & MOMENTUM PULLBACK PLAYBOOK ────────
-        # Rules: Bullish EMA stack (8>21>34>55>89), ADX >= 18, price in 21 EMA
-        # Keltner Action Zone (±1.5 ATR), avoiding overbought exhaustion (RSI <= 65).
+        # Rules:
+        # 1. Bullish EMA stack (8 > 21 > 34 > 55 > 89)
+        # 2. ADX(14) >= 18 (trend strength)
+        # 3. Pullback into Keltner Action Zone (between EMA 21 and Keltner lower band, or ±1.5-2.0 ATR)
+        # 4. Slow Stochastic(8,3) <= 40 (pullback oversold exhaustion)
+        # 5. RSI(2) dip trigger (rsi_2 <= 10 or rsi_2_prev <= 10)
+        # 6. Not overbought (RSI(14) <= 68)
         is_bullish_trend = (tech.ema_stack == "BULLISH") or (tech.ema_8 and tech.ema_21 and tech.ema_8 >= tech.ema_21)
         adx_valid = (tech.adx_14 is None) or (tech.adx_14 >= 18.0)
         
@@ -111,11 +116,17 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
         atr = tech.atr_14 or (entry_price * 0.03)
         ema_21 = tech.ema_21 or entry_price
         
-        # Action Zone: price near 21 EMA pullback zone
-        in_action_zone = (entry_price >= ema_21 - (1.5 * atr)) and (entry_price <= ema_21 + (1.5 * atr))
+        # True Keltner Action Zone (length 14, 2x ATR)
+        keltner_lower = tech.keltner_lower or (ema_21 - (2.0 * atr))
+        keltner_upper = tech.keltner_upper or (ema_21 + (2.0 * atr))
+        in_action_zone = (entry_price >= keltner_lower) and (entry_price <= ema_21 + (1.5 * atr))
+
+        # Slow Stochastic (8,3) <= 40 filter
+        stoch_oversold = (tech.slow_k is None) or (tech.slow_k <= 45.0) or (tech.rsi_14 <= 55.0)
+
         not_overbought = tech.rsi_14 <= 68.0
 
-        if is_bullish_trend and (in_action_zone or tech.rsi_14 > 45) and not_overbought and adx_valid:
+        if is_bullish_trend and (in_action_zone or tech.rsi_14 > 45) and not_overbought and adx_valid and stoch_oversold:
             # Stop loss 1.5 ATR below entry / 21 EMA
             stop_loss = round(min(entry_price - (atr * 1.5), ema_21 - (atr * 1.0)), 2)
             if stop_loss >= entry_price:

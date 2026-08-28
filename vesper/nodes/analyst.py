@@ -49,6 +49,13 @@ async def analyst_node(state: TradingState) -> Dict[str, Any]:
                 ema_89=tech_data.get("ema_89"),
                 atr_14=tech_data.get("atr_14"),
                 adx_14=tech_data.get("adx_14"),
+                rsi_2=tech_data.get("rsi_2"),
+                rsi_2_prev=tech_data.get("rsi_2_prev"),
+                slow_k=tech_data.get("slow_k"),
+                slow_d=tech_data.get("slow_d"),
+                keltner_lower=tech_data.get("keltner_lower"),
+                keltner_basis=tech_data.get("keltner_basis"),
+                keltner_upper=tech_data.get("keltner_upper"),
                 summary=tech_data.get("summary", f"{t}: Close={close}, RSI={rsi_val:.1f}"),
             )
             technicals_dict[t] = tech_audit

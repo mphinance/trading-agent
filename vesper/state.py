@@ -46,6 +46,13 @@ class TechnicalAudit(BaseModel):
     ema_89: Optional[float] = None
     atr_14: Optional[float] = None
     adx_14: Optional[float] = None
+    rsi_2: Optional[float] = None
+    rsi_2_prev: Optional[float] = None
+    slow_k: Optional[float] = None
+    slow_d: Optional[float] = None
+    keltner_lower: Optional[float] = None
+    keltner_basis: Optional[float] = None
+    keltner_upper: Optional[float] = None
     summary: str = ""
 
 

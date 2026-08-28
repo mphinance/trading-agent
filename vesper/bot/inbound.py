@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
@@ -173,5 +174,118 @@ class ApprovalRegistry:
         return {"status": "ERROR", "message": "Unrecognized callback payload format."}
 
 
+# ── Cryptographic & Secret Authentication Guards ──────────────────────────────
+
+def verify_telegram_webhook_secret(secret_token_header: Optional[str]) -> bool:
+    """Verify Telegram X-Telegram-Bot-Api-Secret-Token against environment configuration."""
+    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+    if not expected:
+        return True  # Auth not required if secret is unconfigured
+    return bool(secret_token_header and secret_token_header.strip() == expected)
+
+
+def verify_discord_signature(signature: Optional[str], timestamp: Optional[str], body: bytes) -> bool:
+    """Verify Discord Ed25519 request signature using cryptographic public key."""
+    pub_key_hex = os.getenv("DISCORD_PUBLIC_KEY", "").strip()
+    if not pub_key_hex:
+        return True  # Auth not required if public key is unconfigured
+    if not signature or not timestamp:
+        return False
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        pub_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub_key_hex))
+        message = timestamp.encode("utf-8") + body
+        sig_bytes = bytes.fromhex(signature)
+        pub_key.verify(sig_bytes, message)
+        return True
+    except Exception as e:
+        logger.warning(f"Discord Ed25519 signature verification failed: {e}")
+        return False
+
+
+def verify_bearer_token(auth_header: Optional[str]) -> bool:
+    """Verify REST API Bearer token against VESPER_WEBHOOK_SECRET or VESPER_API_TOKEN."""
+    expected = os.getenv("VESPER_WEBHOOK_SECRET", "") or os.getenv("VESPER_API_TOKEN", "")
+    expected = expected.strip()
+    if not expected:
+        return True  # Auth not required if token is unconfigured
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return False
+    token = auth_header[7:].strip()
+    return token == expected
+
+
+# ── Webhook HTTP Server Factory (aiohttp) ────────────────────────────────────
+
+def create_inbound_app() -> Any:
+    """Create configured aiohttp Application for inbound webhook routes."""
+    try:
+        from aiohttp import web
+    except ImportError:
+        logger.warning("aiohttp not installed, inbound webhook server unavailable.")
+        return None
+
+    app = web.Application()
+
+    async def handle_telegram(request: web.Request) -> web.Response:
+        sec = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if not verify_telegram_webhook_secret(sec):
+            return web.json_response({"error": "Unauthorized secret token"}, status=401)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        res = await approval_registry.handle_callback_payload(payload)
+        return web.json_response(res)
+
+    async def handle_discord(request: web.Request) -> web.Response:
+        sig = request.headers.get("X-Signature-Ed25519")
+        ts = request.headers.get("X-Signature-Timestamp")
+        raw_body = await request.read()
+        if not verify_discord_signature(sig, ts, raw_body):
+            return web.json_response({"error": "Invalid signature"}, status=401)
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        # Discord PING ACK handshake (type 1)
+        if payload.get("type") == 1:
+            return web.json_response({"type": 1})
+
+        res = await approval_registry.handle_callback_payload(payload)
+        return web.json_response({"type": 4, "data": {"content": f"Decision processed: {res.get('status')}"}})
+
+    async def handle_rest_approval(request: web.Request) -> web.Response:
+        auth = request.headers.get("Authorization")
+        if not verify_bearer_token(auth):
+            return web.json_response({"error": "Unauthorized bearer token"}, status=401)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        res = await approval_registry.handle_callback_payload(payload)
+        return web.json_response(res)
+
+    async def handle_health(request: web.Request) -> web.Response:
+        from vesper.halt import is_halted
+        halted, details = is_halted()
+        return web.json_response({
+            "status": "ok",
+            "is_halted": halted,
+            "pending_approvals_count": len(approval_registry.list_pending()),
+            "pending_approvals": approval_registry.list_pending(),
+        })
+
+    app.router.add_post("/webhook/telegram", handle_telegram)
+    app.router.add_post("/webhook/discord", handle_discord)
+    app.router.add_post("/webhook/approval", handle_rest_approval)
+    app.router.add_get("/health", handle_health)
+    app.router.add_get("/approvals", handle_health)
+
+    return app
+
+
 # Global singleton registry
 approval_registry = ApprovalRegistry()
+

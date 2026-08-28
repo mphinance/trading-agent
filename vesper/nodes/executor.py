@@ -208,11 +208,9 @@ async def _execute_public(prop: OrderProposal) -> ExecutionResult:
                 "asset_type": prop.asset_type,
             }
 
-            # PublicBrokerClient has no live buying-power lookup wired up yet,
-            # so VESPER_MAX_BP_FRACTION has no effect on this branch (it's a
-            # no-op unless a caller explicitly sets that env var below 1.0 —
-            # notional/quantity/allowlist/kill-switch still apply either way).
-            ticket = guard.preview(prop.id, payload, live_buying_power=None)
+            # Fetch live buying power from Public portfolio if available
+            buying_power = pub.get_buying_power()
+            ticket = guard.preview(prop.id, payload, live_buying_power=buying_power)
             return guard.place(
                 ticket.id,
                 payload,

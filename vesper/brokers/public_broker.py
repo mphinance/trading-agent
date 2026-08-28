@@ -72,6 +72,28 @@ class PublicBrokerClient:
             logger.error(f"Failed to fetch Public.com portfolio: {e}")
             return {"status": "error", "message": str(e)}
 
+    def get_buying_power(self, account_id: Optional[str] = None) -> Optional[float]:
+        """Fetch real-time buying power from Public portfolio response."""
+        port = self.get_portfolio(account_id)
+        if not isinstance(port, dict):
+            return None
+        for key in ("buyingPower", "buying_power", "purchasingPower", "cash", "cashAvailableForTrading"):
+            if key in port and port[key] is not None:
+                try:
+                    return float(port[key])
+                except (ValueError, TypeError):
+                    pass
+        for container in ("balances", "totals", "data"):
+            if isinstance(port.get(container), dict):
+                sub = port[container]
+                for key in ("buyingPower", "buying_power", "purchasingPower", "cash", "cashAvailableForTrading"):
+                    if key in sub and sub[key] is not None:
+                        try:
+                            return float(sub[key])
+                        except (ValueError, TypeError):
+                            pass
+        return None
+
     def preview_order(
         self,
         symbol: str,

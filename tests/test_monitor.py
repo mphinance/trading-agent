@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from vesper.monitor import PositionMonitor, MonitoredPosition, ExitTrigger
+from vesper.state import OrderProposal, ExecutionResult
 
 
 @pytest.fixture(autouse=True)
@@ -165,3 +166,60 @@ async def test_execute_exit_cascade_live_blocked_by_kill_switch(monkeypatch):
 
     assert res.status == "BLOCKED_BY_GUARDRAIL"
     mock_wb.trade.order_v2.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_cascade_closes_paper_position(tmp_path, monkeypatch):
+    """Verify dry-run exit cascade closes open position in paper ledger."""
+    from vesper.paper_ledger import record_paper_fill, get_paper_positions
+    fake_ledger = tmp_path / "paper_ledger.json"
+    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", fake_ledger)
+
+    # Open a simulated paper position
+    test_prop = OrderProposal(
+        id="prop-test-nvda",
+        ticker="NVDA",
+        asset_type="EQUITY",
+        side="BUY",
+        limit_price=100.0,
+        quantity=10,
+    )
+    test_res = ExecutionResult(
+        order_proposal_id="prop-test-nvda",
+        ticker="NVDA",
+        status="DRY_RUN_SIMULATED",
+        filled_quantity=10,
+        filled_price=100.0,
+    )
+    open_fill = record_paper_fill(test_prop, test_res, session_id="sess-test")
+    assert open_fill["status"] == "OPEN"
+
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(symbol="NVDA", quantity=10, entry_price=100.0, current_price=150.0)
+    trigger = ExitTrigger(
+        position=pos,
+        reason="TAKE_PROFIT",
+        sell_quantity=10,
+        est_proceeds=1500.0,
+        pnl_pct=0.50,
+    )
+
+    res = await monitor.execute_exit_cascade(trigger, live=False)
+    assert res.status == "DRY_RUN_SIMULATED"
+
+    # Verify paper ledger position is now CLOSED
+    from vesper.paper_ledger import _load_ledger, get_paper_summary
+    open_positions = get_paper_positions()
+    assert len(open_positions) == 0
+
+    ledger_data = _load_ledger()
+    closed_fills = [f for f in ledger_data.get("fills", []) if f["id"] == open_fill["id"]]
+    assert len(closed_fills) == 1
+    assert closed_fills[0]["status"] == "CLOSED"
+    assert closed_fills[0]["close_price"] == 150.0
+    assert closed_fills[0]["realized_pnl"] == 500.0
+
+    summary = get_paper_summary()
+    assert summary["closed_trades_count"] == 1
+    assert summary["realized_pnl"] == 500.0
+

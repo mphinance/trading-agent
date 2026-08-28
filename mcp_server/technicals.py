@@ -80,6 +80,11 @@ async def analyze_technicals(
         rsi_val = _extract_last(rsi_series)
         rsi_prev = _extract_at(rsi_series, -2)  # Previous bar RSI for cross detection
 
+        # --- RSI(2) Short-Term Dip Trigger (Tao of Trading Bounce 2.0) ---
+        rsi_2_series = ta.rsi(close, length=2)
+        rsi_2_val = _extract_last(rsi_2_series)
+        rsi_2_prev = _extract_at(rsi_2_series, -2)
+
         macd_df = ta.macd(close, fast=12, slow=26, signal=9)
         macd_val = _extract_last(macd_df.iloc[:, 0]) if macd_df is not None else None
         macd_prev = _extract_at(macd_df.iloc[:, 0], -2) if macd_df is not None else None
@@ -116,6 +121,17 @@ async def analyze_technicals(
         stoch_df = ta.stoch(high, low, close, k=14, d=3, smooth_k=3)
         stoch_k = _extract_last(stoch_df.iloc[:, 0]) if stoch_df is not None else None
         stoch_d = _extract_last(stoch_df.iloc[:, 1]) if stoch_df is not None else None
+
+        # --- Slow Stochastic (8,3,3) (Tao of Trading Bounce 2.0) ---
+        stoch_slow_df = ta.stoch(high, low, close, k=8, d=3, smooth_k=3)
+        slow_k = _extract_last(stoch_slow_df.iloc[:, 0]) if stoch_slow_df is not None else None
+        slow_d = _extract_last(stoch_slow_df.iloc[:, 1]) if stoch_slow_df is not None else None
+
+        # --- Keltner Channels (length 14, 2.0x ATR around EMA 21) ---
+        kc_df = ta.kc(high, low, close, length=14, scalar=2.0)
+        kc_lower = _extract_last(kc_df.iloc[:, 0]) if kc_df is not None else None
+        kc_basis = _extract_last(kc_df.iloc[:, 1]) if kc_df is not None else None
+        kc_upper = _extract_last(kc_df.iloc[:, 2]) if kc_df is not None else None
 
         # --- Bollinger Bands (20, 2) ---
         bb_df = ta.bbands(close, length=20, std=2)
@@ -178,6 +194,14 @@ async def analyze_technicals(
             "plus_di_prev": plus_di_prev,
             "minus_di_prev": minus_di_prev,
             "atr_14": atr_val,
+            # Tao of Trading Bounce 2.0 Precision Fields
+            "rsi_2": rsi_2_val,
+            "rsi_2_prev": rsi_2_prev,
+            "slow_k": slow_k,
+            "slow_d": slow_d,
+            "keltner_lower": kc_lower,
+            "keltner_basis": kc_basis,
+            "keltner_upper": kc_upper,
             # Momentum oscillators
             "williams_r_14": willr_val,
             "stoch_k": stoch_k,

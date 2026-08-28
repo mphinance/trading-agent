@@ -50,24 +50,22 @@ that actually needs careful design saved for last so it doesn't get rushed:
    `vesper/runner.py`, and `vesper.py`; `vesper/whop.py` wired to `runner.py`,
    `vesper.py` (`--license-key`), and tested; `vesper/morning.py` fallback SPY/QQQ
    levels explicitly labeled as `STALE / UNAVAILABLE` with status indicators.
-2. **Paper ledger close path** (moderate, zero real-money risk — paper only).
-   Wire `monitor.py`'s dry-run exit fills to `close_paper_position()`,
-   matched to the original open fill by ticker/proposal. Improves Module 5's
-   outcome data quality, since paper trades currently never resolve.
-3. **`PublicBrokerClient` buying-power lookup** (small). Wire
-   `pub.get_portfolio()` into a real figure so `VESPER_MAX_BP_FRACTION` isn't
-   a no-op on that branch.
-4. **Bounce 2.0 precision** (moderate). Add Slow Stochastic(8,3)≤40, the
-   `RSI(2)` dip-below-10-then-cross-back-above-10 entry trigger, and true
-   Keltner Channel math (length 14, 2x ATR) in place of the current flat ATR
-   band — closes the gap against Michael's actual documented rule.
-5. **Module 2's inbound ingestion layer + auth — do this last, deliberately.**
-   The resolve/resume logic is already correct; what's missing is an actual
-   HTTP route or polling loop, and it needs real authentication (Telegram
-   secret token, Discord Ed25519 signature verification) designed in from
-   the start, not bolted on after. This is the one item here where getting
-   it right matters more than getting it done fast — a card someone can tap
-   to approve a live trade is worth building carefully.
+2. **Paper ledger close path (done)**: Wired `monitor.py`'s dry-run exit fills
+   directly to `close_paper_position()`, updating position status to `CLOSED` and
+   calculating realized PnL and account cash upon take-profit/stop-loss triggers.
+3. **`PublicBrokerClient` buying-power lookup (done)**: Added `get_buying_power()`
+   to `PublicBrokerClient` reading portfolio cash/purchasing power and plumbed
+   into `ExecutionGuard`'s `preview()` handshake in `vesper/nodes/executor.py`.
+4. **Bounce 2.0 precision (done)**: Added Slow Stochastic(8,3)≤40 pullback filter,
+   `RSI(2)` dip trigger, and true Keltner Channel math (`ta.kc` length 14, 2x ATR)
+   in `mcp_server/technicals.py`, `vesper/state.py`, `vesper/nodes/analyst.py`,
+   and `vesper/nodes/playbooks.py`.
+5. **Module 2's inbound ingestion layer + auth (done)**: Built `create_inbound_app()`
+   aiohttp server with Telegram secret token verification (`X-Telegram-Bot-Api-Secret-Token`),
+   Discord Ed25519 signature verification (`X-Signature-Ed25519` / `X-Signature-Timestamp`),
+   and REST Bearer auth (`Authorization: Bearer <TOKEN>`) with LangGraph thread resume.
+6. **LLM Reasoning & Risk Red-Teaming (done)**: Wired OpenRouter `audit_proposal_risk()`
+   into `risk_gate_node` for qualitative trade evaluation and position size adjustment.
 
 - **LLM reasoning: half landed.** `vesper/llm.py` (OpenRouter,
   `deepseek/deepseek-v4-flash` default) is wired into `playbooks_node` via

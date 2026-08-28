@@ -130,3 +130,92 @@ async def test_human_gate_node_consumes_pre_resolved_inbound_decision(clean_regi
     out = await human_gate_node(state)
     assert out["human_decision"] == "APPROVE"
     assert prop.approved is True
+
+
+def test_auth_verifications(monkeypatch):
+    """Verify Telegram secret, Discord Ed25519 signature, and Bearer token auth guards."""
+    from vesper.bot.inbound import (
+        verify_telegram_webhook_secret,
+        verify_discord_signature,
+        verify_bearer_token,
+    )
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    # 1. Telegram Secret
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "super-secret-tg-token")
+    assert verify_telegram_webhook_secret("super-secret-tg-token") is True
+    assert verify_telegram_webhook_secret("wrong-token") is False
+
+    # 2. Bearer Token
+    monkeypatch.setenv("VESPER_WEBHOOK_SECRET", "bearer-secret-xyz")
+    assert verify_bearer_token("Bearer bearer-secret-xyz") is True
+    assert verify_bearer_token("Bearer wrong") is False
+    assert verify_bearer_token("Basic 123") is False
+
+    # 3. Discord Ed25519 Cryptographic Verification
+    priv_key = Ed25519PrivateKey.generate()
+    pub_key = priv_key.public_key()
+    pub_hex = pub_key.public_bytes_raw().hex()
+
+    monkeypatch.setenv("DISCORD_PUBLIC_KEY", pub_hex)
+    timestamp = "1724889600"
+    body = b'{"type": 1}'
+    message_to_sign = timestamp.encode("utf-8") + body
+    sig_hex = priv_key.sign(message_to_sign).hex()
+
+    assert verify_discord_signature(sig_hex, timestamp, body) is True
+    assert verify_discord_signature("bad_sig", timestamp, body) is False
+    assert verify_discord_signature(sig_hex, "diff_timestamp", body) is False
+
+
+@pytest.mark.asyncio
+async def test_inbound_aiohttp_server_endpoints(clean_registry, monkeypatch):
+    """Verify inbound aiohttp web endpoints route callbacks and enforce auth."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from vesper.bot.inbound import create_inbound_app
+
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "tg-sec-123")
+    monkeypatch.setenv("VESPER_WEBHOOK_SECRET", "token-456")
+
+    app = create_inbound_app()
+    assert app is not None
+
+    async with TestClient(TestServer(app)) as client:
+        # 1. Health Endpoint
+        resp = await client.get("/health")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+
+        # 2. Telegram Webhook (Unauthorized)
+        resp_tg_unauth = await client.post("/webhook/telegram", json={"foo": "bar"})
+        assert resp_tg_unauth.status == 401
+
+        # 3. Telegram Webhook (Authorized callback)
+        clean_registry.register_pending("prop-http-tg", "sess-1")
+        resp_tg_auth = await client.post(
+            "/webhook/telegram",
+            headers={"X-Telegram-Bot-Api-Secret-Token": "tg-sec-123"},
+            json={
+                "callback_query": {
+                    "data": "approve:prop-http-tg",
+                    "from": {"username": "admin"},
+                }
+            },
+        )
+        assert resp_tg_auth.status == 200
+        res_data = await resp_tg_auth.json()
+        assert res_data["decision"] == "APPROVE"
+        assert clean_registry.get_decision("prop-http-tg")["decision"] == "APPROVE"
+
+        # 4. REST Approval Webhook (Authorized)
+        clean_registry.register_pending("prop-http-rest", "sess-2")
+        resp_rest = await client.post(
+            "/webhook/approval",
+            headers={"Authorization": "Bearer token-456"},
+            json={"proposal_id": "prop-http-rest", "decision": "REJECT"},
+        )
+        assert resp_rest.status == 200
+        rest_data = await resp_rest.json()
+        assert rest_data["decision"] == "REJECT"
+

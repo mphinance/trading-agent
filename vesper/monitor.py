@@ -180,6 +180,33 @@ class PositionMonitor:
             logger.warning(f"Could not poll Webull positions: {e}")
         return positions
 
+    def poll_paper_positions(self) -> List[MonitoredPosition]:
+        """Fetch open positions from Paper Ledger for dry-run monitoring."""
+        positions = []
+        try:
+            from vesper.paper_ledger import get_paper_positions
+            open_fills = get_paper_positions()
+            for f in open_fills:
+                sym = f.get("ticker", "")
+                qty = int(f.get("quantity", 1))
+                entry_px = float(f.get("filled_price", 0.0))
+                cur_px = float(f.get("current_price", entry_px))
+                asset_type = f.get("asset_type", "EQUITY")
+                positions.append(
+                    MonitoredPosition(
+                        symbol=sym,
+                        quantity=qty,
+                        entry_price=entry_px,
+                        current_price=cur_px,
+                        asset_type=asset_type,
+                        strike=f.get("strike"),
+                        option_type=f.get("option_type"),
+                    )
+                )
+        except Exception as e:
+            logger.warning(f"Could not poll paper positions: {e}")
+        return positions
+
     async def execute_exit_cascade(self, trigger: ExitTrigger, live: bool = False) -> ExecutionResult:
         """Executes the exit cascade order through ExecutionGuard."""
         pos = trigger.position
@@ -217,6 +244,16 @@ class PositionMonitor:
                 message=f"Simulated {trigger.reason} exit fill for {pos.symbol}",
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
+            # Close open position in Paper Ledger (Item 2)
+            try:
+                from vesper.paper_ledger import get_paper_positions, close_paper_position
+                for op in get_paper_positions():
+                    if op.get("ticker") == pos.symbol and op.get("status") == "OPEN":
+                        close_paper_position(op["id"], close_price=pos.current_price, reason=trigger.reason)
+                        break
+            except Exception as e:
+                logger.warning(f"Could not close paper position for {pos.symbol}: {e}")
+
             await channel_manager.broadcast_execution(res)
             return res
 
@@ -298,6 +335,8 @@ class PositionMonitor:
     async def run_monitoring_cycle(self, live: bool = False) -> List[ExecutionResult]:
         """Runs a single evaluation sweep across all positions."""
         positions = await self.poll_webull_positions()
+        if not live:
+            positions.extend(self.poll_paper_positions())
         results = []
 
         # Get current SPY Gamma Flip
