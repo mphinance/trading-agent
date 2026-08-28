@@ -43,12 +43,19 @@ for the Starter (Dealer-HUD) vs. Pro (TDPro MCP + Vesper) ecosystem split.
 
 ## 🚧 Known Gaps (not yet a Module, but tracked)
 
-- **No callback receiver for the Telegram/Discord Approve button.** Module 2
-  sends proposal cards and execution results outward, but nothing consumes an
-  inbound tap yet. **When it's built, it must resume `human_gate_node`'s
-  LangGraph interrupt (`human_decision = "APPROVE"`), not call `executor_node`
-  or a broker directly** — a 1-tap mobile button is exactly the low-friction
-  path the deleted `orders.py`'s preview→confirm split existed to slow down.
+- **Vesper has no LLM reasoning layer anywhere.** Grepped every file in
+  `vesper/nodes/` for OpenAI/Anthropic/OpenRouter/`claude_agent_sdk` —
+  nothing. `playbooks_node`, `analyst_node`, `regime_node`, `scanner_node`
+  are all deterministic Python over TraderDaddy/TickerTrace/technicals data.
+  This is worth stating plainly: **the entire reason this is a LangGraph app
+  instead of a script is to be an agent, and right now nothing in it actually
+  reasons with a model.** See "LLM layer + voice" below for the concrete plan
+  once this is ready to build (not yet — notes only, nothing installed).
+- **Callback receiver for the Telegram/Discord Approve button — landed.**
+  `vesper/bot/inbound.py`'s `approval_registry` + `human_gate_node` reading
+  `approval_registry.get_decision(p.id)` before falling through to
+  `interrupt()`. Verified it resumes the graph's normal decision flow rather
+  than calling `executor_node`/a broker directly — the guard is intact.
 - **`PublicBrokerClient` has no live buying-power lookup.** `_execute_public`
   in `executor.py` passes `live_buying_power=None`, so `VESPER_MAX_BP_FRACTION`
   is a no-op on that branch — notional/quantity/allowlist/kill-switch still
@@ -89,10 +96,11 @@ Macro/market-health check, SPY/QQQ dealer-gamma levels, TickerTrace whale-flow
 briefing, 0DTE bias, top candidates with 2x leveraged-ETF proxies. See Known
 Gaps above for the stale-fallback issue.
 
-### ✅ Module 2 — Channel-Agnostic Alert Bot (done, partially)
+### ✅ Module 2 — Channel-Agnostic Alert Bot & Inbound Approval Engine (done)
 `ApprovalChannel` interface with Telegram/Discord/webhook adapters, broadcast
-from `human_gate_node`/`executor_node`. **The inbound half (Approve button →
-actually resolving the graph) doesn't exist yet** — see Known Gaps.
+from `human_gate_node`/`executor_node`. Inbound approval engine in `vesper/bot/inbound.py`
+resolves pending proposals, handles Telegram/Discord callback queries and `/halt` commands,
+and resumes LangGraph interrupt execution.
 
 ### ✅ Module 3 — Position Monitor & Exit Cascade (done)
 `vesper monitor [--interval 15] [--live] [--once]`: take-profit +50%,
@@ -100,16 +108,14 @@ stop-loss -40%, trailing breakeven +25%, 0DTE time-stop 3:00 PM ET,
 dealer-gamma-flip crossing exit for SPY calls. Goes through
 `execution_guard` on the live path, same as `executor_node`.
 
-### 🧪 Module 4 — Walk-Forward Backtester
-- [ ] Strategy presets: squeeze breakout + 8/21 EMA pullback, 0DTE spot-vs-flip
-      intraday breakout, VoPR™ VRP harvest.
-- [ ] Metrics: win rate, profit factor, Sharpe, max drawdown, expectancy.
-- [ ] Walk-forward validation: in-sample train, out-of-sample test.
-- [ ] Consider `vectorbt` for vectorized backtesting/parallel hyperparameter
-      sweeps (from the ideas backlog below) instead of building this from
-      scratch.
+### ✅ Module 4 — Walk-Forward Backtester & Strategy Library (done)
+- [x] Strategy presets: `bounce_2_pullback` (Tao of Trading 8/21 EMA pullback into Action Zone),
+      `ema_crossover`, `rsi_bounce`, `macd_momentum`, `bollinger_squeeze`, `vopr_vrp_harvest`.
+- [x] Metrics: win rate, profit factor, Sharpe, Sortino, max drawdown, expectancy, CAGR, tearsheet generation.
+- [x] Walk-forward validation: `walk_forward_test()` with $K$-fold in-sample/out-of-sample windowing and consistency metrics.
+- [x] Universe sweeping: `sweep_strategy()` across candidate stock lists. Tested in `tests/test_backtest.py`.
 
-### 🧠 Module 5 — Outcome Memory (winners, losers, and the ones we didn't take)
+### ✅ Module 5 — Outcome Memory (winners, losers, and the ones we didn't take) (done)
 Most of the plumbing already exists — this is fix-and-extend, not
 build-from-scratch: `mcp_server/conviction.py` already has a working
 log/resolve/scorecard journal (1/5/10-day resolution, WIN/LOSS/PUSH scoring),
@@ -125,35 +131,24 @@ client (not a second database) for semantic "have I seen a setup like this
 before" recall over free-text thesis — structured facts ride along as
 metadata so a semantic hit can still be filtered by outcome.
 
-- [ ] **Phase 1 — fix the foundation.** Live `data/conviction_journal.json`
-      already has exact duplicate entries (same id, ~700μs apart — `id` is
-      only second-resolution; likely a LangGraph replay, not confirmed).
-      `reflection_node` also mislabels direction by string-sniffing
-      `"BUY" in res.message` instead of reading the matched `OrderProposal`'s
-      `side` — every rejected/blocked BUY gets logged bearish. Fix both, then
-      add `origin`/`playbook`/`regime_posture`/`session_id` fields to the
-      journal entry.
-- [ ] **Phase 2 — log what we didn't take.** `risk_gate_node` currently drops
-      a rejected proposal silently; log it instead
-      (`origin=REJECTED_BY_RISK_GATE`, `not_taken_reason=err`). Same for
-      `REJECTED_BY_USER`. Candidates that never became a proposal at all
-      (`NOT_PROPOSED`) come last — needs a lighter-weight log path than a
-      full `log_conviction()` price-fetch per declined candidate, or scanner
-      volume will make it expensive.
-- [ ] **Phase 3 — close the resolution loop automatically.** Nothing in
-      `vesper/` calls `resolve_convictions()` today; it only runs on demand
-      via a chat tool. Call it from `reflection_node` or a scheduled tick.
-- [ ] **Phase 4 — semantic layer.** `ingest_outcome()` reusing
-      `knowledge.py`'s `_get_chroma()`/`_embed_texts()` against `trade_memory`;
-      `recall_similar_setups(thesis_text)` for `playbooks_node` to query
-      before drafting, exposed as an MCP tool mirroring `search_knowledge()`.
-- [ ] **Phase 5 — feed it back into scoring.** Adjust `Candidate.score` using
-      resolved hit-rate of similar past setups / the playbook's own win rate.
-      This is the step that changes behavior, not just remembers it.
-
-Open decisions: resolution horizons for a rejected 0DTE signal (1/5/10 days
-doesn't fit same-day), and whether Phase 5 nudges `Candidate.score` or
-actually deprioritizes a losing playbook outright.
+- [x] **Phase 1 — fix the foundation.** Live `data/conviction_journal.json`
+      deduplicated and protected against collisions with microsecond UUID keys.
+      `reflection_node` direction mapping fixed to inspect `OrderProposal.side`
+      rather than fragile message string heuristics. Added `origin`, `playbook`,
+      `regime_posture`, `session_id`, `not_taken_reason`, `target_price`, `stop_loss`.
+- [x] **Phase 2 — log what we didn't take.** `risk_gate_node` and `human_gate_node`
+      route non-executed/rejected proposals into reflection (`origin=REJECTED_BY_RISK_GATE`,
+      `origin=REJECTED_BY_USER`). Screened candidates not synthesized into proposals
+      are logged with lightweight price overrides (`origin=NOT_PROPOSED`).
+- [x] **Phase 3 — close the resolution loop automatically.** `resolve_convictions()`
+      is automatically executed at each session reflection tick to score open
+      convictions across 1d/5d/10d horizons.
+- [x] **Phase 4 — semantic layer.** `ingest_trade_memory()` stores structured outcome
+      vectors into ChromaDB `trade_memory` collection with robust fallback embedding;
+      `recall_similar_setups()` enables semantic setup recall and outcome filtering.
+- [x] **Phase 5 — feed it back into scoring.** `get_playbook_performance()` calculates
+      resolved win rates and calibration adjustments, dynamically scaling proposal
+      sizing and conviction in `playbooks_node`.
 
 ### ✅ Module 6 — Leveraged ETF Proxy & Skills Library (done)
 `playbooks_node` queries `data/leveraged_etfs.db` for risk-scaled 2x
@@ -164,11 +159,11 @@ integrates `mcp_server/vcp_screener`/`screener` and TickerTrace flows.
 `vesper/skills_engine.py` does path-traversal-validated autonomous skill
 authoring. 5 tests in `tests/test_leveraged_and_skills.py`.
 
-### 🧯 Module 7 — Paper Ledger & Remote Kill Switch
-- [ ] Append every simulated fill to `data/paper_ledger.json`, mark to
-      market daily.
-- [ ] `vesper halt` CLI + `/halt` bot command for instant remote freezing,
-      independent of an env var change + restart.
+### ✅ Module 7 — Paper Ledger & Remote Kill Switch (done)
+- [x] Append every simulated fill to `data/paper_ledger.json`, mark to
+      market daily with `vesper/paper_ledger.py` and `vesper paper --mark`.
+- [x] `vesper halt` CLI + `vesper resume` + `/halt` bot command for instant
+      remote freezing, integrated into `ExecutionGuard` and CLI telemetry.
 
 ---
 
@@ -305,3 +300,63 @@ worth checking since TraderDaddy is already a core dependency), *Modern
 API-First Brokerage and Algorithmic Trading Systems*, *The Only Trading
 Library You'll Ever Need*, *The End of the Hedge: Global Macro and Regime
 Shifts*, *Global Financial Markets: Volatility, Derivatives, and Risk*.
+
+### 🗣️ LLM layer + voice — notes only, nothing built or installed yet
+
+This is the response to "Vesper has no LLM reasoning layer" above. Written up
+so the shape is decided before anyone (Flash included) starts wiring it, not
+discovered by trial and error.
+
+**Model: OpenRouter, `deepseek/deepseek-v4-flash`.** Already decided in
+`docs/OPENROUTER_PRICING_GUIDE.md` — $0.03/$0.10 per 1M tokens in/out, 1.31M
+context, explicitly recommended there for "continuous background screening,
+high-frequency market polling, bulk technical parsing" — i.e. exactly the
+always-on agent loop this gap describes. A 24/7 scanning loop on GPT-4o was
+priced there at ~$50-100/month; on this model, under $1/month. No reason to
+look elsewhere for the default model; `deepseek/deepseek-v4-pro` is the
+escalation path in the same table for anything needing deeper multi-step
+reasoning than Flash handles well.
+
+**Where it plugs in**: `playbooks_node` is the natural first target — it's
+already drafting proposals from deterministic signals; an LLM call there
+would go from "encode Michael's exact rules in Python" (the momentum_squeeze
+mismatch/ADX-IV-router/etc. items above) toward "reason over the same signals
+the way the rules describe," with the deterministic version as a fallback/
+sanity-check rather than a full replacement. Whether that's the right
+target vs. a separate `analyst_node`-style reasoning layer is a real design
+decision, not decided here.
+
+**Voice + channel architecture — reuse Module 2, don't adopt an external
+framework.** Explored `princezuda/safestclaw` and `moltis-org/moltis` (from
+the `machinae/awesome-claws` list) as potential ready-made assistants to
+adopt wholesale. Neither is the right call: both would stand up a *second*
+system that then needs its own bridge into the same MCP servers
+(webull/traderdaddy/tickertrace/momentum) Vesper already talks to — a
+parallel stack, not a shortcut, since `vesper/bot/` already has the channel
+infrastructure (`ChannelManager`, Discord/Telegram/webhook adapters,
+`vesper/bot/inbound.py`'s `approval_registry`). What's worth stealing from
+each as a pattern, not a dependency:
+- **SafestClaw's voice pipeline**: local Whisper STT + Piper TTS, fully
+  offline, no cloud round-trip or per-request voice API cost. The reference
+  shape for a voice-message-in/voice-note-out flow bolted onto the existing
+  Discord adapter: transcribe inbound audio locally, route the text through
+  the same chat/decision surface as a typed message, synthesize the reply
+  locally instead of returning text-only.
+- **Moltis's "MCP client + multi-provider + multi-channel" shape**: confirms
+  the overall architecture (one process, MCP client to existing tool servers,
+  swappable model provider, several chat channels) is a proven, common
+  pattern — validates building this directly into `vesper/bot/` rather than
+  it being a novel design.
+
+Neither project confirmed explicit OpenRouter support by name (both use
+generic "custom endpoint" multi-provider config) — since OpenRouter is
+OpenAI-API-compatible, this is very likely a non-issue, but wasn't verified
+directly against either project's provider config and shouldn't be assumed
+working without a quick check if either is ever actually touched.
+
+**Not decided yet, deliberately**: whether voice-in comes from a Discord
+voice message, a Telegram voice note, or something else; whether TTS output
+posts as a voice-note reply or stays text-only with voice reserved for
+alerts; and whether this belongs in `vesper/bot/` as extensions to the
+existing adapters or as a new sibling module. Flagging the shape, not
+committing to the implementation.
