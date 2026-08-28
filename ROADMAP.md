@@ -43,6 +43,32 @@ for the Starter (Dealer-HUD) vs. Pro (TDPro MCP + Vesper) ecosystem split.
 
 ## 🚧 Known Gaps (not yet a Module, but tracked)
 
+**Start here, in this order** — cheapest/lowest-risk first, the one thing
+that actually needs careful design saved for last so it doesn't get rushed:
+
+1. **Housekeeping (each ~15-30 min, zero risk)**: wire `--persona traderlady`
+   into session state or delete the flag; wire `vesper/whop.py` to a real
+   caller or delete it; label `vesper/morning.py`'s fallback SPY/QQQ numbers
+   as STALE instead of printing them as if live.
+2. **Paper ledger close path** (moderate, zero real-money risk — paper only).
+   Wire `monitor.py`'s dry-run exit fills to `close_paper_position()`,
+   matched to the original open fill by ticker/proposal. Improves Module 5's
+   outcome data quality, since paper trades currently never resolve.
+3. **`PublicBrokerClient` buying-power lookup** (small). Wire
+   `pub.get_portfolio()` into a real figure so `VESPER_MAX_BP_FRACTION` isn't
+   a no-op on that branch.
+4. **Bounce 2.0 precision** (moderate). Add Slow Stochastic(8,3)≤40, the
+   `RSI(2)` dip-below-10-then-cross-back-above-10 entry trigger, and true
+   Keltner Channel math (length 14, 2x ATR) in place of the current flat ATR
+   band — closes the gap against Michael's actual documented rule.
+5. **Module 2's inbound ingestion layer + auth — do this last, deliberately.**
+   The resolve/resume logic is already correct; what's missing is an actual
+   HTTP route or polling loop, and it needs real authentication (Telegram
+   secret token, Discord Ed25519 signature verification) designed in from
+   the start, not bolted on after. This is the one item here where getting
+   it right matters more than getting it done fast — a card someone can tap
+   to approve a live trade is worth building carefully.
+
 - **LLM reasoning: half landed.** `vesper/llm.py` (OpenRouter,
   `deepseek/deepseek-v4-flash` default) is wired into `playbooks_node` via
   `generate_candidate_thesis()` — but it only appends a narrative string to
