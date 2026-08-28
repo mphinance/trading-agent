@@ -153,3 +153,34 @@ actually deprioritizes a losing playbook outright.
   - Append every simulated fill to `data/paper_ledger.json` and mark to market daily.
 - [ ] **Remote CLI & Chat Kill Switch**:
   - Implement `vesper halt` and `/halt` bot command for instant remote execution freezing.
+
+---
+
+### 💡 Ideas Backlog (speculative, unscoped — not committed like Modules 0-7)
+Full writeup in [`docs/IDEAS_BACKLOG.md`](docs/IDEAS_BACKLOG.md), sourced from
+a web-research pass plus two of Michael's NotebookLM notebooks (*Python
+Automated Options Wheel Strategy and TradingView Screening*, *AI Trading and
+Sentiment Analysis Guide 2026*). Highlights:
+
+- **LLM-as-Bayesian-network-builder for explainable proposals** — an arXiv
+  paper on the options wheel strategy has the LLM build a causal DAG (not
+  compute probabilities itself); a deterministic engine populates conditional
+  probability tables from historical data and does inference. ~27 recorded,
+  auditable decision factors per trade. Natural extension of Module 5 once
+  there's enough resolved outcome data to populate real CPTs.
+- **IntellAgent-style automated evaluation** for `human_gate_node`/any future
+  chat layer — generate test conversations via a policy graph + random walk,
+  run an automated user agent against a symbolic mock DB, audit with a
+  Dialogue Critique agent. Worth it once Module 2's callback receiver exists.
+- **Vol-targeting position sizing** (size ∝ target_vol / realized_vol,
+  `RiskEnforcer.calculate_equity_size` already has ATR to do this) — best
+  effort-to-impact ratio of anything in the backlog, do this one first.
+- **Holly (Trade Ideas AI)'s nightly re-optimization**: re-backtest strategy
+  variants nightly, only activate ones clearing a win-rate/reward:risk bar
+  for the next session — ties Module 4 and Module 5 into an actual gate on
+  what `scanner_node` runs, not just a score after the fact.
+- Also flagged: risk-segmented playbook "personas," hedge-vs-directional
+  options flow classification, and a list of not-yet-queried notebooks
+  (TraderDaddy Pro docs, IBKR API guide, MCP server directory, Michael's own
+  stated trading strategies) that looked relevant but weren't pulled in this
+  pass.
