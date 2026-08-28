@@ -26,51 +26,59 @@ See [`docs/TIERS_AND_FUNNEL.md`](docs/TIERS_AND_FUNNEL.md) for the complete **St
 - [x] Pre-wired Public.com client adapter (`vesper/brokers/public_broker.py`).
 - [ ] Multi-account simultaneous execution.
 
-### 🚨 Phase 0: Execution Guardrails Rebuild (BLOCKING)
+### ✅ Phase 0: Execution Guardrails Rebuild — core landed 2026-08-28
 The pre-migration sidecar had a real order path with three properties that held
 it together: **preview → confirm → place** (a single-use ticket carrying a
 SHA-256 of the exact payload), **server-side guards on every path** (notional
 cap, quantity cap, symbol allowlist, buying-power fraction), and a **kill
-switch**. `vesper/nodes/executor.py` has none of this today — it is only inert
-because `mode` defaults to `dry_run`. `vesper/risk.py`'s `RiskEnforcer` checks
-per-trade risk % and a hardcoded `account_equity=10000.0` (see
-`vesper/nodes/risk_gate.py`), which is position sizing, not a hard ceiling, and
-isn't even reading the live account.
+switch**. All three now exist in `vesper/execution_guard.py` (`ExecutionGuard`,
+`Ticket`), wired into both broker branches of `vesper/nodes/executor.py`, with
+`vesper/nodes/risk_gate.py` reading live `nlv` from `wb.py` instead of a
+hardcoded `10000.0`. `tests/test_execution_guard.py` pins the handshake,
+caps, TTL, single-use, and payload-hash-mismatch behavior (11 tests, green).
 
-This phase must land — fully, with tests — **before any live-execution item in
-Phase 2 or Phase 3 below ships**, and before `mode` is ever set to anything but
-`dry_run` outside a test harness. See `NEXT_STEPS.md` Module 0 for the detailed
-spec.
+**The kill switch (`VESPER_TRADING`) defaults OFF.** This code has not been
+exercised against a live account — building it doesn't make it proven, and
+going live is a deliberate action, not a side effect of a code change. Nothing
+places a real order until a human sets `VESPER_TRADING=1` in the environment.
 
-- [ ] Ticket handshake: `preview()` stages a hashed, single-use, time-limited
-      ticket; `place()` takes only a `ticket_id`, never a raw order — mirrors
-      the deleted `orders.py`.
-- [ ] Notional cap + quantity cap, env-configurable (`VESPER_MAX_NOTIONAL`,
-      `VESPER_MAX_QTY`), enforced in `risk_gate_node` against the **live**
-      buying-power figure, not a hardcoded constant.
-- [ ] Optional symbol allowlist (`VESPER_SYMBOL_ALLOWLIST`).
-- [ ] Kill switch (`VESPER_TRADING=0`) checked at the top of `executor_node`,
-      independent of `mode`.
-- [ ] Wire the currently-unused `preview_order` result all the way through —
-      today's "live" Webull branch in `executor.py` calls `preview_order` and
-      then reports `SUBMITTED` without ever calling `place_order`; that gap
-      closes only after the ticket handshake exists, not before.
-- [ ] Guard the Public.com branch identically — `pub.place_order()` today is a
-      direct, unguarded live call with no dry-run distinction of its own.
-- [ ] `test_executor.py` / `test_risk.py` pin the handshake and caps the same
-      way the old `test_orders.py` pinned rule 3, so this can't silently regress.
+- [x] Ticket handshake: `preview()` stages a hashed, single-use, time-limited
+      ticket; `place()` takes a `ticket_id` and the payload, and refuses to
+      fire if the payload's hash doesn't match what was previewed.
+- [x] Notional cap + quantity cap, env-configurable (`VESPER_MAX_NOTIONAL`,
+      `VESPER_MAX_QUANTITY`), checked against **live** buying power
+      (`wb.portfolio()["totals"]["buying_power"]`) on the Webull branch.
+- [x] Optional symbol allowlist (`VESPER_SYMBOL_ALLOWLIST`).
+- [x] Kill switch (`VESPER_TRADING`, default off) checked before any broker
+      call, independent of `mode`.
+- [x] Webull branch now actually calls `place_order` (behind the ticket) —
+      the old gap where it called `preview_order` and reported `SUBMITTED`
+      without ever placing anything is closed.
+- [x] Public.com branch guarded identically. **Open sub-item:** `PublicBrokerClient`
+      has no live buying-power lookup yet, so `VESPER_MAX_BP_FRACTION` is a
+      no-op on that branch specifically — notional/quantity/allowlist/kill-switch
+      still apply. Wire `pub.get_portfolio()` into a buying-power figure to close this.
+- [x] `tests/test_execution_guard.py` pins the guard module directly.
+      **Open sub-item:** no test yet exercises `executor_node`/`risk_gate_node`
+      end-to-end with a mocked broker — the guard's unit tests don't prove the
+      wiring in `executor.py` calls it correctly, they prove the guard itself
+      is correct.
+- [ ] **Not done, and blocking a first live trade regardless of the above:**
+      exercise this against the real Webull account, one small share, with
+      Webull Desktop open to watch it land — same bar the old sidecar's own
+      README held itself to before its order path shipped.
 
 ### Phase 2: Notification & Chat Gateway
-> ⚠️ **Blocked on Phase 0.** Module 2's "Execution Callback" (tapping
-> `[ Approve ]` and calling the broker directly) may not ship until the
-> guardrails above exist. The alert-card / notify half of Module 2 has no such
-> dependency and can proceed now.
+> Guardrails now exist (Phase 0 above), so Module 2's "Execution Callback" is
+> no longer blocked on missing infrastructure — but `VESPER_TRADING` should
+> stay `0` until Phase 0's last checkbox (a proven live trade) is done. Build
+> against `mode=dry_run` first.
 - [ ] Telegram & Discord real-time trade alert bot (sending order cards with 1-click Approve/Reject callbacks).
 - [ ] Voice memo trade execution and audio thesis summaries.
 
 ### Phase 3: Advanced Portfolio Optimization
-> ⚠️ Also gated on Phase 0 — continuous delta-hedging and any automated
-> position-adjusting order submit through the same `executor.py`.
+> Same note as Phase 2 — the guard layer exists, but treat `VESPER_TRADING=1`
+> as a manual, deliberate step, not a default to build toward.
 - [ ] Automated continuous delta-hedging using SPY/QQQ 0DTE options.
 - [ ] Dynamic Kelly criterion scaling tied to live market regime health scores.
 - [ ] Automated tax-loss harvesting and dividend capture planner.

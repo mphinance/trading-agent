@@ -61,58 +61,58 @@ related file.
   anywhere in the Python codebase**, despite being introduced in a commit
   titled "integrate ... Whop licensing engine." If a module needs license
   gating, this client still needs to actually be wired to a caller.
-- **`vesper/nodes/executor.py`'s Webull branch intentionally returns
-  `status="BLOCKED_PENDING_GUARDRAILS"` and does not call `place_order`** (as
-  of the 2026-08-28 sweep fix — it previously claimed `SUBMITTED` after only
-  previewing, which was a live-looking false positive). Don't "fix" this by
-  wiring `place_order` back in without also landing Module 0's ticket
-  handshake/caps/kill-switch — that would recreate the exact bug this fix
-  closed, with real money behind it this time.
+- **`vesper/nodes/executor.py` now calls `place_order` for real, behind
+  `vesper/execution_guard.py`'s ticket handshake** (Module 0 landed
+  2026-08-28). It returns `status="BLOCKED_BY_GUARDRAIL"` when a cap/allowlist/
+  kill-switch check fails, not `status="BLOCKED_PENDING_GUARDRAILS"` — that
+  older status string is gone. **`VESPER_TRADING` defaults off**, so nothing
+  places a real order until it's explicitly set to `1`. Don't remove or
+  bypass `execution_guard.guard.preview()`/`.place()` calls to "simplify"
+  this — that's the entire guard.
+- **`tests/test_orders.py`, `test_server.py`, `test_notify.py`,
+  `test_alerts.py`, `test_quotes.py`, `test_mcp.py`, `test_docs.py`, and
+  `test_static.py` all import modules or files deleted in the sidecar->Vesper
+  migration and fail at collection** — as of 2026-08-28 this means `pytest -q`
+  aborts with "Interrupted: N errors during collection" and **zero tests
+  actually run**, which means CI has been fully broken (not just red — it
+  never gets past collection) since `de60d51`. These files could not be
+  deleted in the same sweep that found this (sandboxed session, no `rm`
+  permission) — deleting them is the fix; see
+  `docs/CODE_SWEEP_2026-08-28.md` for the exact command.
 
 ---
 
-## 0. 🛡️ Module 0: Execution Guardrails Rebuild (BLOCKING — do this before Module 2 or Module 3 go live)
+## 0. 🛡️ Module 0: Execution Guardrails Rebuild — core landed 2026-08-28
 
-### Objective
+### Status
+Implemented in `vesper/execution_guard.py` (`ExecutionGuard`, `Ticket`), wired
+into both branches of `vesper/nodes/executor.py`, with
+`vesper/nodes/risk_gate.py` now reading live `nlv` instead of a hardcoded
+`10000.0`. `tests/test_execution_guard.py` (11 tests) pins the ticket
+handshake, caps, TTL, single-use, and payload-hash-mismatch behavior.
+**`VESPER_TRADING` defaults off** — none of this has been exercised against a
+live account yet, so nothing places a real order until a human deliberately
+sets `VESPER_TRADING=1`.
+
+**Open sub-items, not blocking but not done either:**
+- `PublicBrokerClient` has no live buying-power lookup — `VESPER_MAX_BP_FRACTION`
+  is a no-op on the Public.com branch specifically (the other guards still
+  apply). Wire `pub.get_portfolio()` into a real figure to close this.
+- No test exercises `executor_node`/`risk_gate_node` end-to-end against a
+  mocked broker yet — `test_execution_guard.py` proves the guard module is
+  correct, not that `executor.py`'s wiring calls it correctly. Worth adding
+  once there's a settled way to mock `wb.Webull`/`PublicBrokerClient` for a
+  full node-level test.
+- The one thing that's genuinely not done: a real live trade, one share,
+  cheap, with Webull Desktop open to watch it land. Nothing below should be
+  treated as "proven" until that happens — the sidecar's own README held
+  itself to the same bar before its order path shipped.
+
+### Original objective (for context — see Status above for what actually landed)
 Rebuild, inside `vesper/`, the three properties that made the old (deleted)
 `orders.py` safe to leave running unattended: a **preview → confirm → place**
 ticket handshake, **server-side caps enforced on every path**, and a **kill
-switch**. `vesper/nodes/executor.py` currently has none of these — it is only
-inert today because `mode` defaults to `dry_run`, and `vesper/risk.py`'s
-`RiskEnforcer.validate_proposal()` checks position sizing against a **hardcoded
-`account_equity=10000.0`** (see `vesper/nodes/risk_gate.py`), not a real
-notional ceiling and not the live account. This is not a "nice to have" — it is
-a precondition. Module 2's Approve-button execution callback and Module 3's
-autonomous exit-cascade orders must not be pointed at `executor.py` until this
-module ships.
-
-### Workflow & Architecture
-1. **Ticket handshake** (mirrors the deleted `orders.py`):
-   - A `preview_proposal(proposal)` step runs the guards below, gets a
-     broker-side cost estimate, and stages a single-use, short-TTL ticket
-     keyed by a SHA-256 of the exact payload.
-   - `executor_node` accepts only a `ticket_id` — never a freshly-constructed
-     order — so nothing can both build and fire an order in one call.
-2. **Guards, enforced server-side on every path** (Webull *and* Public.com —
-   today only the Public.com branch places a real order, but both branches
-   are unguarded):
-   - Notional cap (`VESPER_MAX_NOTIONAL`, sane default e.g. $2500) and quantity
-     cap, checked against **live buying power** pulled from `wb.py`, not the
-     hardcoded `10000.0` in `risk_gate_node`.
-   - Optional symbol allowlist (`VESPER_SYMBOL_ALLOWLIST`).
-   - `replace`/adjust paths re-run the guards (amending can raise exposure);
-     `cancel` never needs to (reducing risk is always allowed).
-3. **Kill switch**: `VESPER_TRADING=0` short-circuits `executor_node` before
-   any broker call, independent of `mode`. A `vesper.py halt` CLI command
-   should be able to flip this without a service restart (see Module 6).
-4. **Close the existing gap**: today's "live" Webull branch in `executor.py`
-   calls `wb.trade.order_v2.preview_order(...)` and then immediately reports
-   `status="SUBMITTED"` — it never calls `place_order`. Wiring the real
-   `place_order` call only happens as part of this module, behind the ticket
-   handshake, not before.
-5. **Tests**: `test_executor.py` / `test_risk.py` should pin the handshake and
-   the caps the same way the old `test_orders.py` pinned them, so a future
-   refactor can't quietly drop a guard.
+switch**.
 
 ---
 
@@ -142,10 +142,12 @@ Deliver an automated, high-density market briefing every morning at **8:45 AM ET
 
 ## 2. 📱 Module 2: Telegram / Discord Interactive Live Alert Bot
 
-> ⚠️ **The alert-card / push-notification half of this module has no
-> dependency and can be built now. The Execution Callback step (§3 below) may
-> not be wired to a real broker call until Module 0 ships** — until then,
-> `[ ✅ APPROVE & EXECUTE ]` should route to `mode=dry_run` only.
+> Module 0's guardrails exist now, so the Execution Callback (§3 below) can be
+> wired to `executor_node` for real. Until Module 0's live-trade checkbox is
+> actually checked (see Module 0's Status), keep `VESPER_TRADING` unset/`0` in
+> whatever environment this bot runs in, so `[ ✅ APPROVE & EXECUTE ]` exercises
+> the full guarded path but still lands on `BLOCKED_BY_GUARDRAIL`/`dry_run`
+> rather than a real fill.
 
 ### Objective
 Enable mobile trade approval and real-time alerts. Whenever Vesper generates a high-conviction trade proposal, it pushes an interactive card directly to your private phone channel with 1-click execution callbacks.
@@ -190,10 +192,12 @@ Enable mobile trade approval and real-time alerts. Whenever Vesper generates a h
 
 ## 3. 🛡️ Module 3: Active Position Monitor & 0DTE Exit Cascade Loop
 
-> ⚠️ **Also blocked on Module 0.** This loop submits sell/stop orders
-> autonomously, with no human tap in the loop at all — it inherits everything
-> Module 2's Execution Callback needs and then some, since there isn't even an
-> approve/reject step to catch a mis-sized order before it fires.
+> ⚠️ **Higher bar than Module 2, even with Module 0 landed.** This loop submits
+> sell/stop orders autonomously with no human tap at all — the guard caps and
+> kill switch apply the same way, but there's no approve/reject step to catch
+> a mis-sized order before it fires. Do not enable `VESPER_TRADING=1` for this
+> loop until Module 0's live-trade checkbox is checked *and* this loop has run
+> for a while against `mode=dry_run`/paper fills.
 
 ### Objective
 A continuous background loop (every 15–30 seconds during market hours: 9:30 AM – 4:00 PM ET) that tracks open positions on Webull and strictly enforces deterministic exit rules.
