@@ -94,6 +94,30 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                 proposals.append(prop)
                 audit_notes.append(f"Drafted Equity Buy for {ticker}: {shares} shares @ ${entry_price:.2f} (Risk=${total_risk:.2f})")
 
+                # Check if high-beta 2x leveraged vehicle exists (Module 6)
+                from vesper.leveraged import get_primary_2x
+                proxy_2x = get_primary_2x(ticker)
+                if proxy_2x and proxy_2x != ticker:
+                    # Scale down position by 2x to maintain equal risk budget
+                    proxy_shares = max(1, shares // 2)
+                    proxy_cost = round(proxy_shares * entry_price * 0.5, 2)  # approximate vehicle price
+                    proxy_prop = OrderProposal(
+                        id=f"prop-2x-{uuid.uuid4().hex[:6]}",
+                        ticker=proxy_2x,
+                        asset_type="LEVERAGED_ETF",
+                        side="BUY",
+                        order_type="LIMIT",
+                        quantity=proxy_shares,
+                        limit_price=entry_price,
+                        stop_loss=round(stop_loss * 0.85, 2),
+                        profit_target=round(profit_target * 1.30, 2),
+                        estimated_cost=proxy_cost,
+                        max_risk=round(total_risk * 0.5, 2),
+                        risk_reward_ratio=2.5,
+                    )
+                    proposals.append(proxy_prop)
+                    audit_notes.append(f"Drafted 2x Leveraged Alternate: {proxy_2x} ({proxy_shares} shares)")
+
     audit_entry = {
         "node": "playbooks_node",
         "timestamp": datetime.now(timezone.utc).isoformat(),

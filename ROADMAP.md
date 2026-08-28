@@ -100,13 +100,15 @@ See [`docs/TIERS_AND_FUNNEL.md`](docs/TIERS_AND_FUNNEL.md) for the complete **St
 
 ---
 
-### 📈 Module 6: Leveraged ETF Proxy & Skills-Library Scanner Integration
-- [ ] **Leveraged Proxy Surfacing**:
-  - When high-conviction breakout is identified on an underlying (e.g. `NVDA`), query `data/leveraged_etfs.db` to emit an alternate risk-sized proposal for its 2x vehicle (`NVDL` / `MSTX` / `AVGX`).
-- [ ] **Skills as Candidate Sources**:
-  - Integrate `skills/vcp-screener`, `skills/momentum-squeeze`, `skills/coil-scan`, and `skills/institutional-flow-tracker` into `scanner_node`.
-- [ ] **Autonomous Skill Evolution**:
-  - Allow `reflection_node` to propose new `SKILL.md` rules via `vesper/skills_engine.py` when recurring market anomalies are discovered.
+### 📈 Module 6: Leveraged ETF Proxy & Skills-Library Scanner Integration — ✅ Landed
+- [x] **Leveraged Proxy Surfacing**:
+  - Automatically queries `data/leveraged_etfs.db` in `playbooks_node` to emit risk-scaled 2x high-beta alternates (e.g. `NVDA` ➔ `NVDU`, `TSLA` ➔ `TSLL`, `MSTR` ➔ `MSTX`, `AVGO` ➔ `AVGX`).
+- [x] **Skills as Candidate Sources**:
+  - Integrated `mcp_server/vcp_screener`, `mcp_server/screener`, and TickerTrace institutional flows into `scanner_node`.
+- [x] **Autonomous Skill Evolution**:
+  - Built autonomous skill creation and path-traversal validated authoring engine in [`vesper/skills_engine.py`](vesper/skills_engine.py).
+- [x] **Unit Tests**:
+  - 3 unit tests in [`tests/test_leveraged_and_skills.py`](tests/test_leveraged_and_skills.py) (100% green).
 
 ---
 

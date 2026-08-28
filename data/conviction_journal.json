@@ -492,5 +492,57 @@
     "entry_ts": 1787951731,
     "resolved": false,
     "resolutions": {}
+  },
+  {
+    "id": "NVDA:20260828213115",
+    "ticker": "NVDA",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-ca85165a | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 52.3 | EMA Stack: NEUTRAL",
+    "signals": "RSI_neutral,EMA_NEUTRAL",
+    "entry_price": 217.55,
+    "entry_date": "2026-08-28T21:31:15.402406+00:00",
+    "entry_ts": 1787952675,
+    "resolved": false,
+    "resolutions": {}
+  },
+  {
+    "id": "NVDU:20260828213115",
+    "ticker": "NVDU",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-ca85165a | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE",
+    "signals": "RSI_N/A,EMA_N/A",
+    "entry_price": 134.37,
+    "entry_date": "2026-08-28T21:31:15.669163+00:00",
+    "entry_ts": 1787952675,
+    "resolved": false,
+    "resolutions": {}
+  },
+  {
+    "id": "NVDA:20260828213115",
+    "ticker": "NVDA",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-ca85165a | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 52.3 | EMA Stack: NEUTRAL",
+    "signals": "RSI_neutral,EMA_NEUTRAL",
+    "entry_price": 217.55,
+    "entry_date": "2026-08-28T21:31:15.669740+00:00",
+    "entry_ts": 1787952675,
+    "resolved": false,
+    "resolutions": {}
+  },
+  {
+    "id": "NVDU:20260828213115",
+    "ticker": "NVDU",
+    "direction": "bullish",
+    "confidence": 4,
+    "reasoning": "Session: vesper-ca85165a | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE",
+    "signals": "RSI_N/A,EMA_N/A",
+    "entry_price": 134.37,
+    "entry_date": "2026-08-28T21:31:15.670293+00:00",
+    "entry_ts": 1787952675,
+    "resolved": false,
+    "resolutions": {}
   }
 ]
