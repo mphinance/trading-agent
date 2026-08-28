@@ -19,6 +19,7 @@ those budgets separate — see `md.py`.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -30,6 +31,7 @@ from webull.core.client import ApiClient
 from webull.data.data_client import DataClient
 from webull.trade.trade_client import TradeClient
 
+LOCAL_ENV = Path(__file__).resolve().parent / ".env"
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env.webull"
 PROD_HOST = "api.webull.com"
 REGION = "us"
@@ -53,20 +55,28 @@ class WebullError(RuntimeError):
     pass
 
 
-def _load_env(path: Path = ENV_PATH) -> dict[str, str]:
-    if not path.exists():
-        raise WebullError(f"credentials file not found: {path}")
-    out: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            out[k.strip()] = v.strip().strip('"').strip("'")
+def _load_env(path: Path | None = None) -> dict[str, str]:
+    target = path
+    if target is None:
+        if LOCAL_ENV.exists():
+            target = LOCAL_ENV
+        elif ENV_PATH.exists():
+            target = ENV_PATH
+        else:
+            return dict(os.environ)
+
+    out: dict[str, str] = dict(os.environ)
+    if target.exists():
+        for line in target.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip().strip('"').strip("'")
     return out
 
 
 def credentials() -> tuple[str, str, str]:
-    """(app_key, app_secret, region_id) from ../.env.webull.
+    """(app_key, app_secret, region_id) from .env / .env.webull.
 
     Accepts WEBULL_APP_KEY/WEBULL_APP_SECRET as aliases — that's what webull-inc's
     own repos and docs use, so a key pasted from their README works unchanged.
@@ -76,7 +86,7 @@ def credentials() -> tuple[str, str, str]:
     secret = env.get("WEBULL_SECRET") or env.get("WEBULL_APP_SECRET")
     region = env.get("WEBULL_REGION_ID") or REGION
     if not key or not secret:
-        raise WebullError("WEBULL_KEY / WEBULL_SECRET missing from .env.webull")
+        raise WebullError("WEBULL_KEY / WEBULL_SECRET missing from .env")
     return key, secret, region
 
 

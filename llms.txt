@@ -1,0 +1,377 @@
+# TraderDaddy Pro — Developer API & MCP Server
+
+> TraderDaddy Pro is an options-flow and market-intelligence platform. The Developer API is a paid, read-only REST + MCP (Model Context Protocol) surface that lets you pull the same institutional options flow, gamma exposure (GEX), unusual activity, screeners, sector rotation, congressional trades, earnings flow, and long-term/dividend data your subscribers see — directly into your own tools or into an AI assistant (Claude Desktop, Claude Code, Cursor).
+>
+> This file is a complete, LLM-friendly reference. Human docs: https://www.traderdaddy.pro/developers
+
+New to this? Read the **Quick Start for beginners** section first. It walks you from "I just installed Claude and paid for the add-on" to "my AI can pull live market data" in a few minutes — no coding required.
+
+Never edited a config file before? There is a fully spelled-out, click-by-click version of that same setup at https://www.traderdaddy.pro/learn/mcp-setup — where the key lives, one numbered path per app, and what a working connection looks like.
+
+---
+
+## What you get
+
+- **REST API** — 30+ HTTPS endpoints returning JSON. Good for scripts, dashboards, alerts, spreadsheets, automations.
+- **MCP server** — one endpoint that plugs TraderDaddy Pro into an AI assistant so you can just *ask* for the data in plain English ("what's the unusual options flow on AAPL today?", "which dividend stocks go ex-div this week?").
+- Both use the **same API key** and share the **same 30-requests/minute** limit.
+- Everything is **read-only**. The API cannot place trades, move money, or change your account. It only reads market data.
+
+## Who it's for
+
+- Traders who want live flow/GEX/screener data inside Claude, Cursor, or their own scripts.
+- People automating research for a strategy — e.g. wheel-strategy monitoring, DCA timing, dividend-capture, earnings positioning. (See the **Example: wheel & dividend workflow** section.)
+- Developers building trading tools, alerts, or dashboards on top of TraderDaddy Pro data.
+
+---
+
+## Getting access (pricing & steps)
+
+The Developer API is a **standalone product**. It does NOT require a Premium trading subscription -- a free account can subscribe to it directly.
+
+1. **Create a free account** — https://www.traderdaddy.pro/register
+2. **Subscribe to the Developer API** — **$49.99/mo standalone**, or **$29.99/mo** while you also hold a TraderDaddy Pro subscription. Billed separately from the platform. If you cancel the platform subscription later, the API moves to $49.99/mo from its next invoice. In the app: **Settings → Developer tab** (https://www.traderdaddy.pro/settings?tab=developer).
+3. **Generate an API key** — on the Developer tab, click "Generate API Key". Keys are prefixed `td_live_`. **The full key is shown only once** — copy it somewhere safe (a password manager). You can hold up to **5 active keys** and revoke any of them anytime.
+4. **Start using it** — either paste the key into your AI assistant's MCP config (below) or send it as a header in REST calls.
+
+The **MCP server is included** with API access — no separate purchase.
+
+---
+
+## Authentication
+
+- **Base URL:** `https://api.traderdaddy.pro/api/v1`
+- **REST auth:** send your key in the `X-API-Key` header on every request.
+- **MCP auth:** send your key as `Authorization: Bearer td_live_...` (the `X-API-Key` header also works).
+
+```bash
+curl -H "X-API-Key: td_live_your_key_here" \
+  "https://api.traderdaddy.pro/api/v1/unusual-activity?minScore=85&timeFrame=today"
+```
+
+Keys are never exposed to the browser and are hashed at rest — only a short prefix is stored in clear. Treat your `td_live_` key like a password.
+
+## Rate limits
+
+- **30 requests per minute per key** (REST calls and MCP tool calls both count against this).
+- Every response includes: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (Unix timestamp when the window resets).
+- Exceed it and you get `HTTP 429`; wait until `X-RateLimit-Reset` and retry.
+
+## Error handling
+
+Errors return JSON: `{ "error": "...", "message": "..." }`.
+
+| Status | Meaning |
+|---|---|
+| 200 | OK — data in the response body |
+| 400 | Bad request — missing/invalid query parameters |
+| 401 | Unauthorized — API key missing or malformed (`td_live_` prefix required) |
+| 403 | Forbidden — key doesn't have permission / API access inactive |
+| 429 | Rate limit exceeded — retry after `X-RateLimit-Reset` |
+| 500 | Server error — contact support if it persists |
+
+---
+
+## Quick Start for beginners — connect Claude to TraderDaddy Pro (no code)
+
+This is the fastest path if your goal is "let my AI assistant read live market data." You only need your `td_live_` key.
+
+### Claude Desktop (the Claude app)
+
+Claude Desktop can't call a remote HTTP server directly, so it bridges through a small helper called `mcp-remote` (this needs **Node.js** installed — get it from https://nodejs.org).
+
+Open Claude Desktop → **Settings → Developer → Edit Config**, and add this to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "traderdaddy": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote",
+        "https://api.traderdaddy.pro/api/v1/mcp",
+        "--header", "Authorization: Bearer td_live_your_key_here"
+      ]
+    }
+  }
+}
+```
+
+Replace `td_live_your_key_here` with your real key, save, and **fully restart Claude Desktop**. You'll see a tools/plug icon appear. Now just ask: *"Using TraderDaddy, show me today's unusual options activity with a score above 85."*
+
+### Claude Code (the CLI)
+
+Run this one command (swap in your key):
+
+```bash
+claude mcp add --transport http traderdaddy \
+  https://api.traderdaddy.pro/api/v1/mcp \
+  --header "Authorization: Bearer td_live_your_key_here"
+```
+
+Then start `claude` and ask for market data directly.
+
+### Cursor
+
+Add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "traderdaddy-pro": {
+      "type": "http",
+      "url": "https://api.traderdaddy.pro/api/v1/mcp",
+      "headers": { "Authorization": "Bearer td_live_your_key_here" }
+    }
+  }
+}
+```
+
+### Browser-based clients (TradingView AI Chart Copilot and similar)
+
+Some MCP clients run inside the browser — notably AI Chart Copilot, the Chrome
+extension that adds an AI side panel to TradingView charts. These let you attach
+your own MCP server, which puts TD Pro's dealer gamma, unusual flow and apex
+levels next to the chart you're already reading.
+
+In the client's MCP-server settings, add a server with:
+
+- **URL:** `https://api.traderdaddy.pro/api/v1/mcp`
+- **Auth:** either a header — `Authorization: Bearer td_live_your_key_here`
+  (or `X-API-Key: td_live_your_key_here`) — or **OAuth**, if the client offers
+  it. With OAuth you paste your key once on our consent page instead of storing
+  it in the client's config.
+
+Both paths land on the same 29 tools and the same 30/min limit.
+
+Once connected, you don't write code — you ask. The assistant picks the right tool, calls it with your key, and explains the result. Tool calls count against your 30/min limit.
+
+---
+
+## MCP tools (29 read-only tools)
+
+Ask your assistant for any of these in plain English; it maps your question to the right tool.
+
+**Market & sentiment**
+- `get_market_stats` — index put/call ratios, sentiment, overall market health.
+- `get_market_health` — 7 macro-regime detectors (risk appetite, breadth, volatility) rolled into one read.
+- `get_put_call_ratios` — put/call ratio for one ticker you name, from its nearest weekly expiration (open-interest fallback when intraday volume is thin). `putCallRatio` and `sentiment` are both `null` when there is no call volume to divide by.
+- `get_conviction` — Community Conviction gauge (0–100 blend of how TD Pro traders lean on a ticker).
+
+**Options flow**
+- `get_unusual_activity` — real-time unusual options activity with scoring and sentiment.
+- `get_institutional_activity` — most active tickers by institutional options-flow volume today, with directional bias.
+- `get_directional_flow` — the session's cumulative (from-open) delta-weighted flow lean per underlying (cumΔ, conviction, bullish/bearish/balanced bias); pass a symbol or get the top-15 leaderboard.
+- `get_dark_pool` — rolled-up off-exchange ("dark pool") equity BLOCK flow for a ticker: print count, gross and net notional, accumulation vs distribution split, largest print. The lean is inferred, not confirmed direction — it describes months of desk positioning, so distribution means a patient seller (stalling/sideways), not a short signal. Aggregates only — individual prints are not served.
+- `get_sector_flow` — options flow aggregated by GICS sector ETF with sentiment breakdown.
+- `get_earnings_flow` — pre-earnings unusual positioning for tickers reporting soon.
+
+**Gamma exposure (GEX) & levels**
+- `get_gex_overview` — gamma exposure across tracked symbols, flip points, key walls.
+- `get_gex_ticker` — gamma exposure for any single ticker; also flags a `gammaPocket` (positive/negative) when the name's dealer gamma diverges from the broad-market regime.
+- `get_apex_levels` — composite "magnet" strike ranking (OI walls + net gamma) with the gamma-flip level.
+
+**Volatility & structures**
+- `get_iv_rank` — self-relative IV rank (is a ticker's premium rich or cheap vs its own history?). Every reading carries a `source`; `ivPercentile` is present only on a `self_tracked` reading.
+- `get_strategy_ideas` — ranked, auto-assembled multi-leg option structures priced off the live chain.
+- `get_edge_xray` — whole-chain rich/cheap grade for one expiration, with an optional trade-archetype lens.
+- `get_hedge_analysis` — ranked downside-protection structures (collars, puts, spreads) for a share position you specify.
+
+**Screeners & signals**
+- `run_screener` — run a named screener at defaults (bullish-pullback, momentum, volatility-squeeze, small-cap, volatility-surge, gamma-scan, csp-wheel, leaps, leveraged, daily-cuts).
+- `get_bounce_signals` — Bounce Finder: recently detected oversold-bounce candidates with scoring.
+- `get_bounce_score` — on-demand oversold-bounce composite score for one ticker.
+- `get_premarket_gappers` — Warrior "5 pillars" momentum gap scan (gapping hard, has-news, low float, $1–$100, high premarket relative volume), runnable on the pre-market or after-hours tape. `rvol` is DERIVED — premarket volume ÷ 10-day average FULL-day volume, i.e. what fraction of a normal day has already traded. It is NOT TradingView's regular-session relative volume, which is meaningless before the bell. The news pillar is served as a boolean `hasNews` only; headline text, source, and article links are not redistributed.
+
+**Intelligence, events & long-term**
+- `get_politician_trades` — congressional "Power Players" most-active disclosure leaderboard.
+- `get_politician_trades_by_ticker` — every congressional disclosure trade for a single ticker.
+- `get_insider_trades` — Form 4 insider trades of $25k+ filed with the SEC over the past 90 days, market-wide or filtered to one ticker. Every row carries a `direction` (`buy`/`sell`/`other`); the `direction` param defaults to `buy`, pass `sell`, `other` or `all` for the other sides (`other` is awards, gifts and tax withholding — not trades in either direction). Every response also carries `available` — `{buy, sell, other}` counts for the whole 90-day window before the filter, so `count: 0` on a `buy` query is distinguishable from no insider activity at all.
+- `get_short_interest` — official FINRA short data for a ticker: bi-monthly short interest (days-to-cover, current short position) plus the latest daily Reg SHO short-volume ratio (short activity is squeeze/positioning context, NOT a bearish signal).
+- `get_economic_calendar` — macro events (FOMC, CPI, NFP) with consensus estimates.
+- `get_long_term_quality` — fundamental quality + dividend screener across the optionable universe.
+- `get_dividend_calendar` — upcoming ex-dividend calendar with yields and pay dates.
+- `get_ipo_scanner` — the pipeline from pre-IPO chatter to freshly-listed names.
+
+---
+
+## REST endpoint reference
+
+All paths are relative to `https://api.traderdaddy.pro/api/v1`. All require the `X-API-Key` header.
+
+### Options Flow
+- `GET /unusual-activity` — real-time unusual options activity with scoring and sentiment.
+  - Params: `timeFrame` (hour|today|yesterday|3days|week|month, default today), `type` (SWEEP|BLOCK|SPLIT|GOLDEN_SWEEP), `sentiment` (BULLISH|BEARISH|NEUTRAL), `ticker`, `minPremium` (dollars), `minScore` (0–100), `page` (default 1), `pageSize` (max 100, default 10).
+- `GET /flow/summary` — top tickers ranked by net premium and volume.
+  - Params: `days` (0=today, 1–30, default 3), `minPremium` (default 20000), `limit` (max 500, default 50), `tickers` (comma-separated).
+- Dark pool (off-exchange block flow): use the `get_dark_pool` MCP tool above — it returns window aggregates, not a per-print tape. Platform page: `/dark-pool` (Premium; 25 most liquid tracked names). No standalone REST endpoint in the public API.
+
+### Market Data
+- `GET /market-pulse` — AI-generated market sentiment narrative, updated through the session.
+- `GET /market-stats` — index put/call ratios, sentiment, market-health metrics.
+- `GET /put-call-ratios` — put/call ratios for SPY, QQQ and IWM from each one's nearest weekly expiration. Add `/:ticker` for any other symbol. `putCallRatio` and `sentiment` are both `null` when there is no call volume to divide by.
+
+### Gamma Exposure (GEX)
+- `GET /gex/market/overview` — GEX for tracked index symbols (SPX, SPY, QQQ) with flip points and walls.
+- `GET /gex/:symbol` — GEX analysis for any ticker (computed on-demand for non-tracked symbols).
+- `GET /gex/:symbol/historical` — historical GEX time series (tracked symbols only).
+- `GET /gex/:symbol/apex` — Apex Levels: proximity-weighted OI walls + net gamma scored 0–100, with the gamma-flip level. Optional `expiration` (YYYY-MM-DD).
+- `GET /gex/:symbol/apex/trend` — multi-day Apex trend, one point per trading day. Param `days` (1–90, default 30).
+- `GET /gex/:symbol/apex/history` — intraday Apex history for the current session plus previous close.
+
+### Sector Analysis
+- `GET /sectors/flow` — options flow aggregated by GICS sector ETF (net premium, sentiment, top tickers).
+- `GET /sectors/:etf/flows` — drill-down: every flow that contributed to a sector's net activity (e.g. XLK, XLF, XLE).
+
+### Signals & Scanners
+- `GET /signals` — technical breakout/continuation signals. Params: `type` (BREAKOUT|CONTINUATION), `ticker`.
+- `GET /bounce-finder` — reversal-finder signals from a 9-component composite score.
+- `GET /screeners/:id/run` — run a named screener. `id`: bullish-pullback | momentum | volatility-squeeze | small-cap | volatility-surge | gamma-scan | csp-wheel | leaps | leveraged | daily-cuts.
+
+### Earnings & Events
+- `GET /earnings` — earnings calendar with expected-move estimates. Params: `week` (true=this week), `date_from`, `date_to` (YYYY-MM-DD).
+- `GET /earnings-flow/flow` — pre-earnings unusual positioning. Params: `days`, `minFlows`.
+- `GET /economic-calendar` — macro events (FOMC, CPI, NFP) with consensus estimates.
+
+### Intelligence
+- `GET /politician-trades` — congressional STOCK Act disclosures. Params: `window` (days, default 90), `limit`.
+- `GET /insider` — Form 4 insider trades ($25k+, past 90 days), each row labelled with its side. Params: `direction` (`buy`|`sell`|`other`|`all`, default `buy` — `other` is awards, gifts and tax withholding), `ticker` (filter to one symbol), `limit` (1–200, default 100). Response includes `available: {buy, sell, other}` — pre-filter counts for the whole window, so an empty `buy` result still tells you whether the ticker had sales.
+- `GET /institutional/buys-sells` — institutional buying/selling by ticker with conviction. Params: `weeks` (1–52, default 2), `minConviction`, `limit` (1–200, default 50).
+- `GET /institutional/sector-rotation` — net institutional flow direction by sector.
+- `GET /institutional/divergences` — tickers where institutional positioning diverges from price.
+- `GET /institutional/etf-options` — ETF institutional options positioning snapshot.
+
+### Ticker Search
+- `GET /ticker/search?query=...` — symbol search by name or ticker fragment.
+- `GET /ticker/:symbol` — price, technicals, and options analytics for any symbol.
+- `GET /ticker/:symbol/fundamentals` — market cap, P/E, EPS, revenue, float, and more.
+
+### Long Term & Dividends
+- `GET /long-term/quality` — ranked Quality Score (0–100): profitability, balance-sheet safety, valuation, payout safety. Params: `minScore`, `minDivYield`, `sector`, `sort` (score|divYield|marketCap|pe), `limit` (default 100, max 500).
+- `GET /long-term/quality/:symbol` — Quality Score + full fundamental breakdown for one ticker: margins, balance-sheet safety, growth, valuation, next earnings + ex-dividend dates, company profile (`industry`, `founded`, `website`, `sharesOutstanding`), and forward-looking valuation (`forwardPE`, `enterpriseValue`, `revenueTTM`, `eps`, `epsForward`).
+- `GET /long-term/dividends` — upcoming ex-dividend calendar (ex-div date, pay date, rate, yield). Params: `from` (YYYY-MM-DD), `days` (default 60, max 365), `limit` (default 200, max 500).
+- `GET /long-term/sectors` — distinct sectors available in the quality dataset.
+
+---
+
+## Code examples
+
+### cURL
+```bash
+curl -H "X-API-Key: td_live_your_key_here" \
+  "https://api.traderdaddy.pro/api/v1/unusual-activity?minScore=85&timeFrame=today"
+```
+
+### Python
+```python
+import requests
+
+API_KEY = "td_live_your_key_here"
+BASE_URL = "https://api.traderdaddy.pro/api/v1"
+
+response = requests.get(
+    f"{BASE_URL}/unusual-activity",
+    headers={"X-API-Key": API_KEY},
+    params={"minScore": 85, "timeFrame": "today"},
+)
+
+data = response.json()
+for flow in data["data"][:5]:
+    print(f"{flow['ticker']} {flow['sentiment']} ${flow['premium']:,.0f}")
+```
+
+### JavaScript
+```javascript
+const API_KEY = "td_live_your_key_here";
+const BASE_URL = "https://api.traderdaddy.pro/api/v1";
+
+const response = await fetch(
+  `${BASE_URL}/unusual-activity?minScore=85&timeFrame=today`,
+  { headers: { "X-API-Key": API_KEY } }
+);
+
+const { data } = await response.json();
+data.slice(0, 5).forEach((flow) => {
+  console.log(`${flow.ticker} ${flow.sentiment} $${flow.premium.toLocaleString()}`);
+});
+```
+
+---
+
+## Example: wheel & dividend workflow
+
+A common goal is monitoring a wheel / cash-secured-put / DCA income strategy. With the MCP connected, you can drive it all by asking your AI assistant — no code. Under the hood these are the tools it uses:
+
+- **Find candidates to sell puts on:** `run_screener` with the `csp-wheel` screener → tickers set up for cash-secured puts.
+- **Check if premium is worth selling right now:** `get_iv_rank` on a ticker → is implied volatility rich (good to sell) or cheap?
+- **Pick a strike near a support magnet:** `get_apex_levels` → the OI/gamma "magnet" strikes and the gamma-flip level.
+- **Get a ranked structure:** `get_strategy_ideas` (or `get_edge_xray` to grade the whole chain).
+- **Long-term quality of the underlying** (you may get assigned shares): `get_long_term_quality` → is this a name you're happy to own?
+- **Dividend capture / income timing:** `get_dividend_calendar` → ex-div dates and yields; `get_long_term/dividends` via REST for a full window.
+- **Avoid event risk:** `get_earnings_flow` and `get_economic_calendar` → don't sell puts into an earnings print or an FOMC day.
+
+Example prompt to Claude once connected:
+> "Using TraderDaddy, run the csp-wheel screener, then for the top 3 names check IV rank and whether they report earnings in the next two weeks. Flag any I should avoid selling puts on right now."
+
+---
+
+## Notes & limits
+
+- **Read-only.** No trading, no order placement, no account changes — market data only.
+- **CORS is open** (any origin) because the API key is the auth. Keep your key private; anyone with it can use your quota.
+- **User-specific in-app features are not in the public API** (e.g. saving your own screener presets). The core data endpoints all work with just your key.
+- **No daily cap** beyond the per-minute limit today, but be a good citizen — cache results you re-use.
+
+## Data usage & redistribution
+
+This API serves TraderDaddy Pro's **analytics layer** — scores, levels, rankings,
+and rollups we compute. It is deliberately **not** a market-data feed, and a few
+things follow from that:
+
+- **What you get is derived.** Unusual-activity scores and tiers, GEX and apex
+  levels, conviction, sector and directional flow rollups, screener and quality
+  scores, IV rank, hedge rankings, and the edge X-ray grades. This is our own
+  work product, and your key licenses you to use it.
+- **What you won't get, by design.** Raw option chains and per-contract
+  bid/ask/greeks or per-strike IV, and third-party news article text or links.
+  We license our market data from providers (including Tradier, Alpaca, and
+  Finnhub) whose terms don't permit us to redistribute their raw rows, so we
+  serve the layer we built on top instead. `get_edge_xray` returns rich/cheap
+  and execution grades per contract rather than the quotes behind them — no
+  bid/ask/mid, no per-contract IV or greeks, no open interest or volume;
+  `get_premarket_gappers` returns a `hasNews` boolean rather than headline text.
+  If you need a raw chain or a live quote feed, license one directly from a
+  market-data vendor — that's the correct and cheaper path.
+- **The one quote you do get is the underlying's.** `GET /ticker/:symbol` and
+  `GET /ticker/:symbol/fundamentals` include vendor-sourced price and company
+  data for the symbol you asked about, so the analytics on that response have a
+  price to sit against. That is a single-symbol lookup, not a feed: it stays
+  covered by the no-resell rule below, and it is not a substitute for a
+  market-data subscription if what you need is streaming quotes.
+- **Your use is for your own application.** Per the
+  [Terms](https://www.traderdaddy.pro/terms) (§7), don't resell, sublicense, or
+  redistribute the data this API returns as a data product of your own, and
+  don't scrape the site. Building a tool, dashboard, bot, or research workflow
+  on top of it is exactly what it's for.
+- **Public-source data is exempt — but the exemption follows the SOURCE, not the
+  subject.** Short interest and short volume come straight from FINRA's own
+  published files, so those rows carry no restriction. Insider Form 4 activity
+  and congressional disclosures are a different case: the underlying filings are
+  public record and you are free to pull them yourself from SEC EDGAR or the
+  House/Senate disclosure sites, but the feeds we serve are third-party
+  compilations of those filings, so the rows you get from us stay covered by the
+  no-resell rule above.
+- **Attribution** ("Powered by TraderDaddy Pro") is appreciated but not required.
+
+Questions about a use case that doesn't fit the above — a partnership,
+white-label, or bulk arrangement — email support and ask. Some of it we can
+license; some of it isn't ours to license.
+
+## Links
+
+- Developer docs (human-readable): https://www.traderdaddy.pro/developers
+- Beginner setup walkthrough (no prior config-file experience assumed): https://www.traderdaddy.pro/learn/mcp-setup
+- Pricing: https://www.traderdaddy.pro/pricing
+- Manage API access & keys: https://www.traderdaddy.pro/settings?tab=developer
+- Support: https://www.traderdaddy.pro/support
+- Model Context Protocol (what MCP is): https://modelcontextprotocol.io

@@ -34,13 +34,35 @@ WALL_RANGE = 0.05  # only strikes within +/-5% of spot can act as a near wall
 RATE_LIMIT_CODE = -32000
 
 
+from pathlib import Path
+
+LOCAL_ENV = Path(__file__).resolve().parent / ".env"
+PARENT_ENV = Path(__file__).resolve().parent.parent / ".env.webull"
+
+
+def _get_api_key() -> str:
+    key = os.environ.get("TD_API_KEY") or os.environ.get("TDPRO_API_KEY")
+    if key:
+        return key
+    for env_path in (LOCAL_ENV, PARENT_ENV):
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    if k in ("TD_API_KEY", "TDPRO_API_KEY"):
+                        return v.strip().strip('"').strip("'")
+    return ""
+
+
 class TDProError(RuntimeError):
     pass
 
 
 class TDPro:
     def __init__(self, api_key: str | None = None) -> None:
-        self.api_key = api_key or os.environ.get("TD_API_KEY", "")
+        self.api_key = api_key or _get_api_key()
         self._cache: dict[str, tuple[float, Any]] = {}
         self._id = 0
 

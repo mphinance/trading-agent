@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "momentum-mcp"
+version = "2.0.0"
+description = "Momentum Quantitative MCP Server & Webull Trading Suite"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=3.0",
+    "tradingview-screener>=3.0",
+    "tradingview-ta>=3.3",
+    "yfinance>=0.2",
+    "pandas>=2.0",
+    "pandas-ta>=0.4",
+    "mplfinance>=0.12",
+    "matplotlib>=3.7",
+    "feedparser>=6.0",
+    "trafilatura>=2.0",
+    "scipy>=1.10",
+    "chromadb>=0.5",
+    "webull-openapi-python-sdk>=2.0.18",
+    "python-dotenv>=1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mcp_server*", "webull_openapi_mcp*"]

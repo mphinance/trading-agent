@@ -4,10 +4,15 @@ __pycache__/
 *.log.*
 webull_trade_sdk.log*
 webull_data_sdk.log*
-.env*
+.env
+.env.*
+!.env.example
 .venv/
 deploy/sidecar.env
 .pytest_cache/
+*.egg-info/
+build/
+dist/
 
 # The Webull SDK writes its 2FA token to conf/token.txt under the working
 # directory unless WEBULL_OPENAPI_TOKEN_DIR says otherwise. That is a live
