@@ -249,6 +249,11 @@ class TDPro:
             out["gamma_pocket"] = g["gammaPocket"]
         return out
 
+    def get_market_health(self) -> dict[str, Any]:
+        """Fetch composite market health score (0-7 scale)."""
+        return self.cached("get_market_health", ttl=300.0) or {}
+
+
 
 def _num(v: Any) -> float | None:
     try:
