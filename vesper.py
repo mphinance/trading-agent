@@ -30,18 +30,25 @@ Examples:
         """
     )
     
-    parser.add_argument("command", nargs="?", default="scan", choices=["scan", "analyze", "0dte", "morning"], help="Action command")
+    parser.add_argument("command", nargs="?", default="scan", choices=["scan", "analyze", "0dte", "morning", "monitor"], help="Action command")
     parser.add_argument("ticker", nargs="?", default=None, help="Target symbol for analysis")
     parser.add_argument("--playbook", default="all", choices=["all", "momentum_squeeze", "0dte_flow", "institutional_convergence"], help="Select specific strategy playbook")
     parser.add_argument("--persona", default="default", choices=["default", "traderlady"], help="Select AI voice & response persona")
     parser.add_argument("--live", action="store_true", help="Enable live Webull OpenAPI execution mode")
     parser.add_argument("--non-interactive", action="store_true", help="Run without human confirmation prompts")
+    parser.add_argument("--interval", type=float, default=15.0, help="Monitor poll interval in seconds")
+    parser.add_argument("--once", action="store_true", help="Run single monitor evaluation sweep and exit")
 
     args = parser.parse_args()
 
     if args.command == "morning":
         from vesper.morning import generate_morning_plan
         asyncio.run(generate_morning_plan())
+        sys.exit(0)
+
+    if args.command == "monitor":
+        from vesper.monitor import run_monitor_loop
+        asyncio.run(run_monitor_loop(interval_sec=args.interval, live=args.live, once=args.once))
         sys.exit(0)
 
     mode = "live" if args.live else "dry_run"

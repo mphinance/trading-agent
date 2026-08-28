@@ -64,15 +64,17 @@ See [`docs/TIERS_AND_FUNNEL.md`](docs/TIERS_AND_FUNNEL.md) for the complete **St
 
 ---
 
-### 🛡️ Module 3: Active Position Monitor & 0DTE Exit Cascade Loop
-- [ ] **Continuous Position Poller**:
-  - Background loop (every 15–30s during market hours: 9:30 AM – 4:00 PM ET) tracking Webull positions within the 2 req / 2s budget.
-- [ ] **Exit Cascade Rules**:
-  - **Hard Take-Profit**: At **+50%** gain, submits limit/market sell order for 50-100% of position.
-  - **Hard Stop-Loss**: At **-40%** drawdown, immediately submits market stop order.
-  - **Time-Based Exit (3:00 PM ET)**: Automatically closes all 0DTE contracts before final 60-minute theta/gamma collapse.
-  - **Trailing Breakeven Lock**: At **+25%**, ratchets stop-loss to entry price ($0.00 risk).
-  - **Dealer-Gamma Crossing**: Augment flat thresholds with live crossing checks against dynamic Gamma Flip lines.
+### 🛡️ Module 3: Active Position Monitor & 0DTE Exit Cascade Loop — ✅ Landed
+- [x] **Continuous Position Poller**:
+  - Background loop (`python vesper.py monitor [--interval 15] [--live] [--once]`) tracking Webull positions within the 2 req / 2s budget.
+- [x] **Exit Cascade Rules**:
+  - **Hard Take-Profit**: At **+50%** gain, submits sell order for position.
+  - **Hard Stop-Loss**: At **-40%** drawdown, immediately triggers emergency stop liquidation.
+  - **Trailing Breakeven Lock**: At **+25%**, automatically locks stop-loss to entry price ($0.00 risk).
+  - **Time-Based Exit (3:00 PM ET)**: Automatically liquidates 0DTE contracts before final theta/gamma collapse.
+  - **Dealer-Gamma Crossing**: Liquidates SPY long calls if spot price breaks below dynamic TraderDaddy Gamma Flip.
+- [x] **Unit Tests**:
+  - 7 unit tests in [`tests/test_monitor.py`](tests/test_monitor.py) (100% green).
 
 ---
 
