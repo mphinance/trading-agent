@@ -33,6 +33,7 @@ Examples:
     parser.add_argument("command", nargs="?", default="scan", choices=["scan", "analyze", "0dte"], help="Action command")
     parser.add_argument("ticker", nargs="?", default=None, help="Target symbol for analysis")
     parser.add_argument("--playbook", default="all", choices=["all", "momentum_squeeze", "0dte_flow", "institutional_convergence"], help="Select specific strategy playbook")
+    parser.add_argument("--persona", default="default", choices=["default", "traderlady"], help="Select AI voice & response persona")
     parser.add_argument("--live", action="store_true", help="Enable live Webull OpenAPI execution mode")
     parser.add_argument("--non-interactive", action="store_true", help="Run without human confirmation prompts")
 
