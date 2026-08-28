@@ -127,7 +127,8 @@ def test_apex_levels_are_carried_when_present():
 # Failure modes never raise
 # --------------------------------------------------------------------------
 
-def test_no_api_key_reports_rather_than_raising():
+def test_no_api_key_reports_rather_than_raising(monkeypatch):
+    monkeypatch.setattr(T, "_get_api_key", lambda: "")
     assert "TD_API_KEY" in T.TDPro(api_key="").levels("SPY")["error"]
 
 
