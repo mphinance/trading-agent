@@ -149,6 +149,28 @@ PRESET_STRATEGIES: dict[str, dict] = {
             {"indicator": "ema_8", "op": "crosses_below", "value": "ema_21"},
         ],
     },
+    "bounce_2_pullback": {
+        "description": "Tao of Trading Bounce 2.0 — Bullish EMA stack with pullback into Action Zone",
+        "entry": [
+            {"indicator": "ema_8", "op": ">", "value": "ema_21"},
+            {"indicator": "ema_21", "op": ">", "value": "ema_34"},
+            {"indicator": "rsi_14", "op": "<", "value": 60},
+            {"indicator": "adx_14", "op": ">", "value": 18},
+        ],
+        "exit": [
+            {"indicator": "ema_8", "op": "crosses_below", "value": "ema_21"},
+        ],
+    },
+    "vopr_vrp_harvest": {
+        "description": "VoPR™ Volatility Risk Premium mean reversion harvest",
+        "entry": [
+            {"indicator": "rsi_14", "op": "<", "value": 40},
+            {"indicator": "close", "op": "<", "value": "bb_lower"},
+        ],
+        "exit": [
+            {"indicator": "rsi_14", "op": ">", "value": 55},
+        ],
+    },
 }
 
 

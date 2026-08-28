@@ -37,12 +37,32 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
     """Applies domain playbooks to draft high-conviction order proposals."""
     logger.info("-> [PlaybooksNode] Applying strategy playbooks to candidates...")
 
+    from mcp_server.conviction import get_playbook_performance
+
     proposals: List[OrderProposal] = []
     technicals = state.get("technicals", {})
     options_audits = state.get("options_audits", {})
     regime = state.get("regime")
     account_equity = await asyncio.to_thread(fetch_live_equity) if technicals else 0.0
     audit_notes = []
+
+    # Check playbook outcome calibration history (Module 5 Phase 5)
+    selected_playbook = state.get("selected_playbook", "all")
+    calibration = get_playbook_performance(selected_playbook)
+    size_adjustment = calibration.get("adjustment", 0.0)
+    if calibration.get("resolved", 0) >= 3:
+        if size_adjustment < 0:
+            audit_notes.append(
+                f"Calibration Guard: '{selected_playbook}' win rate is {calibration['win_rate_pct']:.0f}% "
+                f"({calibration['wins']}/{calibration['resolved']}). Applying {size_adjustment:+.0%} risk scaling."
+            )
+        elif size_adjustment > 0:
+            audit_notes.append(
+                f"Calibration Boost: '{selected_playbook}' win rate is {calibration['win_rate_pct']:.0f}% "
+                f"({calibration['wins']}/{calibration['resolved']}). Full conviction validated."
+            )
+
+    calibrated_equity = max(0.0, account_equity * (1.0 + size_adjustment))
 
     for ticker, tech in technicals.items():
         opt = options_audits.get(ticker)
@@ -81,19 +101,34 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
             audit_notes.append(f"Drafted 0DTE {ticker} {side_type.upper()} Strike {strike} (Spot={spot} vs Flip={flip})")
             continue
 
-        # ── 2. MOMENTUM SQUEEZE & VCP PLAYBOOK (EQUITY) ───────────────────────
-        if tech.ema_stack == "BULLISH" or tech.rsi_14 > 50:
-            entry_price = tech.close
-            # Stop loss just below EMA 21 or 1.5 ATR
-            atr = tech.atr_14 or (entry_price * 0.03)
-            stop_loss = round(entry_price - (atr * 1.5), 2)
+        # ── 2. TAO OF TRADING BOUNCE 2.0 & MOMENTUM PULLBACK PLAYBOOK ────────
+        # Rules: Bullish EMA stack (8>21>34>55>89), ADX >= 18, price in 21 EMA
+        # Keltner Action Zone (±1.5 ATR), avoiding overbought exhaustion (RSI <= 65).
+        is_bullish_trend = (tech.ema_stack == "BULLISH") or (tech.ema_8 and tech.ema_21 and tech.ema_8 >= tech.ema_21)
+        adx_valid = (tech.adx_14 is None) or (tech.adx_14 >= 18.0)
+        
+        entry_price = tech.close
+        atr = tech.atr_14 or (entry_price * 0.03)
+        ema_21 = tech.ema_21 or entry_price
+        
+        # Action Zone: price near 21 EMA pullback zone
+        in_action_zone = (entry_price >= ema_21 - (1.5 * atr)) and (entry_price <= ema_21 + (1.5 * atr))
+        not_overbought = tech.rsi_14 <= 68.0
+
+        if is_bullish_trend and (in_action_zone or tech.rsi_14 > 45) and not_overbought and adx_valid:
+            # Stop loss 1.5 ATR below entry / 21 EMA
+            stop_loss = round(min(entry_price - (atr * 1.5), ema_21 - (atr * 1.0)), 2)
+            if stop_loss >= entry_price:
+                stop_loss = round(entry_price - (atr * 1.5), 2)
             profit_target = round(entry_price + (atr * 3.0), 2)
             
-            shares, total_cost, total_risk = RiskEnforcer.calculate_equity_size(
-                account_equity=account_equity,
+            # Volatility-Targeted Position Sizing
+            shares, total_cost, total_risk = RiskEnforcer.calculate_vol_targeted_size(
+                account_equity=calibrated_equity,
                 entry_price=entry_price,
                 stop_loss_price=stop_loss,
                 target_price=profit_target,
+                atr_14=atr,
             )
             
             if shares > 0:
@@ -109,10 +144,28 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                     profit_target=profit_target,
                     estimated_cost=total_cost,
                     max_risk=total_risk,
-                    risk_reward_ratio=2.0,
+                    risk_reward_ratio=round((profit_target - entry_price) / max(0.01, entry_price - stop_loss), 2),
                 )
                 proposals.append(prop)
-                audit_notes.append(f"Drafted Equity Buy for {ticker}: {shares} shares @ ${entry_price:.2f} (Risk=${total_risk:.2f})")
+                audit_notes.append(
+                    f"Drafted Bounce 2.0 Equity Buy for {ticker}: {shares} shares @ ${entry_price:.2f} "
+                    f"(Stop=${stop_loss:.2f}, Target=${profit_target:.2f}, Vol-Targeted Risk=${total_risk:.2f})"
+                )
+
+                # Optional OpenRouter AI Thesis Enrichment (if OPENROUTER_API_KEY configured)
+                from vesper.llm import generate_candidate_thesis, is_llm_enabled
+                if is_llm_enabled():
+                    try:
+                        thesis_res = await generate_candidate_thesis(
+                            ticker=ticker,
+                            technical_summary=tech.summary or f"Close=${entry_price}, RSI={tech.rsi_14:.1f}, EMA={tech.ema_stack}",
+                            candidate_rationale="Bounce 2.0 Action Zone Pullback",
+                            regime_posture=regime.posture if regime else "NEUTRAL",
+                        )
+                        if thesis_res and thesis_res.get("thesis"):
+                            audit_notes.append(f"AI Thesis ({thesis_res.get('source')}): {thesis_res['thesis']}")
+                    except Exception as e:
+                        logger.debug("OpenRouter thesis enrichment skipped: %s", e)
 
                 # Check if high-beta 2x leveraged vehicle exists (Module 6)
                 from vesper.leveraged import get_primary_2x

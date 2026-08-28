@@ -56,19 +56,26 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
             continue
 
         if mode == "dry_run" or state.get("human_decision") == "AUTO_DRY_RUN":
-            results.append(
-                ExecutionResult(
-                    order_proposal_id=prop.id,
-                    ticker=prop.ticker,
-                    status="DRY_RUN_SIMULATED",
-                    client_order_id=f"sim-{prop.id}",
-                    filled_quantity=prop.quantity,
-                    filled_price=prop.limit_price,
-                    fees=0.0,
-                    message=f"Simulated {prop.side} {prop.quantity} {prop.ticker} @ ${prop.limit_price:.2f}",
-                    timestamp=_now(),
-                )
+            sim_res = ExecutionResult(
+                order_proposal_id=prop.id,
+                ticker=prop.ticker,
+                status="DRY_RUN_SIMULATED",
+                client_order_id=f"sim-{prop.id}",
+                filled_quantity=prop.quantity,
+                filled_price=prop.limit_price,
+                fees=0.0,
+                message=f"Simulated {prop.side} {prop.quantity} {prop.ticker} @ ${prop.limit_price:.2f}",
+                timestamp=_now(),
             )
+            results.append(sim_res)
+
+            # Record in Paper Trading Ledger (Module 7)
+            try:
+                from vesper.paper_ledger import record_paper_fill
+                record_paper_fill(proposal=prop, result=sim_res, session_id=state.get("session_id"))
+            except Exception as e:
+                logger.warning(f"Failed to record paper fill for {prop.ticker}: {e}")
+
             audit_notes.append(
                 f"DRY RUN FILLED: {prop.side} {prop.quantity}x {prop.ticker} @ ${prop.limit_price:.2f}"
             )

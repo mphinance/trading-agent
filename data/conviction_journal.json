@@ -13,19 +13,6 @@
     "resolutions": {}
   },
   {
-    "id": "AAPL:20260828201138",
-    "ticker": "AAPL",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: sess-e96e8d9f | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 57.5 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 319.7,
-    "entry_date": "2026-08-28T20:11:38.378085+00:00",
-    "entry_ts": 1787947898,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
     "id": "SPY:20260828201150",
     "ticker": "SPY",
     "direction": "bullish",
@@ -34,19 +21,6 @@
     "signals": "RSI_neutral,EMA_NEUTRAL",
     "entry_price": 769.38,
     "entry_date": "2026-08-28T20:11:50.551001+00:00",
-    "entry_ts": 1787947910,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "SPY:20260828201150",
-    "ticker": "SPY",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: sess-aefc32d1 | Playbook: 0dte_flow | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 56.7 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 769.38,
-    "entry_date": "2026-08-28T20:11:50.551347+00:00",
     "entry_ts": 1787947910,
     "resolved": false,
     "resolutions": {}
@@ -73,32 +47,6 @@
     "signals": "RSI_neutral,EMA_NEUTRAL",
     "entry_price": 716.43,
     "entry_date": "2026-08-28T20:12:05.297890+00:00",
-    "entry_ts": 1787947925,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "SPY:20260828201205",
-    "ticker": "SPY",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: sess-20b0bbaf | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 56.7 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 769.38,
-    "entry_date": "2026-08-28T20:12:05.298361+00:00",
-    "entry_ts": 1787947925,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "QQQ:20260828201205",
-    "ticker": "QQQ",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: sess-20b0bbaf | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 51.9 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 716.43,
-    "entry_date": "2026-08-28T20:12:05.298866+00:00",
     "entry_ts": 1787947925,
     "resolved": false,
     "resolutions": {}
@@ -143,45 +91,6 @@
     "resolutions": {}
   },
   {
-    "id": "DUO:20260828201236",
-    "ticker": "DUO",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: sess-e59e12a5 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 79.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 0.96,
-    "entry_date": "2026-08-28T20:12:36.813988+00:00",
-    "entry_ts": 1787947956,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "QNRX:20260828201236",
-    "ticker": "QNRX",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: sess-e59e12a5 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 64.8 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 6.12,
-    "entry_date": "2026-08-28T20:12:36.814795+00:00",
-    "entry_ts": 1787947956,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "CYAB:20260828201236",
-    "ticker": "CYAB",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: sess-e59e12a5 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 67.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 0.45,
-    "entry_date": "2026-08-28T20:12:36.815680+00:00",
-    "entry_ts": 1787947956,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
     "id": "NVDA:20260828201652",
     "ticker": "NVDA",
     "direction": "bullish",
@@ -190,19 +99,6 @@
     "signals": "RSI_neutral,EMA_NEUTRAL",
     "entry_price": 217.55,
     "entry_date": "2026-08-28T20:16:52.422355+00:00",
-    "entry_ts": 1787948212,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "NVDA:20260828201652",
-    "ticker": "NVDA",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-3eaf3e90 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 52.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 217.55,
-    "entry_date": "2026-08-28T20:16:52.423418+00:00",
     "entry_ts": 1787948212,
     "resolved": false,
     "resolutions": {}
@@ -247,45 +143,6 @@
     "resolutions": {}
   },
   {
-    "id": "DUO:20260828201712",
-    "ticker": "DUO",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-ba670e91 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 79.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 0.96,
-    "entry_date": "2026-08-28T20:17:12.815591+00:00",
-    "entry_ts": 1787948232,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "QNRX:20260828201712",
-    "ticker": "QNRX",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-ba670e91 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 64.8 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 6.12,
-    "entry_date": "2026-08-28T20:17:12.816815+00:00",
-    "entry_ts": 1787948232,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "CYAB:20260828201712",
-    "ticker": "CYAB",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-ba670e91 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 67.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 0.45,
-    "entry_date": "2026-08-28T20:17:12.817931+00:00",
-    "entry_ts": 1787948232,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
     "id": "DUO:20260828202115",
     "ticker": "DUO",
     "direction": "bullish",
@@ -325,45 +182,6 @@
     "resolutions": {}
   },
   {
-    "id": "DUO:20260828202115",
-    "ticker": "DUO",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-2529a8f7 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 79.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 0.96,
-    "entry_date": "2026-08-28T20:21:15.835634+00:00",
-    "entry_ts": 1787948475,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "QNRX:20260828202115",
-    "ticker": "QNRX",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-2529a8f7 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 64.8 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 6.12,
-    "entry_date": "2026-08-28T20:21:15.836203+00:00",
-    "entry_ts": 1787948475,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "CYAB:20260828202115",
-    "ticker": "CYAB",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-2529a8f7 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 67.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 0.45,
-    "entry_date": "2026-08-28T20:21:15.836807+00:00",
-    "entry_ts": 1787948475,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
     "id": "TSLA:20260828202128",
     "ticker": "TSLA",
     "direction": "bullish",
@@ -377,19 +195,6 @@
     "resolutions": {}
   },
   {
-    "id": "TSLA:20260828202128",
-    "ticker": "TSLA",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-88749de7 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 50.9 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 348.75,
-    "entry_date": "2026-08-28T20:21:28.022790+00:00",
-    "entry_ts": 1787948488,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
     "id": "SPY:20260828202139",
     "ticker": "SPY",
     "direction": "bullish",
@@ -398,19 +203,6 @@
     "signals": "RSI_neutral,EMA_NEUTRAL",
     "entry_price": 769.35,
     "entry_date": "2026-08-28T20:21:39.316072+00:00",
-    "entry_ts": 1787948499,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "SPY:20260828202139",
-    "ticker": "SPY",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-b302b7ce | Playbook: 0dte_flow | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 56.7 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 769.35,
-    "entry_date": "2026-08-28T20:21:39.318528+00:00",
     "entry_ts": 1787948499,
     "resolved": false,
     "resolutions": {}
@@ -455,45 +247,6 @@
     "resolutions": {}
   },
   {
-    "id": "DUO:20260828211531",
-    "ticker": "DUO",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 79.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 0.96,
-    "entry_date": "2026-08-28T21:15:31.332185+00:00",
-    "entry_ts": 1787951731,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "QNRX:20260828211531",
-    "ticker": "QNRX",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 64.8 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 6.12,
-    "entry_date": "2026-08-28T21:15:31.333298+00:00",
-    "entry_ts": 1787951731,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "COOT:20260828211531",
-    "ticker": "COOT",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-5b99cec2 | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 54.4 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 0.46,
-    "entry_date": "2026-08-28T21:15:31.334259+00:00",
-    "entry_ts": 1787951731,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
     "id": "NVDA:20260828213115",
     "ticker": "NVDA",
     "direction": "bullish",
@@ -515,32 +268,6 @@
     "signals": "RSI_N/A,EMA_N/A",
     "entry_price": 134.37,
     "entry_date": "2026-08-28T21:31:15.669163+00:00",
-    "entry_ts": 1787952675,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "NVDA:20260828213115",
-    "ticker": "NVDA",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-ca85165a | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE | RSI: 52.3 | EMA Stack: NEUTRAL",
-    "signals": "RSI_neutral,EMA_NEUTRAL",
-    "entry_price": 217.55,
-    "entry_date": "2026-08-28T21:31:15.669740+00:00",
-    "entry_ts": 1787952675,
-    "resolved": false,
-    "resolutions": {}
-  },
-  {
-    "id": "NVDU:20260828213115",
-    "ticker": "NVDU",
-    "direction": "bullish",
-    "confidence": 4,
-    "reasoning": "Session: vesper-ca85165a | Playbook: all | Status: DRY_RUN_SIMULATED | Regime: DEFENSIVE",
-    "signals": "RSI_N/A,EMA_N/A",
-    "entry_price": 134.37,
-    "entry_date": "2026-08-28T21:31:15.670293+00:00",
     "entry_ts": 1787952675,
     "resolved": false,
     "resolutions": {}

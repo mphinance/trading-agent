@@ -20,6 +20,7 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
 
     proposals = state.get("proposals", [])
     valid_proposals: List[OrderProposal] = []
+    rejected_proposals: List[OrderProposal] = []
     audit_notes = []
 
     # One live-equity read per risk-gate pass, not per proposal — wb.py already
@@ -35,17 +36,20 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
         else:
             logger.warning(f"REJECTED by Risk Gate: {prop.id} - {err}")
             prop.rejection_reason = err
+            rejected_proposals.append(prop)
             audit_notes.append(f"REJECTED {prop.id}: {err}")
 
     audit_entry = {
         "node": "risk_gate_node",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "passed_count": len(valid_proposals),
+        "rejected_count": len(rejected_proposals),
         "notes": audit_notes,
     }
 
     return {
         "proposals": valid_proposals,
+        "rejected_proposals": rejected_proposals,
         "needs_human_approval": len(valid_proposals) > 0,
         "audit_trail": [audit_entry],
     }

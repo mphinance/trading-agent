@@ -30,7 +30,13 @@ Examples:
         """
     )
     
-    parser.add_argument("command", nargs="?", default="scan", choices=["scan", "analyze", "0dte", "morning", "monitor"], help="Action command")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="scan",
+        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper"],
+        help="Action command",
+    )
     parser.add_argument("ticker", nargs="?", default=None, help="Target symbol for analysis")
     parser.add_argument("--playbook", default="all", choices=["all", "momentum_squeeze", "0dte_flow", "institutional_convergence"], help="Select specific strategy playbook")
     parser.add_argument("--persona", default="default", choices=["default", "traderlady"], help="Select AI voice & response persona")
@@ -38,8 +44,69 @@ Examples:
     parser.add_argument("--non-interactive", action="store_true", help="Run without human confirmation prompts")
     parser.add_argument("--interval", type=float, default=15.0, help="Monitor poll interval in seconds")
     parser.add_argument("--once", action="store_true", help="Run single monitor evaluation sweep and exit")
+    parser.add_argument("--reason", default="Manual emergency halt", help="Reason for emergency halt")
+    parser.add_argument("--mark", action="store_true", help="Run live mark-to-market revaluation on paper ledger")
 
     args = parser.parse_args()
+
+    if args.command == "halt":
+        from vesper.halt import halt
+        res = halt(reason=args.reason, source="cli")
+        print(f"\n🛑 {res['message']}")
+        sys.exit(0)
+
+    if args.command == "resume":
+        from vesper.halt import resume
+        res = resume(source="cli")
+        print(f"\n✅ {res['message']}")
+        sys.exit(0)
+
+    if args.command == "status":
+        from vesper.halt import get_halt_status
+        from vesper.paper_ledger import get_paper_summary
+        hs = get_halt_status()
+        ps = get_paper_summary()
+        print("\n" + "=" * 60)
+        print("⚡ VESPER SYSTEM STATUS TELEMETRY")
+        print("=" * 60)
+        print(f"Emergency Halt: {'🛑 HALTED' if hs['is_halted'] else '✅ ACTIVE'}")
+        if hs['is_halted']:
+            print(f"  Reason: {hs['details'].get('reason')}")
+            print(f"  Halted At: {hs['details'].get('halted_at')}")
+            print(f"  Halted By: {hs['details'].get('halted_by')}")
+        print("\n📊 Paper Ledger:")
+        print(f"  Total NLV:      ${ps['total_nlv']:,.2f} ({ps['total_return_pct']:+.2f}%)")
+        print(f"  Cash Balance:   ${ps['cash']:,.2f}")
+        print(f"  Realized PnL:   ${ps['realized_pnl']:+,.2f}")
+        print(f"  Unrealized PnL: ${ps['unrealized_pnl']:+,.2f}")
+        print(f"  Open Positions: {ps['open_positions_count']}")
+        print(f"  Closed Trades:  {ps['closed_trades_count']} (Win Rate: {ps['win_rate_pct']:.1f}%)")
+        print("=" * 60)
+        sys.exit(0)
+
+    if args.command == "paper":
+        from vesper.paper_ledger import get_paper_summary, get_paper_positions, mark_to_market
+        if args.mark:
+            asyncio.run(mark_to_market())
+        ps = get_paper_summary()
+        positions = get_paper_positions()
+        print("\n" + "=" * 60)
+        print("📜 VESPER PAPER TRADING LEDGER")
+        print("=" * 60)
+        print(f"Account NLV:    ${ps['total_nlv']:,.2f} ({ps['total_return_pct']:+.2f}%)")
+        print(f"Cash:           ${ps['cash']:,.2f}")
+        print(f"Realized PnL:   ${ps['realized_pnl']:+,.2f}")
+        print(f"Unrealized PnL: ${ps['unrealized_pnl']:+,.2f}")
+        print(f"Win Rate:       {ps['win_rate_pct']:.1f}% ({ps['closed_trades_count']} closed trades)")
+        print(f"\nOpen Positions ({len(positions)}):")
+        for p in positions:
+            print(
+                f"  • {p['ticker']} ({p['side']} {p['quantity']}x @ ${p['filled_price']:.2f}) -> "
+                f"Cur: ${p.get('current_price', p['filled_price']):.2f} | "
+                f"PnL: ${p.get('unrealized_pnl', 0.0):+,.2f} ({p.get('unrealized_pnl_pct', 0.0):+.1f}%)"
+            )
+        print("=" * 60)
+        sys.exit(0)
 
     if args.command == "morning":
         from vesper.morning import generate_morning_plan

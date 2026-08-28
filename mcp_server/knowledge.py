@@ -48,6 +48,24 @@ def _get_chroma() -> chromadb.PersistentClient:
     return _chroma_client
 
 
+import math
+
+def _deterministic_embedding(text: str, dim: int = 768) -> list[float]:
+    """Generates a deterministic normalized unit vector for offline/testing use."""
+    vec = [0.0] * dim
+    words = text.lower().split()
+    if not words:
+        words = ["empty"]
+    for i, word in enumerate(words):
+        h = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16)
+        idx = h % dim
+        vec[idx] += 1.0 / (1.0 + (i * 0.1))
+    norm = math.sqrt(sum(x * x for x in vec))
+    if norm > 0:
+        vec = [x / norm for x in vec]
+    return vec
+
+
 def _get_genai():
     global _genai_client
     if _genai_client is None:
@@ -57,35 +75,42 @@ def _get_genai():
 
 
 def _embed_texts(texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
-    """Embed texts using Gemini embedding API. Handles batching."""
-    from google.genai import types
+    """Embed texts using Gemini embedding API. Handles batching with robust offline fallback."""
+    if not GEMINI_API_KEY:
+        return [_deterministic_embedding(t) for t in texts]
 
-    client = _get_genai()
-    all_embeddings = []
+    try:
+        from google.genai import types
 
-    for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
-        batch = texts[i:i + EMBEDDING_BATCH_SIZE]
-        try:
-            result = client.models.embed_content(
-                model=EMBEDDING_MODEL,
-                contents=batch,
-                config=types.EmbedContentConfig(
-                    task_type=task_type,
-                    output_dimensionality=768,
-                ),
-            )
-            all_embeddings.extend([e.values for e in result.embeddings])
-        except Exception as e:
-            logger.warning("Embedding error (batch %d): %s", i, e)
-            all_embeddings.extend([[0.0] * 768] * len(batch))
+        client = _get_genai()
+        all_embeddings = []
 
-    return all_embeddings
+        for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+            batch = texts[i:i + EMBEDDING_BATCH_SIZE]
+            try:
+                result = client.models.embed_content(
+                    model=EMBEDDING_MODEL,
+                    contents=batch,
+                    config=types.EmbedContentConfig(
+                        task_type=task_type,
+                        output_dimensionality=768,
+                    ),
+                )
+                all_embeddings.extend([e.values for e in result.embeddings])
+            except Exception as e:
+                logger.warning("Embedding error (batch %d): %s, using fallback", i, e)
+                all_embeddings.extend([_deterministic_embedding(t) for t in batch])
+
+        return all_embeddings
+    except Exception as e:
+        logger.warning("Embedding client failure (%s), using fallback", e)
+        return [_deterministic_embedding(t) for t in texts]
 
 
 def _embed_query(text: str) -> list[float]:
     """Embed a single query text."""
     results = _embed_texts([text], task_type="RETRIEVAL_QUERY")
-    return results[0] if results else [0.0] * 768
+    return results[0] if results else _deterministic_embedding(text)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +149,145 @@ def ingest_knowledge(
         )
     except Exception as e:
         logger.warning("Knowledge ingest error for %s: %s", source, e)
+
+
+# ---------------------------------------------------------------------------
+# Trade Memory Collection (Module 5 Semantic Recall)
+# ---------------------------------------------------------------------------
+
+def _get_trade_memory_collection() -> chromadb.Collection:
+    return _get_chroma().get_or_create_collection(
+        name="trade_memory",
+        metadata={"hnsw:space": "cosine"},
+    )
+
+
+def ingest_trade_memory(entry: dict) -> None:
+    """Ingest a conviction journal entry or trade outcome into the ChromaDB trade_memory collection."""
+    try:
+        collection = _get_trade_memory_collection()
+        chunk_id = str(entry.get("id"))
+        ticker = str(entry.get("ticker", "")).upper()
+        direction = str(entry.get("direction", "")).lower()
+        origin = str(entry.get("origin", "EXECUTED"))
+        playbook = str(entry.get("playbook") or "N/A")
+        regime_posture = str(entry.get("regime_posture") or "N/A")
+        session_id = str(entry.get("session_id") or "N/A")
+        reasoning = str(entry.get("reasoning") or f"{direction} thesis on {ticker}")
+
+        # Derive best resolution status
+        resolutions = entry.get("resolutions", {})
+        result = "PENDING"
+        pct_move = 0.0
+        for h in ["5d", "1d", "10d"]:
+            if h in resolutions:
+                result = str(resolutions[h].get("result", "PENDING"))
+                pct_move = float(resolutions[h].get("pct_move", 0.0))
+                break
+
+        doc_text = (
+            f"Ticker: {ticker} | Direction: {direction} | Playbook: {playbook} | "
+            f"Regime: {regime_posture} | Origin: {origin} | Result: {result} | Thesis: {reasoning}"
+        )
+        embedding = _embed_texts([doc_text])[0]
+
+        metadata = {
+            "ticker": ticker,
+            "direction": direction,
+            "origin": origin,
+            "playbook": playbook,
+            "regime_posture": regime_posture,
+            "session_id": session_id,
+            "confidence": int(entry.get("confidence", 3)),
+            "entry_price": float(entry.get("entry_price", 0.0)),
+            "entry_date": str(entry.get("entry_date", "")),
+            "resolved": bool(entry.get("resolved", False)),
+            "result": result,
+            "pct_move": pct_move,
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        collection.upsert(
+            ids=[chunk_id],
+            embeddings=[embedding],
+            documents=[doc_text],
+            metadatas=[metadata],
+        )
+    except Exception as e:
+        logger.warning("Trade memory ingest error for %s: %s", entry.get("ticker"), e)
+
+
+async def recall_similar_setups(
+    query_thesis: str,
+    top_k: int = 5,
+    ticker: Optional[str] = None,
+    playbook: Optional[str] = None,
+    origin: Optional[str] = None,
+) -> list[dict]:
+    """Recall similar historical setups and their outcomes from trade memory.
+
+    Args:
+        query_thesis: Description or signals of the setup being considered.
+        top_k: Number of historical setups to recall.
+        ticker: Optional filter for a specific ticker.
+        playbook: Optional filter for a specific playbook.
+        origin: Optional filter for lifecycle origin (e.g. 'EXECUTED', 'REJECTED_BY_RISK_GATE').
+
+    Returns:
+        List of similar past setups with similarity score, outcome results, and thesis.
+    """
+    try:
+        collection = _get_trade_memory_collection()
+        if collection.count() == 0:
+            return []
+
+        conditions = []
+        if ticker:
+            conditions.append({"ticker": ticker.upper()})
+        if playbook:
+            conditions.append({"playbook": playbook})
+        if origin:
+            conditions.append({"origin": origin})
+
+        if len(conditions) == 1:
+            where_filter = conditions[0]
+        elif len(conditions) > 1:
+            where_filter = {"$and": conditions}
+        else:
+            where_filter = None
+
+        query_embedding = _embed_query(query_thesis)
+
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(top_k, collection.count()),
+            where=where_filter,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        output = []
+        if results["ids"] and results["ids"][0]:
+            for i, doc_id in enumerate(results["ids"][0]):
+                score = 1.0 - results["distances"][0][i]
+                meta = results["metadatas"][0][i]
+                output.append({
+                    "id": doc_id,
+                    "ticker": meta.get("ticker"),
+                    "direction": meta.get("direction"),
+                    "playbook": meta.get("playbook"),
+                    "regime_posture": meta.get("regime_posture"),
+                    "origin": meta.get("origin"),
+                    "result": meta.get("result"),
+                    "pct_move": meta.get("pct_move"),
+                    "resolved": meta.get("resolved"),
+                    "entry_date": meta.get("entry_date"),
+                    "similarity": round(max(0.0, score), 3),
+                    "document": results["documents"][0][i],
+                })
+        return output
+    except Exception as e:
+        logger.warning("Trade memory recall error: %s", e)
+        return []
 
 
 # ---------------------------------------------------------------------------

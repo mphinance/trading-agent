@@ -14,6 +14,8 @@ class RiskEnforcer:
     DEFAULT_MAX_POSITION_PCT = 0.15   # 15% max position size of account
     MAX_CONTRACTS_0DTE = 5            # Small account hard limit for 0DTE
     MIN_RISK_REWARD_RATIO = 1.5       # Minimum 1:1.5 Risk:Reward
+    TARGET_ANNUAL_VOLATILITY = 0.15   # 15% target portfolio volatility
+    TRADING_DAYS_PER_YEAR = 252
     
     # 0DTE IFTTT Rules
     STOP_LOSS_0DTE_PCT = 0.40         # -40% hard stop
@@ -57,6 +59,43 @@ class RiskEnforcer:
         total_risk = round(final_shares * risk_per_share, 2)
         
         return final_shares, total_cost, total_risk
+
+    @classmethod
+    def calculate_vol_targeted_size(
+        cls,
+        account_equity: float,
+        entry_price: float,
+        stop_loss_price: float,
+        target_price: float,
+        atr_14: Optional[float] = None,
+        target_vol_annual: float = TARGET_ANNUAL_VOLATILITY,
+    ) -> Tuple[int, float, float]:
+        """Calculate volatility-targeted position sizing based on realized ATR.
+
+        Formula:
+            daily_target_vol = target_vol_annual / sqrt(252)
+            realized_daily_vol = (atr_14 / entry_price) if atr_14 else 0.02
+            vol_scalar = clip(daily_target_vol / realized_daily_vol, 0.4, 1.6)
+            effective_risk_pct = DEFAULT_MAX_RISK_PCT * vol_scalar
+
+        Returns:
+            (shares, total_cost, max_risk_amount)
+        """
+        if entry_price <= 0 or stop_loss_price >= entry_price:
+            return 0, 0.0, 0.0
+
+        daily_target_vol = target_vol_annual / math.sqrt(cls.TRADING_DAYS_PER_YEAR)
+        realized_daily_vol = (atr_14 / entry_price) if (atr_14 and atr_14 > 0) else 0.02
+        vol_scalar = max(0.4, min(1.6, daily_target_vol / max(0.005, realized_daily_vol)))
+
+        effective_risk_pct = cls.DEFAULT_MAX_RISK_PCT * vol_scalar
+        return cls.calculate_equity_size(
+            account_equity=account_equity,
+            entry_price=entry_price,
+            stop_loss_price=stop_loss_price,
+            target_price=target_price,
+            max_risk_pct=effective_risk_pct,
+        )
 
     @classmethod
     def validate_proposal(cls, proposal: OrderProposal, account_equity: float = 10000.0) -> Tuple[bool, Optional[str]]:

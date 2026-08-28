@@ -15,9 +15,10 @@ import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -40,26 +41,64 @@ MIN_AGE_HOURS = 20  # ~1 trading day
 
 
 # ---------------------------------------------------------------------------
-# Journal I/O
+# Journal I/O & Deduplication
 # ---------------------------------------------------------------------------
 
+def deduplicate_journal_entries(entries: list[dict]) -> list[dict]:
+    """Deduplicate journal entries preserving chronological order.
+
+    An entry is considered duplicate if its exact ID or its semantic tuple
+    (ticker, entry_date, session_id, reasoning) has already been seen.
+    """
+    seen_ids = set()
+    seen_payloads = set()
+    deduped = []
+
+    for entry in entries:
+        eid = entry.get("id")
+        ticker = entry.get("ticker")
+        entry_date = entry.get("entry_date")
+        reasoning = entry.get("reasoning")
+        session_id = entry.get("session_id")
+
+        payload_key = (ticker, entry_date, session_id, reasoning)
+
+        if eid and eid in seen_ids:
+            continue
+        if payload_key in seen_payloads:
+            continue
+
+        if eid:
+            seen_ids.add(eid)
+        seen_payloads.add(payload_key)
+        deduped.append(entry)
+
+    return deduped
+
+
 def _load_journal() -> list[dict]:
-    """Load the conviction journal from disk."""
+    """Load the conviction journal from disk with automatic deduplication."""
     if not _JOURNAL_PATH.exists():
         return []
     try:
         with open(_JOURNAL_PATH) as f:
-            return json.load(f)
+            data = json.load(f)
+            if isinstance(data, list):
+                return deduplicate_journal_entries(data)
+            return []
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to load conviction journal: %s", e)
         return []
 
 
 def _save_journal(entries: list[dict]) -> None:
-    """Write the conviction journal to disk."""
+    """Write the conviction journal to disk atomically."""
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with open(_JOURNAL_PATH, "w") as f:
-        json.dump(entries, f, indent=2, default=str)
+    deduped = deduplicate_journal_entries(entries)
+    tmp_path = _JOURNAL_PATH.with_suffix(".tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(deduped, f, indent=2, default=str)
+    os.replace(tmp_path, _JOURNAL_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -72,18 +111,34 @@ async def log_conviction(
     confidence: int,
     reasoning: str,
     signals: str = "",
+    origin: str = "EXECUTED",
+    playbook: Optional[str] = None,
+    regime_posture: Optional[str] = None,
+    session_id: Optional[str] = None,
+    not_taken_reason: Optional[str] = None,
+    target_price: Optional[float] = None,
+    stop_loss: Optional[float] = None,
+    entry_price_override: Optional[float] = None,
 ) -> dict[str, Any]:
     """
     Log a directional conviction for a ticker.
 
-    Called by Sam (as a tool) when she gives a directional opinion.
+    Called by Sam or Vesper's reflection node when a thesis is formed.
 
     Args:
         ticker: Stock symbol (e.g. "NVDA")
         direction: "bullish", "bearish", or "neutral"
         confidence: 1-5 scale (1=speculative, 3=moderate, 5=slam dunk)
         reasoning: Key signals/logic driving the call
-        signals: Comma-separated list of signal types (e.g. "RSI_oversold,EMA_bullish,flow_positive")
+        signals: Comma-separated list of signal types (e.g. "RSI_oversold,EMA_bullish")
+        origin: "EXECUTED", "REJECTED_BY_RISK_GATE", "REJECTED_BY_USER", "NOT_PROPOSED"
+        playbook: Active strategy playbook (e.g. "momentum_squeeze", "0dte_flow")
+        regime_posture: Market regime posture (e.g. "BULLISH", "DEFENSIVE")
+        session_id: LangGraph execution session ID
+        not_taken_reason: Explanation if proposal was rejected/blocked
+        target_price: Expected profit target price
+        stop_loss: Planned invalidation price
+        entry_price_override: Optional pre-fetched live price or fill price
 
     Returns:
         Confirmation dict with entry details.
@@ -95,15 +150,21 @@ async def log_conviction(
     if direction not in ("bullish", "bearish", "neutral"):
         return {"error": f"Invalid direction '{direction}'. Use bullish/bearish/neutral."}
 
-    # Fetch current price
-    entry_price = await _fetch_price(ticker)
+    # Use price override if valid, else fetch live quote
+    if entry_price_override is not None and float(entry_price_override) > 0:
+        entry_price = float(entry_price_override)
+    else:
+        entry_price = await _fetch_price(ticker)
+
     if entry_price is None:
         return {"error": f"Could not fetch current price for {ticker}. Conviction NOT logged."}
 
     now = datetime.now(timezone.utc)
+    short_uid = uuid.uuid4().hex[:6]
+    entry_id = f"{ticker}:{now.strftime('%Y%m%d%H%M%S')}_{short_uid}"
 
     entry = {
-        "id": f"{ticker}:{now.strftime('%Y%m%d%H%M%S')}",
+        "id": entry_id,
         "ticker": ticker,
         "direction": direction,
         "confidence": confidence,
@@ -112,6 +173,13 @@ async def log_conviction(
         "entry_price": round(entry_price, 2),
         "entry_date": now.isoformat(),
         "entry_ts": int(now.timestamp()),
+        "origin": origin,
+        "playbook": playbook,
+        "regime_posture": regime_posture,
+        "session_id": session_id,
+        "not_taken_reason": not_taken_reason,
+        "target_price": round(target_price, 2) if target_price is not None else None,
+        "stop_loss": round(stop_loss, 2) if stop_loss is not None else None,
         # Resolution fields (filled later)
         "resolved": False,
         "resolutions": {},  # {horizon_days: {price, pct_move, result}}
@@ -121,9 +189,16 @@ async def log_conviction(
     journal.append(entry)
     _save_journal(journal)
 
+    # Sync to ChromaDB trade_memory for semantic recall
+    try:
+        from mcp_server.knowledge import ingest_trade_memory
+        ingest_trade_memory(entry)
+    except Exception as e:
+        logger.debug("Trade memory auto-sync skipped: %s", e)
+
     logger.info(
-        "📝 Conviction logged: %s %s on %s (confidence %d) @ $%.2f",
-        direction, ticker, now.strftime("%Y-%m-%d"), confidence, entry_price,
+        "📝 Conviction logged: %s %s on %s (confidence %d, origin=%s) @ $%.2f",
+        direction, ticker, now.strftime("%Y-%m-%d"), confidence, origin, entry_price,
     )
 
     return {
@@ -133,7 +208,8 @@ async def log_conviction(
         "direction": direction,
         "confidence": confidence,
         "entry_price": entry_price,
-        "message": f"Conviction logged: {direction} {ticker} @ ${entry_price:.2f} (confidence {confidence}/5). I'll check if I was right in 1/5/10 days.",
+        "origin": origin,
+        "message": f"Conviction logged: {direction} {ticker} @ ${entry_price:.2f} (confidence {confidence}/5, origin={origin}). I'll check if I was right in 1/5/10 days.",
     }
 
 
@@ -238,10 +314,75 @@ async def resolve_convictions() -> dict[str, Any]:
 
     _save_journal(journal)
 
+    # Sync resolved entries to ChromaDB trade_memory
+    try:
+        from mcp_server.knowledge import ingest_trade_memory
+        for entry in journal:
+            if entry.get("resolutions"):
+                ingest_trade_memory(entry)
+    except Exception as e:
+        logger.debug("Trade memory auto-sync skipped: %s", e)
+
     return {
         "resolved": resolved_count,
         "errors": errors,
         "message": f"Resolved {resolved_count} horizon checks ({errors} errors).",
+    }
+
+
+def get_playbook_performance(playbook: str, days: int = 90) -> dict[str, Any]:
+    """Calculate resolved performance and win rate for a specific playbook."""
+    journal = _load_journal()
+    if not journal:
+        return {"playbook": playbook, "resolved": 0, "win_rate_pct": 0.0, "adjustment": 0.0}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    wins = 0
+    total = 0
+
+    for entry in journal:
+        if entry.get("playbook") != playbook:
+            continue
+        try:
+            entry_dt = datetime.fromisoformat(entry["entry_date"])
+            if entry_dt < cutoff:
+                continue
+        except Exception:
+            pass
+
+        resolutions = entry.get("resolutions", {})
+        # Check best resolution
+        for h in ["5d", "1d", "10d"]:
+            if h in resolutions:
+                res = resolutions[h].get("result")
+                if res == "WIN":
+                    wins += 1
+                    total += 1
+                elif res == "LOSS":
+                    total += 1
+                elif res == "PUSH":
+                    total += 1
+                break
+
+    win_rate = (wins / total * 100.0) if total > 0 else 0.0
+
+    # Calibration adjustment: +10% bonus if >65% win rate, -15% penalty if <35% win rate with >=3 samples
+    if total >= 3:
+        if win_rate >= 65.0:
+            adj = 0.10
+        elif win_rate <= 35.0:
+            adj = -0.15
+        else:
+            adj = 0.0
+    else:
+        adj = 0.0
+
+    return {
+        "playbook": playbook,
+        "resolved": total,
+        "wins": wins,
+        "win_rate_pct": round(win_rate, 1),
+        "adjustment": adj,
     }
 
 

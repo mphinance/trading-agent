@@ -86,6 +86,14 @@ class OrderProposal(BaseModel):
     approved: bool = False
     rejection_reason: Optional[str] = None
 
+    @property
+    def target_price(self) -> Optional[float]:
+        return self.profit_target
+
+    @property
+    def max_risk_usd(self) -> float:
+        return self.max_risk
+
 
 class ExecutionResult(BaseModel):
     """Execution status and fill confirmation."""
@@ -115,8 +123,9 @@ class TradingState(TypedDict):
     options_audits: Annotated[Dict[str, OptionAudit], operator.ior]
     
     # Orders & Risk
-    proposals: Annotated[List[OrderProposal], operator.add]
-    execution_results: Annotated[List[ExecutionResult], operator.add]
+    proposals: List[OrderProposal]
+    rejected_proposals: Annotated[List[OrderProposal], operator.add]
+    execution_results: List[ExecutionResult]
     
     # Human-in-the-Loop & Audit
     needs_human_approval: bool

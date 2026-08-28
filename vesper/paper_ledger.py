@@ -1,0 +1,284 @@
+"""Paper Trading Simulated Fill Ledger & Mark-to-Market Accounting.
+
+Tracks all simulated fills, open positions, daily mark-to-market valuations,
+realized/unrealized PnL, and cash balances in `data/paper_ledger.json`.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_LEDGER_PATH = _DATA_DIR / "paper_ledger.json"
+DEFAULT_STARTING_CASH = 100_000.0
+
+
+def _load_ledger() -> Dict[str, Any]:
+    if not _LEDGER_PATH.exists():
+        return {
+            "account": {
+                "initial_cash": DEFAULT_STARTING_CASH,
+                "cash": DEFAULT_STARTING_CASH,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "total_nlv": DEFAULT_STARTING_CASH,
+                "last_marked_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "fills": [],
+            "closed_trades": [],
+        }
+    try:
+        with open(_LEDGER_PATH) as f:
+            data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Ledger data is not a dict")
+            return data
+    except Exception as e:
+        logger.warning(f"Failed to load paper ledger: {e}")
+        return {
+            "account": {
+                "initial_cash": DEFAULT_STARTING_CASH,
+                "cash": DEFAULT_STARTING_CASH,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "total_nlv": DEFAULT_STARTING_CASH,
+                "last_marked_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "fills": [],
+            "closed_trades": [],
+        }
+
+
+def _save_ledger(data: Dict[str, Any]) -> None:
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = _LEDGER_PATH.with_suffix(".tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+    os.replace(tmp_path, _LEDGER_PATH)
+
+
+def record_paper_fill(
+    proposal: Any,
+    result: Any,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Record a simulated fill from executor_node into paper ledger."""
+    ledger = _load_ledger()
+    account = ledger.setdefault("account", {})
+    fills = ledger.setdefault("fills", [])
+
+    ticker = getattr(result, "ticker", getattr(proposal, "ticker", ""))
+    order_id = getattr(result, "order_proposal_id", getattr(proposal, "id", ""))
+    side = getattr(proposal, "side", "BUY").upper()
+    asset_type = getattr(proposal, "asset_type", "EQUITY").upper()
+    quantity = int(getattr(result, "filled_quantity", getattr(proposal, "quantity", 1)))
+    filled_price = float(getattr(result, "filled_price", getattr(proposal, "limit_price", 0.0)))
+    multiplier = 100.0 if asset_type == "OPTION" else 1.0
+    total_cost = round(filled_price * quantity * multiplier, 2)
+
+    now = datetime.now(timezone.utc).isoformat()
+    fill_id = f"fill-{ticker}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
+    fill_entry = {
+        "id": fill_id,
+        "order_proposal_id": order_id,
+        "session_id": session_id or "N/A",
+        "ticker": ticker,
+        "asset_type": asset_type,
+        "side": side,
+        "quantity": quantity,
+        "filled_price": filled_price,
+        "multiplier": multiplier,
+        "total_cost": total_cost,
+        "stop_loss": getattr(proposal, "stop_loss", None),
+        "profit_target": getattr(proposal, "profit_target", None),
+        "strike": getattr(proposal, "strike", None),
+        "option_type": getattr(proposal, "option_type", None),
+        "timestamp": now,
+        "status": "OPEN",
+        "current_price": filled_price,
+        "unrealized_pnl": 0.0,
+        "unrealized_pnl_pct": 0.0,
+    }
+
+    # BUY/LONG debits cash (paying for shares). SELL/SHORT (opening a short)
+    # credits cash (proceeds from selling borrowed shares) — close_paper_position's
+    # PnL math for a short assumes this credit happened here; without it, closing
+    # a short double-counts the entry proceeds into account["cash"].
+    current_cash = float(account.get("cash", DEFAULT_STARTING_CASH))
+    if side in ("BUY", "LONG"):
+        account["cash"] = round(current_cash - total_cost, 2)
+    elif side in ("SELL", "SHORT"):
+        account["cash"] = round(current_cash + total_cost, 2)
+
+    fills.append(fill_entry)
+    _save_ledger(ledger)
+
+    logger.info(
+        f"📝 [PAPER FILL] {side} {quantity}x {ticker} ({asset_type}) @ ${filled_price:.2f} (Cost: ${total_cost:,.2f})"
+    )
+    return fill_entry
+
+
+def get_paper_positions() -> List[Dict[str, Any]]:
+    """Return all currently open paper positions."""
+    ledger = _load_ledger()
+    return [f for f in ledger.get("fills", []) if f.get("status") == "OPEN"]
+
+
+def close_paper_position(
+    fill_id: str,
+    close_price: float,
+    reason: str = "EXIT",
+) -> Optional[Dict[str, Any]]:
+    """Close an open paper position and compute realized PnL."""
+    ledger = _load_ledger()
+    account = ledger.setdefault("account", {})
+    fills = ledger.setdefault("fills", [])
+    closed_trades = ledger.setdefault("closed_trades", [])
+
+    for fill in fills:
+        if fill.get("id") == fill_id and fill.get("status") == "OPEN":
+            fill["status"] = "CLOSED"
+            fill["closed_at"] = datetime.now(timezone.utc).isoformat()
+            fill["close_price"] = round(close_price, 2)
+            fill["close_reason"] = reason
+
+            qty = fill.get("quantity", 1)
+            entry_px = fill.get("filled_price", 0.0)
+            multiplier = fill.get("multiplier", 1.0)
+            side = fill.get("side", "BUY")
+
+            if side == "BUY":
+                pnl = (close_price - entry_px) * qty * multiplier
+                proceeds = close_price * qty * multiplier
+            else:
+                pnl = (entry_px - close_price) * qty * multiplier
+                proceeds = entry_px * qty * multiplier + pnl
+
+            cost = fill.get("total_cost", 1.0) or 1.0
+            pnl_pct = (pnl / cost) * 100.0
+
+            fill["realized_pnl"] = round(pnl, 2)
+            fill["realized_pnl_pct"] = round(pnl_pct, 2)
+
+            # Update account
+            current_cash = float(account.get("cash", DEFAULT_STARTING_CASH))
+            current_realized = float(account.get("realized_pnl", 0.0))
+            account["cash"] = round(current_cash + proceeds, 2)
+            account["realized_pnl"] = round(current_realized + pnl, 2)
+
+            closed_trades.append(fill)
+            _save_ledger(ledger)
+            logger.info(
+                f"💰 [PAPER EXIT] Closed {fill['ticker']} @ ${close_price:.2f} (PnL: ${pnl:+,.2f} / {pnl_pct:+.1f}%)"
+            )
+            return fill
+    return None
+
+
+async def mark_to_market(live_quotes: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    """Recalculate open position valuations and mark-to-market account NLV."""
+    ledger = _load_ledger()
+    account = ledger.setdefault("account", {})
+    fills = ledger.setdefault("fills", [])
+
+    total_market_value = 0.0
+    total_unrealized = 0.0
+
+    for fill in fills:
+        if fill.get("status") != "OPEN":
+            continue
+
+        ticker = fill.get("ticker", "")
+        qty = fill.get("quantity", 1)
+        entry_px = fill.get("filled_price", 0.0)
+        multiplier = fill.get("multiplier", 1.0)
+        side = fill.get("side", "BUY")
+
+        # Resolve price
+        current_px = None
+        if live_quotes and ticker in live_quotes:
+            current_px = live_quotes[ticker]
+        else:
+            try:
+                from mcp_server.data import get_live_price
+                current_px = await get_live_price(ticker)
+            except Exception:
+                current_px = entry_px
+
+        if current_px is None or current_px <= 0:
+            current_px = entry_px
+
+        if side == "BUY":
+            pos_unrealized = (current_px - entry_px) * qty * multiplier
+            pos_value = current_px * qty * multiplier
+        else:
+            pos_unrealized = (entry_px - current_px) * qty * multiplier
+            pos_value = (entry_px * qty * multiplier) + pos_unrealized
+
+        cost = fill.get("total_cost", 1.0) or 1.0
+        pos_pnl_pct = (pos_unrealized / cost) * 100.0
+
+        fill["current_price"] = round(current_px, 2)
+        fill["unrealized_pnl"] = round(pos_unrealized, 2)
+        fill["unrealized_pnl_pct"] = round(pos_pnl_pct, 2)
+
+        total_market_value += pos_value
+        total_unrealized += pos_unrealized
+
+    cash = float(account.get("cash", DEFAULT_STARTING_CASH))
+    total_nlv = cash + total_market_value
+
+    account["unrealized_pnl"] = round(total_unrealized, 2)
+    account["total_nlv"] = round(total_nlv, 2)
+    account["last_marked_at"] = datetime.now(timezone.utc).isoformat()
+
+    _save_ledger(ledger)
+
+    return {
+        "cash": round(cash, 2),
+        "market_value": round(total_market_value, 2),
+        "unrealized_pnl": round(total_unrealized, 2),
+        "realized_pnl": float(account.get("realized_pnl", 0.0)),
+        "total_nlv": round(total_nlv, 2),
+        "open_positions_count": sum(1 for f in fills if f.get("status") == "OPEN"),
+        "last_marked_at": account["last_marked_at"],
+    }
+
+
+def get_paper_summary() -> Dict[str, Any]:
+    """Return high-level summary of paper trading performance."""
+    ledger = _load_ledger()
+    account = ledger.get("account", {})
+    fills = ledger.get("fills", [])
+    closed = ledger.get("closed_trades", [])
+
+    open_fills = [f for f in fills if f.get("status") == "OPEN"]
+    init_cash = float(account.get("initial_cash", DEFAULT_STARTING_CASH))
+    total_nlv = float(account.get("total_nlv", init_cash))
+    total_return_pct = ((total_nlv - init_cash) / init_cash) * 100.0 if init_cash > 0 else 0.0
+
+    wins = sum(1 for c in closed if (c.get("realized_pnl") or 0) > 0)
+    win_rate = (wins / len(closed) * 100.0) if closed else 0.0
+
+    return {
+        "initial_cash": init_cash,
+        "cash": float(account.get("cash", init_cash)),
+        "total_nlv": total_nlv,
+        "total_return_pct": round(total_return_pct, 2),
+        "realized_pnl": float(account.get("realized_pnl", 0.0)),
+        "unrealized_pnl": float(account.get("unrealized_pnl", 0.0)),
+        "open_positions_count": len(open_fills),
+        "closed_trades_count": len(closed),
+        "win_rate_pct": round(win_rate, 1),
+        "last_marked_at": account.get("last_marked_at"),
+    }

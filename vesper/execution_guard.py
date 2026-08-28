@@ -113,6 +113,14 @@ class ExecutionGuard:
         config: dict,
         live_buying_power: Optional[float],
     ) -> None:
+        from vesper.halt import is_halted
+        halted, halt_info = is_halted()
+        if halted and halt_info:
+            raise TradingDisabled(
+                f"Vesper is HALTED via emergency switch: '{halt_info.get('reason')}' "
+                f"(triggered by {halt_info.get('halted_by')} at {halt_info.get('halted_at')})"
+            )
+
         if not config["trading_enabled"]:
             raise TradingDisabled(
                 "Vesper live trading is disabled (VESPER_TRADING is not set to 1). "

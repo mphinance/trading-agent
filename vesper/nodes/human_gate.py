@@ -25,16 +25,31 @@ async def human_gate_node(state: TradingState) -> Dict[str, Any]:
             }]
         }
 
-    logger.info(f"-> [HumanGateNode] {len(proposals)} proposal(s) awaiting approval.")
-    
+    # Register in ApprovalRegistry for inbound webhook / bot resolution
+    from vesper.bot.inbound import approval_registry
+    session_id = state.get("session_id", "vesper-session")
+    for p in proposals:
+        approval_registry.register_pending(
+            proposal_id=p.id,
+            session_id=session_id,
+            details={"ticker": p.ticker, "side": p.side, "limit_price": p.limit_price, "quantity": p.quantity},
+        )
+
     # Broadcast to configured channels (Telegram, Discord, Webhooks)
     from vesper.bot.manager import channel_manager
     if channel_manager.active_channels:
         for p in proposals:
             await channel_manager.broadcast_proposal(p)
 
-    # Check if human decision already provided (e.g. via CLI or resume)
+    # Check if human decision already provided (e.g. via CLI, inbound callback, or resume)
     decision = state.get("human_decision")
+    if not decision:
+        # Check if any proposal was already resolved via inbound webhook/bot
+        for p in proposals:
+            inbound_dec = approval_registry.get_decision(p.id)
+            if inbound_dec:
+                decision = inbound_dec.get("decision")
+                break
     if not decision:
         # Generate summary payload for human inspection
         summary_cards = []

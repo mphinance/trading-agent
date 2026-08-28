@@ -19,3 +19,8 @@ dist/
 # credential — never let it near a commit.
 conf/
 token.txt
+
+# Generated/regenerable artifacts, not source — rebuilds from data/*.db and
+# knowledge sources; committing the binary DB/PNGs just bloats history.
+data/chromadb/
+charts/

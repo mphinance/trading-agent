@@ -41,3 +41,10 @@ httpx
 # as a QR so the topic never has to be typed, pasted into a chat, or read off a
 # stream. Pure python, no compiler. Without it --qr prints the URL instead.
 qrcode
+
+# Vesper LangGraph Quant Agent & Outcome Memory
+langgraph
+pydantic>=2.0
+python-dotenv>=1.0
+typing_extensions>=4.0
+chromadb>=0.5
