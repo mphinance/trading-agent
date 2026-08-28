@@ -2,6 +2,8 @@
 
 This document outlines the planned expansion of execution routes, market intelligence data streams, and autonomous features for **Vesper**.
 
+See [`docs/TIERS_AND_FUNNEL.md`](docs/TIERS_AND_FUNNEL.md) for the complete **Starter (Dealer-HUD)** vs. **Pro (TDPro MCP + Vesper)** ecosystem architecture.
+
 ---
 
 ## 🔌 Broker Integration Matrix
