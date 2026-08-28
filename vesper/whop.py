@@ -27,6 +27,16 @@ class WhopClient:
             timeout=10.0,
         )
 
+    def close(self) -> None:
+        """Release the underlying HTTP connection pool."""
+        self._client.close()
+
+    def __enter__(self) -> "WhopClient":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
     @property
     def configured(self) -> bool:
         return bool(self.api_key and not self.api_key.startswith("your_"))

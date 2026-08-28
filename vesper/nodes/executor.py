@@ -54,16 +54,16 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
             if broker_target == "public":
                 try:
                     from vesper.brokers.public_broker import PublicBrokerClient
-                    pub = PublicBrokerClient()
-                    if not pub.configured:
-                        raise RuntimeError("Public.com API key (PUBLIC_API_SECRET_KEY) not configured in .env")
-                    order_res = pub.place_order(
-                        symbol=prop.ticker,
-                        side=prop.side,
-                        quantity=prop.quantity,
-                        order_type=prop.order_type,
-                        limit_price=prop.limit_price,
-                    )
+                    with PublicBrokerClient() as pub:
+                        if not pub.configured:
+                            raise RuntimeError("Public.com API key (PUBLIC_API_SECRET_KEY) not configured in .env")
+                        order_res = pub.place_order(
+                            symbol=prop.ticker,
+                            side=prop.side,
+                            quantity=prop.quantity,
+                            order_type=prop.order_type,
+                            limit_price=prop.limit_price,
+                        )
                     res = ExecutionResult(
                         order_proposal_id=prop.id,
                         ticker=prop.ticker,
@@ -107,9 +107,6 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
                     if not account_id and accounts:
                         account_id = accounts[0].get("account_id")
 
-                    logger.info(f"Submitting live order to Webull account {account_id}...")
-                    
-                    # Live order placement
                     order_payload = {
                         "account_id": account_id,
                         "symbol": prop.ticker,
@@ -119,22 +116,33 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
                         "quantity": prop.quantity,
                         "time_in_force": "DAY",
                     }
-                    
-                    # For safety in test/dev, preview first
+
+                    # NOTE: this intentionally previews only and does not call
+                    # place_order. The notional cap / confirm handshake / kill
+                    # switch that used to guard live Webull orders (orders.py)
+                    # were removed in the sidecar->Vesper migration and have not
+                    # been rebuilt (see ROADMAP.md Phase 0). Reporting a preview
+                    # as "SUBMITTED" would be a false positive, so this branch is
+                    # blocked until guards land rather than silently going live.
                     preview_res = wb.trade.order_v2.preview_order(order_payload)
-                    
+                    logger.warning(
+                        f"Webull live execution is blocked pending guardrails (see ROADMAP.md Phase 0); "
+                        f"order for {prop.id} was only previewed, not placed."
+                    )
+
                     res = ExecutionResult(
                         order_proposal_id=prop.id,
                         ticker=prop.ticker,
-                        status="SUBMITTED",
+                        status="BLOCKED_PENDING_GUARDRAILS",
                         client_order_id=f"wb-{prop.id}",
-                        filled_quantity=prop.quantity,
-                        filled_price=prop.limit_price,
-                        message=f"Order submitted to Webull: {preview_res.get('data', 'OK')}",
+                        message=(
+                            f"Webull order NOT placed: live execution guardrails are not yet "
+                            f"rebuilt (ROADMAP.md Phase 0). Preview only: {preview_res.get('data', 'OK')}"
+                        ),
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     )
                     results.append(res)
-                    audit_notes.append(f"LIVE SUBMITTED: {prop.side} {prop.quantity}x {prop.ticker} @ ${prop.limit_price:.2f}")
+                    audit_notes.append(f"BLOCKED (guardrails missing): {prop.side} {prop.quantity}x {prop.ticker} @ ${prop.limit_price:.2f} — previewed only")
                 except Exception as e:
                     logger.error(f"Live execution failed for {prop.id}: {e}")
                     res = ExecutionResult(

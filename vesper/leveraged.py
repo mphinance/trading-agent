@@ -22,6 +22,7 @@ def get_leveraged_etfs(underlying: str) -> List[Dict[str, str]]:
         return []
 
     ticker = underlying.strip().upper()
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -30,13 +31,15 @@ def get_leveraged_etfs(underlying: str) -> List[Dict[str, str]]:
             (ticker,),
         )
         rows = cursor.fetchall()
-        conn.close()
         return [
             {"etf_ticker": r[0], "provider": r[1], "company_name": r[2]}
             for r in rows
         ]
     except Exception:
         return []
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def get_primary_2x(underlying: str) -> Optional[str]:

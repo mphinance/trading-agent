@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -10,6 +11,23 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+
+# Skill folder names must be a plain slug: lowercase/uppercase letters, digits,
+# hyphens and underscores only. This blocks path traversal ("../../etc"),
+# absolute paths ("/etc/passwd"), and embedded separators -- `name` is agent
+# generated (see module docstring), so it cannot be trusted to stay inside
+# SKILLS_DIR on its own.
+_SAFE_SKILL_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_skill_name(name: str) -> Optional[str]:
+    """Return an error message if `name` is not a safe skill-directory slug, else None."""
+    if not name or not _SAFE_SKILL_NAME.match(name):
+        return (
+            f"Invalid skill name '{name}': must be a non-empty slug containing only "
+            "letters, digits, hyphens and underscores (no path separators or '..')."
+        )
+    return None
 
 
 def create_new_skill(
@@ -26,9 +44,14 @@ def create_new_skill(
         content_markdown: Full instruction markdown
         references: Optional dict of filename -> content to place in references/
     """
+    err = _validate_skill_name(name)
+    if err:
+        logger.error(err)
+        return {"status": "error", "message": err}
+
     skill_dir = SKILLS_DIR / name
     skill_dir.mkdir(parents=True, exist_ok=True)
-    
+
     skill_md = skill_dir / "SKILL.md"
     
     # Formulate YAML frontmatter conforming to Agent Skills standard
@@ -61,6 +84,11 @@ def evolve_skill(
     new_findings: str,
 ) -> Dict[str, Any]:
     """Append post-trade lessons and parameter calibration to a skill's references."""
+    err = _validate_skill_name(name)
+    if err:
+        logger.error(err)
+        return {"status": "error", "message": err}
+
     skill_dir = SKILLS_DIR / name
     if not skill_dir.exists():
         return {"status": "error", "message": f"Skill '{name}' not found."}

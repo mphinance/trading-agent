@@ -32,6 +32,16 @@ class PublicBrokerClient:
             timeout=15.0,
         )
 
+    def close(self) -> None:
+        """Release the underlying HTTP connection pool."""
+        self._client.close()
+
+    def __enter__(self) -> "PublicBrokerClient":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
     @property
     def configured(self) -> bool:
         """Returns True if the API key is present."""
