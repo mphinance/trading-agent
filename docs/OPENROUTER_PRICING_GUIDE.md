@@ -30,6 +30,38 @@ Live comparison pulled directly from `https://openrouter.ai/api/v1/models` to gu
 
 ---
 
+## ⚙️ Setup
+
+`vesper/llm.py` is the integration point — `generate_candidate_thesis()` (used
+today, in `playbooks_node`, to attach a narrative/confidence to an
+already-fully-constructed proposal — it cannot change quantity, price, or
+side) and `audit_proposal_risk()` (written, not yet called from anywhere).
+Both degrade to a deterministic fallback with no exception raised if no key
+is configured — this is optional enrichment, never a dependency for Vesper to
+run.
+
+Add to `.env`:
+```bash
+OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+OPENROUTER_MODEL=deepseek/deepseek-v4-flash  # optional, this is already the default
+```
+
+```python
+from vesper.llm import generate_candidate_thesis, is_llm_enabled
+
+if is_llm_enabled():
+    thesis = await generate_candidate_thesis(
+        ticker="NVDA",
+        technical_summary="RSI=52, EMA stack bullish, Action Zone pullback",
+        candidate_rationale="Tao of Trading Bounce 2.0",
+        regime_posture="BULLISH",
+    )
+```
+
+Verify: `.venv/bin/python -m pytest tests/test_llm_openrouter.py -q`
+
+---
+
 ## 🔌 Context7 MCP Integration
 
 **Context7** (`@upstash/context7-mcp`) has been added to our MCP configurations across Antigravity, Claude Code, and Claude Desktop:

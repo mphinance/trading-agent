@@ -43,19 +43,32 @@ for the Starter (Dealer-HUD) vs. Pro (TDPro MCP + Vesper) ecosystem split.
 
 ## 🚧 Known Gaps (not yet a Module, but tracked)
 
-- **Vesper has no LLM reasoning layer anywhere.** Grepped every file in
-  `vesper/nodes/` for OpenAI/Anthropic/OpenRouter/`claude_agent_sdk` —
-  nothing. `playbooks_node`, `analyst_node`, `regime_node`, `scanner_node`
-  are all deterministic Python over TraderDaddy/TickerTrace/technicals data.
-  This is worth stating plainly: **the entire reason this is a LangGraph app
-  instead of a script is to be an agent, and right now nothing in it actually
-  reasons with a model.** See "LLM layer + voice" below for the concrete plan
-  once this is ready to build (not yet — notes only, nothing installed).
-- **Callback receiver for the Telegram/Discord Approve button — landed.**
-  `vesper/bot/inbound.py`'s `approval_registry` + `human_gate_node` reading
-  `approval_registry.get_decision(p.id)` before falling through to
-  `interrupt()`. Verified it resumes the graph's normal decision flow rather
-  than calling `executor_node`/a broker directly — the guard is intact.
+- **LLM reasoning: half landed.** `vesper/llm.py` (OpenRouter,
+  `deepseek/deepseek-v4-flash` default) is wired into `playbooks_node` via
+  `generate_candidate_thesis()` — but it only appends a narrative string to
+  `audit_notes` *after* the proposal (quantity/price/side) is already fully
+  constructed, so it cannot influence sizing or execution. Verified this
+  directly by reading the call site. `audit_proposal_risk()` (an LLM
+  red-team check on a proposal) exists in the same file but is **never
+  called from anywhere** — dead code, same pattern as `vesper/whop.py`
+  below. `analyst_node`/`regime_node`/`scanner_node` remain pure
+  deterministic Python. See "LLM layer + voice" below.
+- **Callback receiver: registry + resume logic exists, but nothing feeds it
+  real events yet.** `vesper/bot/inbound.py`'s `ApprovalRegistry` correctly
+  uses LangGraph's `Command(resume=decision)` (the right mechanism — verified
+  it doesn't call `executor_node`/a broker directly), and `human_gate_node`
+  polls `approval_registry.get_decision(p.id)` as a fallback path. **But
+  `handle_callback_payload()` and `set_graph_app()` are never called from
+  anywhere in the codebase** — grepped to confirm. There's no HTTP server,
+  webhook route, or Telegram/Discord polling loop that would ever hand this
+  registry a real inbound tap. Tapping "Approve" on a sent card currently
+  does nothing. **When the ingestion layer gets built, it needs auth**:
+  `handle_callback_payload` currently trusts any payload shape it's handed —
+  no Telegram secret-token check, no Discord Ed25519 signature verification
+  (Discord's own Interactions API requires this to even register an
+  endpoint, which will force the issue there, but a generic REST webhook
+  path has no such forcing function and would let anyone who can reach the
+  endpoint approve a live trade or POST `{"command":"halt"}`).
 - **`PublicBrokerClient` has no live buying-power lookup.** `_execute_public`
   in `executor.py` passes `live_buying_power=None`, so `VESPER_MAX_BP_FRACTION`
   is a no-op on that branch — notional/quantity/allowlist/kill-switch still
@@ -96,11 +109,12 @@ Macro/market-health check, SPY/QQQ dealer-gamma levels, TickerTrace whale-flow
 briefing, 0DTE bias, top candidates with 2x leveraged-ETF proxies. See Known
 Gaps above for the stale-fallback issue.
 
-### ✅ Module 2 — Channel-Agnostic Alert Bot & Inbound Approval Engine (done)
+### 🟡 Module 2 — Channel-Agnostic Alert Bot (outbound done, inbound half-built)
 `ApprovalChannel` interface with Telegram/Discord/webhook adapters, broadcast
-from `human_gate_node`/`executor_node`. Inbound approval engine in `vesper/bot/inbound.py`
-resolves pending proposals, handles Telegram/Discord callback queries and `/halt` commands,
-and resumes LangGraph interrupt execution.
+from `human_gate_node`/`executor_node` — this half is done. `vesper/bot/inbound.py`
+has the resolve/resume *logic* (`ApprovalRegistry`, correct `Command(resume=...)`
+usage) but nothing calls it yet — no HTTP route, no Telegram/Discord listener.
+See Known Gaps above for the auth requirement once that ingestion layer gets built.
 
 ### ✅ Module 3 — Position Monitor & Exit Cascade (done)
 `vesper monitor [--interval 15] [--live] [--once]`: take-profit +50%,
@@ -174,17 +188,19 @@ Queried Michael's own NotebookLM strategy notes (heavily Simon Ree's *Tao of
 Trading*) against the three live playbooks. Highest-signal finding of any
 research pass done on this repo:
 
-- **`momentum_squeeze` is coded backwards.** It currently drafts on
-  `tech.ema_stack == "BULLISH" or tech.rsi_14 > 50` — a breakout filter.
-  Michael's actual rule explicitly avoids breakouts as false-breakout traps
-  and trades mean-reversion pullbacks ("Bounce 2.0") instead: EMA stack
-  `8>21>34>55>89` **and** `ADX(13)≥20`, price pulled back into the Keltner
-  "Action Zone" (±1 ATR of the 21 EMA, length 14, 2x multiplier), Slow
-  Stochastic(8,3) ≤ 40, entry on `RSI(2)` dipping below 10 then crossing back
-  above, confirmed by a close above the pullback's low candle. Exit 50% at
-  +2 ATR, 25% at +3 ATR. Precise enough to encode directly — either rewrite
-  `momentum_squeeze` to match, or rename the current logic so the two don't
-  get confused.
+- **`momentum_squeeze` was coded backwards — now landed as "Bounce 2.0",
+  partially matching Michael's rule.** Was a breakout filter
+  (`ema_stack==BULLISH or rsi_14>50`); `playbooks_node` now implements a real
+  pullback/mean-reversion entry (bullish EMA stack, `ADX≥18`, price within
+  ±1.5 ATR of the 21 EMA as an "Action Zone" approximation, `RSI≤68` not-
+  overbought filter, vol-targeted sizing). **Still doesn't match Michael's
+  exact rules**: no Slow Stochastic(8,3)≤40 check, no `RSI(2)` dip-below-10-
+  then-cross-back-above-10 entry trigger (uses a looser `RSI>45` momentum
+  filter instead), no explicit Keltner-Channel-length-14/2x-multiplier
+  calculation (uses a flat ATR band) or "close above the pullback's low
+  candle" confirmation. Directionally correct now, not exact — worth a
+  follow-up pass against the precise notebook rules if this needs to match
+  what Michael actually trades rather than approximate it.
 - **Four strategies with zero code**: an ADX/IV option-style router
   (`ADX<20`+`IV≥70%`→Wheel, `ADX≥20`+`IV<70%`→LEAPS, `ADX≥20`+`IV≥70%`→
   Synthetic long via same-strike call+put, else buy shares outright);
@@ -301,30 +317,25 @@ API-First Brokerage and Algorithmic Trading Systems*, *The Only Trading
 Library You'll Ever Need*, *The End of the Hedge: Global Macro and Regime
 Shifts*, *Global Financial Markets: Volatility, Derivatives, and Risk*.
 
-### 🗣️ LLM layer + voice — notes only, nothing built or installed yet
+### 🗣️ LLM layer + voice
 
-This is the response to "Vesper has no LLM reasoning layer" above. Written up
-so the shape is decided before anyone (Flash included) starts wiring it, not
-discovered by trial and error.
+**Model/text half: landed.** `vesper/llm.py` + `deepseek/deepseek-v4-flash`
+via OpenRouter, wired into `playbooks_node` for thesis narratives. Setup and
+usage now live in `docs/OPENROUTER_PRICING_GUIDE.md` rather than here — this
+section is what's still *not* built.
 
-**Model: OpenRouter, `deepseek/deepseek-v4-flash`.** Already decided in
-`docs/OPENROUTER_PRICING_GUIDE.md` — $0.03/$0.10 per 1M tokens in/out, 1.31M
-context, explicitly recommended there for "continuous background screening,
-high-frequency market polling, bulk technical parsing" — i.e. exactly the
-always-on agent loop this gap describes. A 24/7 scanning loop on GPT-4o was
-priced there at ~$50-100/month; on this model, under $1/month. No reason to
-look elsewhere for the default model; `deepseek/deepseek-v4-pro` is the
-escalation path in the same table for anything needing deeper multi-step
-reasoning than Flash handles well.
+**Still open**: `audit_proposal_risk()` exists in `vesper/llm.py` but is
+called from nowhere — an LLM red-team check on a proposal, currently dead
+code. Whether it's worth wiring in (as an advisory signal alongside, never
+instead of, `execution_guard`'s deterministic checks) or left unused is an
+open call. Whether `playbooks_node`'s thesis-only integration is the right
+ceiling, or whether an LLM should ever influence sizing/entry logic itself
+(vs. today's narrative-only, zero-influence role) — the Bayesian-network
+pattern in "AI agent architecture" below is the more rigorous version of
+that question, and better thought through before an LLM gets any real
+influence over a proposal's numbers, if that's ever wanted.
 
-**Where it plugs in**: `playbooks_node` is the natural first target — it's
-already drafting proposals from deterministic signals; an LLM call there
-would go from "encode Michael's exact rules in Python" (the momentum_squeeze
-mismatch/ADX-IV-router/etc. items above) toward "reason over the same signals
-the way the rules describe," with the deterministic version as a fallback/
-sanity-check rather than a full replacement. Whether that's the right
-target vs. a separate `analyst_node`-style reasoning layer is a real design
-decision, not decided here.
+**Voice: not built at all.** Nothing below changed.
 
 **Voice + channel architecture — reuse Module 2, don't adopt an external
 framework.** Explored `princezuda/safestclaw` and `moltis-org/moltis` (from
