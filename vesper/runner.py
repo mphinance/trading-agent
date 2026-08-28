@@ -18,13 +18,29 @@ async def run_agent_session(
     playbook: str = "all",
     target_ticker: Optional[str] = None,
     interactive: bool = True,
+    persona: str = "default",
 ) -> Dict[str, Any]:
     """Runs a complete trading session through the LangGraph StateGraph."""
     session_id = f"vesper-{uuid.uuid4().hex[:8]}"
     print("=" * 72)
     print(f"⚡ VESPER QUANTITATIVE EXECUTION ENGINE | Session: {session_id}")
-    print(f"Mode: {mode.upper()} | Playbook: {playbook.upper()} | Target: {target_ticker or 'AUTO-DISCOVERY'}")
+    print(
+        f"Mode: {mode.upper()} | Playbook: {playbook.upper()} | "
+        f"Persona: {persona.upper()} | Target: {target_ticker or 'AUTO-DISCOVERY'}"
+    )
     print("=" * 72)
+
+    # Optional Whop Licensing Check (Commercial Mode)
+    import os
+    from vesper.whop import WhopClient
+    whop_license = os.getenv("WHOP_LICENSE_KEY")
+    if whop_license:
+        with WhopClient() as whop:
+            val_res = whop.validate_license(whop_license)
+            if val_res.get("valid"):
+                print(f"🔑 Whop License Validated: {val_res.get('email', 'Active Member')}")
+            else:
+                print(f"⚠️ Whop License Warning: {val_res.get('reason')}")
 
     app = build_trading_graph(checkpointer=True)
     config = {"configurable": {"thread_id": session_id}}
@@ -34,11 +50,13 @@ async def run_agent_session(
         "mode": mode,
         "selected_playbook": playbook,
         "target_ticker": target_ticker,
+        "persona": persona,
         "regime": None,
         "candidates": [],
         "technicals": {},
         "options_audits": {},
         "proposals": [],
+        "rejected_proposals": [],
         "execution_results": [],
         "needs_human_approval": False,
         "human_decision": None if interactive else "AUTO_DRY_RUN",

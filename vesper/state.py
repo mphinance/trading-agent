@@ -130,6 +130,7 @@ class TradingState(TypedDict):
     # Human-in-the-Loop & Audit
     needs_human_approval: bool
     human_decision: Optional[str]  # 'APPROVE', 'REJECT', 'ABORT'
+    persona: Optional[str]  # 'default', 'traderlady'
     audit_trail: Annotated[List[Dict[str, Any]], operator.add]
     reflection_notes: Annotated[List[str], operator.add]
     errors: Annotated[List[str], operator.add]

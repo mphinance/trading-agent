@@ -46,10 +46,10 @@ for the Starter (Dealer-HUD) vs. Pro (TDPro MCP + Vesper) ecosystem split.
 **Start here, in this order** — cheapest/lowest-risk first, the one thing
 that actually needs careful design saved for last so it doesn't get rushed:
 
-1. **Housekeeping (each ~15-30 min, zero risk)**: wire `--persona traderlady`
-   into session state or delete the flag; wire `vesper/whop.py` to a real
-   caller or delete it; label `vesper/morning.py`'s fallback SPY/QQQ numbers
-   as STALE instead of printing them as if live.
+1. **Housekeeping (done)**: `--persona traderlady` wired through `TradingState`,
+   `vesper/runner.py`, and `vesper.py`; `vesper/whop.py` wired to `runner.py`,
+   `vesper.py` (`--license-key`), and tested; `vesper/morning.py` fallback SPY/QQQ
+   levels explicitly labeled as `STALE / UNAVAILABLE` with status indicators.
 2. **Paper ledger close path** (moderate, zero real-money risk — paper only).
    Wire `monitor.py`'s dry-run exit fills to `close_paper_position()`,
    matched to the original open fill by ticker/proposal. Improves Module 5's

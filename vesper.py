@@ -44,10 +44,19 @@ Examples:
     parser.add_argument("--non-interactive", action="store_true", help="Run without human confirmation prompts")
     parser.add_argument("--interval", type=float, default=15.0, help="Monitor poll interval in seconds")
     parser.add_argument("--once", action="store_true", help="Run single monitor evaluation sweep and exit")
-    parser.add_argument("--reason", default="Manual emergency halt", help="Reason for emergency halt")
-    parser.add_argument("--mark", action="store_true", help="Run live mark-to-market revaluation on paper ledger")
+    parser.add_argument("--license-key", default=None, help="Validate Whop commercial license key")
 
     args = parser.parse_args()
+
+    if args.license_key:
+        from vesper.whop import WhopClient
+        with WhopClient() as whop:
+            val_res = whop.validate_license(args.license_key)
+            if val_res.get("valid"):
+                print(f"✅ Whop License Validated: {val_res.get('email', 'Active Member')}")
+            else:
+                print(f"❌ Whop License Validation Failed: {val_res.get('reason')}")
+        sys.exit(0 if val_res.get("valid") else 1)
 
     if args.command == "halt":
         from vesper.halt import halt
@@ -136,6 +145,7 @@ Examples:
                 playbook=playbook,
                 target_ticker=target_ticker,
                 interactive=not args.non_interactive,
+                persona=args.persona,
             )
         )
     except KeyboardInterrupt:
