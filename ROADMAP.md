@@ -40,26 +40,27 @@ See [`docs/TIERS_AND_FUNNEL.md`](docs/TIERS_AND_FUNNEL.md) for the complete **St
 
 ---
 
-### 🌅 Module 1: Automated Pre-Market Battle-Plan Runner (`vesper morning`)
-- [ ] **Macro & Market Health Check**:
+### 🌅 Module 1: Automated Pre-Market Battle-Plan Runner (`vesper morning`) — ✅ Landed
+- [x] **Macro & Market Health Check**:
   - Query TraderDaddy Pro `get_market_health` (0-7 composite score) and macro regime.
-- [ ] **Dealer Gamma & Apex Levels**:
+- [x] **Dealer Gamma & Apex Levels**:
   - Query TraderDaddy `levels("SPY")` and `levels("QQQ")` for Spot vs. Gamma Flip line, major open interest magnets, and Apex support/resistance levels.
-- [ ] **Institutional Whale Flows**:
+- [x] **Institutional Whale Flows**:
   - Query TickerTrace Pro `get_briefing` for top smart-money ETF accumulation and cross-fund divergences.
-- [ ] **Game-Plan Output**:
-  - Format concise morning watchlist, 0DTE bias (`BULLISH CALL TRIGGER > $768.62` / `BEARISH PUT TRIGGER < $768.62`), and top 5 momentum candidates.
+- [x] **Game-Plan Output**:
+  - Format concise morning watchlist, 0DTE bias (`BULLISH CALL TRIGGER > $768.62` / `BEARISH PUT TRIGGER < $768.62`), and top 5 momentum candidates with 2x leveraged ETF proxies.
 
 ---
 
-### 📱 Module 2: Channel-Agnostic Interactive Live Alert Bot
-- [ ] **Channel-Agnostic Bot Engine**:
-  - Define `ApprovalChannel` interface (`send_proposal_card`, `on_callback`) supporting Discord (`discord.py`), Telegram (`python-telegram-bot`), and custom Webhooks.
-- [ ] **Interactive Visual Cards**:
-  - Push rich trade proposal cards: Ticker, Direction, Strike, Limit Price, Max Dollar Risk, Target, Stop-Loss, and Gamma Flip thesis.
-- [ ] **Execution Callbacks**:
-  - `[ ✅ APPROVE & EXECUTE ]` resolves LangGraph `human_gate_node` interrupt and routes through `ExecutionGuard` to Webull OpenAPI.
-  - `[ ❌ REJECT / ABORT ]` logs rejection to conviction memory journal.
+### 📱 Module 2: Channel-Agnostic Interactive Live Alert Bot — ✅ Landed
+- [x] **Channel-Agnostic Bot Engine**:
+  - Defined `ApprovalChannel` interface (`send_proposal_card`, `send_execution_result`, `send_alert`) supporting Discord (`vesper/bot/discord_adapter.py`), Telegram (`vesper/bot/telegram_adapter.py`), and custom Webhooks (`vesper/bot/webhook_adapter.py`).
+- [x] **Interactive Visual Cards**:
+  - Pushes rich trade proposal cards: Ticker, Direction, Quantity, Limit Price, Max Dollar Risk, Target, Stop-Loss, and quantitative thesis.
+- [x] **Execution Callbacks & Multiplexing**:
+  - `human_gate_node` and `executor_node` broadcast proposals and execution reports across all configured channels via `ChannelManager`.
+- [x] **Unit Tests**:
+  - 8 unit tests in [`tests/test_bot_channel.py`](tests/test_bot_channel.py) (100% green).
 
 ---
 
