@@ -151,9 +151,19 @@ Deliver an automated, high-density market briefing every morning at **8:45 AM ET
 Enable mobile trade approval and real-time alerts. Whenever Vesper generates a high-conviction trade proposal, it pushes an interactive card directly to your private phone channel with 1-click execution callbacks.
 
 ### Workflow & Architecture
-1. **Bot Engine**:
-   - Lightweight asynchronous bot (`python-telegram-bot` or `discord.py`) integrated into Vesper's event runner.
-2. **Interactive Approval Card**:
+1. **Bot Engine — channel-agnostic by design, not Telegram-specific:**
+   - Define a small `ApprovalChannel` interface (`send_proposal_card(proposal) ->
+     card_id`, `on_callback(card_id, decision)`) that the graph talks to —
+     mirrors the old sidecar's `notify.Notifier` fanning out to multiple
+     channels behind one interface (see `docs/CODE_SWEEP_2026-08-28.md`'s
+     gotchas / the pre-migration `notify.py` pattern).
+   - Ship a Telegram adapter (`python-telegram-bot`) and/or a Discord adapter
+     (`discord.py`) behind that interface — pick whichever's most convenient to
+     start, but the card format and the Execution Callback logic in step 3
+     below must not assume a specific platform's API shape. Adding the other
+     channel later, or running both at once, should mean writing one more
+     adapter, not touching `executor_node` or the approval logic.
+2. **Interactive Approval Card:**
    - Pushes visual trade details:
      ```
      ⚡ VESPER TRADE PROPOSAL [High Conviction]
