@@ -1,4 +1,4 @@
-# Test dependencies.
+# Test & Development dependencies.
 #
 #     pip install -r requirements-dev.txt && pytest -q
 #
@@ -21,17 +21,28 @@
 pytest
 pytest-asyncio
 
-# Exercised directly by the tests
+# Web server & HTTP clients (exercised directly by tests)
 fastapi
-httpx          # starlette's TestClient
+uvicorn
+httpx          # starlette's TestClient & async client
 requests
 mcp>=2         # mcp_server.py tool surface; 2.0 renamed FastMCP -> MCPServer
 qrcode         # notify.py --qr
-aiohttp        # vesper/bot/inbound.py's webhook server (tests/test_inbound_bot.py)
-cryptography   # Discord Ed25519 signature verification (same test file)
 
-# NOTE: this file has drifted behind requirements.txt's Vesper additions
-# (langgraph, pydantic, chromadb, etc.) — those happen to already be present
-# in this repo's .venv, so the gap hasn't broken CI yet, but a clean
-# `pip install -r requirements-dev.txt` would be missing them. Worth a full
-# reconciliation pass rather than patching one import at a time.
+# Vesper LangGraph Quant Agent, State, & Outcome Memory
+langgraph
+pydantic>=2.0
+python-dotenv>=1.0
+typing_extensions>=4.0
+chromadb>=0.5
+
+# Inbound webhook server & cryptographic authentication
+aiohttp        # vesper/bot/inbound.py's webhook server (tests/test_inbound_bot.py)
+cryptography   # Discord Ed25519 signature verification (tests/test_inbound_bot.py)
+
+# Quantitative analysis, charts, backtesting & technical indicators
+pandas
+pandas-ta
+matplotlib
+mplfinance
+scipy

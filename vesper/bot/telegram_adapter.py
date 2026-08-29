@@ -38,7 +38,7 @@ class TelegramAdapter(ApprovalChannel):
         return f"https://api.telegram.org/bot{self.bot_token}"
 
     async def send_proposal_card(self, card: ProposalCard) -> Optional[str]:
-        """Send proposal card with inline [Approve] and [Reject] buttons."""
+        """Send proposal card with inline [Approve] and [Reject] buttons and 5m chart."""
         if not self.configured:
             logger.debug("Telegram not configured. Skipping proposal card.")
             return None
@@ -54,6 +54,53 @@ class TelegramAdapter(ApprovalChannel):
             ]
         }
 
+        # 1. Attempt 5-minute candlestick chart generation (candlestick + EMA 8/21/34/55/89)
+        chart_bytes: Optional[bytes] = None
+        if card.ticker:
+            try:
+                from mcp_server.charts import generate_chart
+                chart_res = await generate_chart(
+                    ticker=card.ticker,
+                    period="1d",
+                    interval="5m",
+                    show_emas=True,
+                )
+                if isinstance(chart_res, dict) and chart_res.get("base64"):
+                    import base64
+                    chart_bytes = base64.b64decode(chart_res["base64"])
+                elif isinstance(chart_res, dict) and chart_res.get("path") and os.path.exists(chart_res["path"]):
+                    with open(chart_res["path"], "rb") as f:
+                        chart_bytes = f.read()
+            except Exception as e:
+                logger.debug("5m chart generation for %s unavailable: %s", card.ticker, e)
+                chart_bytes = None
+
+        # 2. Send via Telegram sendPhoto API (multipart photo + caption + inline buttons)
+        if chart_bytes:
+            try:
+                import json
+                resp = await self._client.post(
+                    f"{self._api_url}/sendPhoto",
+                    data={
+                        "chat_id": self.chat_id,
+                        "caption": text,
+                        "parse_mode": "Markdown",
+                        "reply_markup": json.dumps(reply_markup),
+                    },
+                    files={
+                        "photo": (f"{card.ticker}_5m.png", chart_bytes, "image/png"),
+                    },
+                )
+                data = resp.json()
+                if resp.status_code == 200 and data.get("ok"):
+                    msg_id = str(data["result"]["message_id"])
+                    logger.info(f"Sent Telegram proposal photo card for {card.proposal_id} (Message ID: {msg_id})")
+                    return msg_id
+                logger.warning(f"Telegram sendPhoto failed ({resp.status_code}): {data}. Falling back to sendMessage.")
+            except Exception as e:
+                logger.warning(f"Telegram sendPhoto error: {e}. Falling back to sendMessage.")
+
+        # 3. Fallback to text-only sendMessage API
         try:
             resp = await self._client.post(
                 f"{self._api_url}/sendMessage",

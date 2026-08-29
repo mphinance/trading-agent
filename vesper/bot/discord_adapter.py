@@ -56,6 +56,45 @@ class DiscordAdapter(ApprovalChannel):
             "footer": {"text": "Vesper Quant Engine • Reply with approve / reject"},
         }
 
+        # 1. Attempt 5-minute candlestick chart generation
+        chart_bytes: Optional[bytes] = None
+        if card.ticker:
+            try:
+                from mcp_server.charts import generate_chart
+                chart_res = await generate_chart(
+                    ticker=card.ticker,
+                    period="1d",
+                    interval="5m",
+                    show_emas=True,
+                )
+                if isinstance(chart_res, dict) and chart_res.get("base64"):
+                    import base64
+                    chart_bytes = base64.b64decode(chart_res["base64"])
+                elif isinstance(chart_res, dict) and chart_res.get("path") and os.path.exists(chart_res["path"]):
+                    with open(chart_res["path"], "rb") as f:
+                        chart_bytes = f.read()
+            except Exception as e:
+                logger.debug("5m chart generation for %s unavailable: %s", card.ticker, e)
+                chart_bytes = None
+
+        # 2. If chart available, send as Discord multipart attachment
+        if chart_bytes:
+            embed["image"] = {"url": f"attachment://{card.ticker}_5m.png"}
+            try:
+                import json
+                resp = await self._client.post(
+                    self.webhook_url,
+                    data={"payload_json": json.dumps({"username": "Vesper Quant Bot", "embeds": [embed]})},
+                    files={"file": (f"{card.ticker}_5m.png", chart_bytes, "image/png")},
+                )
+                if resp.status_code in [200, 204]:
+                    logger.info(f"Sent Discord proposal card with chart for {card.proposal_id}")
+                    return card.proposal_id
+                logger.warning(f"Discord multipart upload failed with {resp.status_code}. Falling back to standard embed.")
+            except Exception as e:
+                logger.warning(f"Discord multipart error: {e}. Falling back to standard embed.")
+
+        # 3. Fallback to standard JSON embed
         try:
             resp = await self._client.post(
                 self.webhook_url,

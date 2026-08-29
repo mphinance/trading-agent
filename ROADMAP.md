@@ -193,7 +193,14 @@ from `human_gate_node`/`executor_node` — done. Inbound resolve/resume
 (`vesper.py listen`), actually **wired to real Telegram taps** via
 long-polling (not a webhook — deliberately, see Known Gaps item 5 above).
 Tapping Approve/Reject on a Telegram card now genuinely resolves the paused
-graph. Discord's inbound half is still open — its better path mirrors
+graph.
+- **5m chart attachment on proposal cards (landed)**: `TelegramAdapter` calls
+  `mcp_server.charts.generate_chart(ticker, period="1d", interval="5m", show_emas=True)`
+  to render candlestick + EMA 8/21/34/55/89 overlay charts, sending via Telegram's
+  `sendPhoto` multipart API with inline buttons and caption, with seamless fallback
+  to text-only `sendMessage` if chart generation fails. `DiscordAdapter` supports
+  the same multipart file upload attachment. Tested in `tests/test_bot_channel.py`.
+Discord's inbound half is still open — its better path mirrors
 `discord.py`'s gateway + `DynamicItem` pattern (see the nyx/TraderDiscord-v2
 findings below), not the aiohttp webhook route that exists but nothing starts.
 

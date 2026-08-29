@@ -54,6 +54,7 @@ def test_telegram_configured_flag():
 
 @pytest.mark.asyncio
 async def test_telegram_send_proposal():
+    """Verify text-only Telegram sendMessage when chart is not available."""
     adapter = TelegramAdapter(bot_token="12345:ABCDE", chat_id="999888")
     card = ProposalCard.from_proposal(sample_proposal())
 
@@ -61,11 +62,74 @@ async def test_telegram_send_proposal():
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"ok": True, "result": {"message_id": 42}}
 
-    with patch.object(adapter._client, "post", new_callable=AsyncMock) as mock_post:
-        mock_post.return_value = mock_resp
-        msg_id = await adapter.send_proposal_card(card)
-        assert msg_id == "42"
-        mock_post.assert_called_once()
+    with patch("mcp_server.charts.generate_chart", side_effect=Exception("Chart generation offline")):
+        with patch.object(adapter._client, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            msg_id = await adapter.send_proposal_card(card)
+            assert msg_id == "42"
+            mock_post.assert_called_once()
+            url_called = mock_post.call_args[0][0]
+            assert "sendMessage" in url_called
+
+
+@pytest.mark.asyncio
+async def test_telegram_send_proposal_with_5m_chart():
+    """Verify Telegram sendPhoto multipart upload when 5m chart is generated."""
+    adapter = TelegramAdapter(bot_token="12345:ABCDE", chat_id="999888")
+    card = ProposalCard.from_proposal(sample_proposal())
+
+    mock_chart_res = {
+        "ticker": "NVDA",
+        "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY44YAAAAASUVORK5CYII=",
+        "path": "/tmp/nvda_5m.png",
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ok": True, "result": {"message_id": 777}}
+
+    with patch("mcp_server.charts.generate_chart", new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = mock_chart_res
+        with patch.object(adapter._client, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            msg_id = await adapter.send_proposal_card(card)
+            assert msg_id == "777"
+            mock_post.assert_called_once()
+            url_called = mock_post.call_args[0][0]
+            assert "sendPhoto" in url_called
+            kwargs = mock_post.call_args.kwargs
+            assert "files" in kwargs
+            assert "photo" in kwargs["files"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_send_proposal_sendphoto_failure_falls_back_to_text():
+    """Verify fallback to sendMessage if sendPhoto HTTP call fails."""
+    adapter = TelegramAdapter(bot_token="12345:ABCDE", chat_id="999888")
+    card = ProposalCard.from_proposal(sample_proposal())
+
+    mock_chart_res = {
+        "ticker": "NVDA",
+        "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY44YAAAAASUVORK5CYII=",
+    }
+
+    mock_photo_fail = MagicMock()
+    mock_photo_fail.status_code = 400
+    mock_photo_fail.json.return_value = {"ok": False, "description": "PHOTO_INVALID"}
+
+    mock_msg_ok = MagicMock()
+    mock_msg_ok.status_code = 200
+    mock_msg_ok.json.return_value = {"ok": True, "result": {"message_id": 888}}
+
+    with patch("mcp_server.charts.generate_chart", new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = mock_chart_res
+        with patch.object(adapter._client, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.side_effect = [mock_photo_fail, mock_msg_ok]
+            msg_id = await adapter.send_proposal_card(card)
+            assert msg_id == "888"
+            assert mock_post.call_count == 2
+            assert "sendPhoto" in mock_post.call_args_list[0][0][0]
+            assert "sendMessage" in mock_post.call_args_list[1][0][0]
 
 
 def test_discord_configured_flag():
@@ -78,17 +142,45 @@ def test_discord_configured_flag():
 
 @pytest.mark.asyncio
 async def test_discord_send_proposal():
+    """Verify Discord proposal card sending without chart."""
     adapter = DiscordAdapter(webhook_url="https://discord.com/api/webhooks/123/abc")
     card = ProposalCard.from_proposal(sample_proposal())
 
     mock_resp = MagicMock()
     mock_resp.status_code = 204
 
-    with patch.object(adapter._client, "post", new_callable=AsyncMock) as mock_post:
-        mock_post.return_value = mock_resp
-        res = await adapter.send_proposal_card(card)
-        assert res == card.proposal_id
-        mock_post.assert_called_once()
+    with patch("mcp_server.charts.generate_chart", side_effect=Exception("Chart generation offline")):
+        with patch.object(adapter._client, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            res = await adapter.send_proposal_card(card)
+            assert res == card.proposal_id
+            mock_post.assert_called_once()
+            assert "json" in mock_post.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_discord_send_proposal_with_5m_chart():
+    """Verify Discord proposal card sending with multipart 5m chart upload."""
+    adapter = DiscordAdapter(webhook_url="https://discord.com/api/webhooks/123/abc")
+    card = ProposalCard.from_proposal(sample_proposal())
+
+    mock_chart_res = {
+        "ticker": "NVDA",
+        "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY44YAAAAASUVORK5CYII=",
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 204
+
+    with patch("mcp_server.charts.generate_chart", new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = mock_chart_res
+        with patch.object(adapter._client, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            res = await adapter.send_proposal_card(card)
+            assert res == card.proposal_id
+            mock_post.assert_called_once()
+            kwargs = mock_post.call_args.kwargs
+            assert "files" in kwargs
+            assert "file" in kwargs["files"]
 
 
 @pytest.mark.asyncio
