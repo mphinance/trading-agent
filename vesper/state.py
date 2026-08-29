@@ -112,6 +112,12 @@ class OrderProposal(BaseModel):
     # and monitoring.
     underlying_stop_type: Optional[str] = None
     underlying_stop_basis: Optional[str] = None
+    # Earnings-week CSP vega harvest exit tag (see vesper/monitor.py
+    # evaluate_position's EARNINGS_EXIT step). ISO date string ("YYYY-MM-DD")
+    # -- when set, monitor.py force-closes the position on/after this date
+    # regardless of P&L, since the point of the trade is IV crush, not a
+    # profit target. None for every other playbook.
+    earnings_exit_date: Optional[str] = None
     contract_symbol: Optional[str] = None
     expiry: Optional[str] = None
     strike: Optional[float] = None

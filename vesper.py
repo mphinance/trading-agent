@@ -45,7 +45,7 @@ Examples:
         "--playbook", default="all",
         choices=[
             "all", "momentum_squeeze", "0dte_flow", "institutional_convergence",
-            "collar_following", "adx_iv_router", "thega", "recycle", "tax_reserve",
+            "collar_following", "adx_iv_router", "thega", "recycle", "tax_reserve", "earnings_vega",
         ],
         help="Select specific strategy playbook",
     )

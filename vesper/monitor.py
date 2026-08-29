@@ -40,6 +40,9 @@ class MonitoredPosition:
     # positions today (see poll_webull_positions for why).
     underlying_stop_type: Optional[str] = None
     underlying_stop_basis: Optional[str] = None
+    # Earnings-week CSP vega harvest exit tag (see OrderProposal.earnings_exit_date
+    # and evaluate_position's EARNINGS_EXIT step). ISO date string or None.
+    earnings_exit_date: Optional[str] = None
 
     @property
     def unrealized_pnl_pct(self) -> float:
@@ -184,6 +187,27 @@ class PositionMonitor:
                 pnl_pct=pnl,
             )
 
+        # 8. Earnings-Week CSP Vega Harvest Exit (force-close on/after the
+        # date the IV crush was expected to have happened -- see
+        # OrderProposal.earnings_exit_date). Date-driven, not P&L-driven: the
+        # whole point of this trade is harvesting the IV collapse, so it
+        # exits on schedule regardless of whether pnl looks good or bad at
+        # that moment. Fails closed on a malformed date (skips rather than
+        # guessing an exit time) instead of raising and killing the cycle.
+        if pos.earnings_exit_date:
+            try:
+                exit_date = datetime.strptime(pos.earnings_exit_date, "%Y-%m-%d").date()
+                if now_et.date() >= exit_date:
+                    return ExitTrigger(
+                        position=pos,
+                        reason="EARNINGS_EXIT",
+                        sell_quantity=pos.quantity,
+                        est_proceeds=pos.quantity * pos.current_price * (100 if pos.asset_type == "OPTION" else 1),
+                        pnl_pct=pnl,
+                    )
+            except ValueError:
+                logger.warning(f"Malformed earnings_exit_date {pos.earnings_exit_date!r} for {pos.symbol}, skipping earnings-exit check")
+
         return None
 
     async def poll_webull_positions(self) -> List[MonitoredPosition]:
@@ -252,6 +276,7 @@ class PositionMonitor:
                         option_type=f.get("option_type"),
                         underlying_stop_type=f.get("underlying_stop_type"),
                         underlying_stop_basis=f.get("underlying_stop_basis"),
+                        earnings_exit_date=f.get("earnings_exit_date"),
                     )
                 )
         except Exception as e:

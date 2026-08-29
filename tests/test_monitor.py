@@ -365,3 +365,85 @@ async def test_execute_exit_cascade_closes_paper_position(tmp_path, monkeypatch)
     assert summary["closed_trades_count"] == 1
     assert summary["realized_pnl"] == 500.0
 
+
+
+# ── Earnings-Week CSP Vega Harvest exit (date-driven, not P&L-driven) ───────
+
+def test_earnings_exit_fires_on_exit_date_regardless_of_pnl():
+    monitor = PositionMonitor()
+    # A SHORT put marked as a modest LOSS (short options gain when price
+    # rises against them in unrealized_pnl_pct terms is irrelevant here --
+    # what matters is the exit fires purely off the date, not this number).
+    pos = MonitoredPosition(
+        symbol="MDB", quantity=1, entry_price=3.00, current_price=3.05,
+        asset_type="OPTION", option_type="PUT", earnings_exit_date="2026-09-02",
+    )
+    trigger = monitor.evaluate_position(pos, current_time_et=datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc))
+    assert trigger is not None
+    assert trigger.reason == "EARNINGS_EXIT"
+    assert trigger.sell_quantity == 1
+
+
+def test_earnings_exit_fires_after_exit_date_too():
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(
+        symbol="MDB", quantity=1, entry_price=3.00, current_price=3.05,
+        asset_type="OPTION", option_type="PUT", earnings_exit_date="2026-09-02",
+    )
+    trigger = monitor.evaluate_position(pos, current_time_et=datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc))
+    assert trigger is not None
+    assert trigger.reason == "EARNINGS_EXIT"
+
+
+def test_earnings_exit_does_not_fire_before_exit_date():
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(
+        symbol="MDB", quantity=1, entry_price=3.00, current_price=3.05,
+        asset_type="OPTION", option_type="PUT", earnings_exit_date="2026-09-02",
+    )
+    trigger = monitor.evaluate_position(pos, current_time_et=datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc))
+    assert trigger is None
+
+
+def test_earnings_exit_absent_for_positions_without_the_tag():
+    """A normal position (earnings_exit_date=None, the dataclass default)
+    must never spuriously trigger EARNINGS_EXIT."""
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(symbol="AAPL", quantity=1, entry_price=3.00, current_price=3.05, asset_type="OPTION")
+    trigger = monitor.evaluate_position(pos, current_time_et=datetime(2099, 1, 1, tzinfo=timezone.utc))
+    assert trigger is None
+
+
+def test_earnings_exit_malformed_date_skips_without_crashing():
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(
+        symbol="MDB", quantity=1, entry_price=3.00, current_price=3.05,
+        asset_type="OPTION", option_type="PUT", earnings_exit_date="not-a-date",
+    )
+    # Must not raise -- fails closed (skips this check) rather than crashing the cycle.
+    trigger = monitor.evaluate_position(pos, current_time_et=datetime(2026, 9, 5, tzinfo=timezone.utc))
+    assert trigger is None
+
+
+def test_poll_paper_positions_wires_earnings_exit_date(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", data_dir)
+    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", data_dir / "paper_ledger.json")
+
+    from vesper.paper_ledger import record_paper_fill
+    from vesper.state import ExecutionResult, OrderProposal
+
+    prop = OrderProposal(
+        id="prop-earnvega-abc123", ticker="MDB", asset_type="OPTION", side="SELL",
+        limit_price=3.00, quantity=1, strike=280.0, option_type="put",
+        earnings_exit_date="2026-09-02",
+    )
+    result = ExecutionResult(order_proposal_id=prop.id, ticker="MDB", status="DRY_RUN_SIMULATED",
+                              filled_quantity=1, filled_price=3.00)
+    record_paper_fill(proposal=prop, result=result)
+
+    monitor = PositionMonitor()
+    positions = monitor.poll_paper_positions()
+    assert len(positions) == 1
+    assert positions[0].earnings_exit_date == "2026-09-02"

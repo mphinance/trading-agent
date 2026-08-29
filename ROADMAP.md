@@ -638,16 +638,13 @@ research pass done on this repo:
   0DTE spread is real execution risk, not something to draft against and hope
   for the best). Any one of the three being unavailable skips the draft rather
   than falling back to the old, looser behavior.
-  - **True ~0.30-delta strike selection was NOT implemented** — that needs an
-    option Greeks calculation this codebase doesn't have (`py_vollib` is
-    listed as future tooling below, not installed). Wall-based selection is
-    the other half of the "0.30delta OR major OI walls" spec that's actually
-    achievable with what's already wired up. Don't fake a delta number to
-    close this gap; wire `py_vollib` (or equivalent) first.
-  - **Earnings-week CSP vega harvest was NOT implemented** — that's really
-    describing a variant of Thega (see above), not a 0DTE-flow tightening; it
-    needs a real earnings-calendar data source this codebase doesn't have
-    either. Left as backlog, not approximated.
+  - ~~True ~0.30-delta strike selection was NOT implemented~~ — landed, see
+    the entry right below.
+  - ~~Earnings-week CSP vega harvest was NOT implemented~~ — landed as its
+    own playbook, see "Earnings-Week CSP Vega Harvest" below. Turned out not
+    to need Thega's multi-leg machinery at all (single-leg CSP, date-driven
+    exit) once a real earnings-calendar source (`get_earnings_flow`) was
+    confirmed live.
   - Tested in `tests/test_0dte_playbook.py` (wall selection, IV gate, spread
     rejection, and the updated end-to-end drafting/skip paths).
 - **True ~0.30-delta 0DTE strike selection (landed, 2026-08-30)**: the gap the
@@ -695,6 +692,48 @@ research pass done on this repo:
     `t`-floor near close, missing/zero spot or IV, py_vollib import failure,
     no-today-expiry, unconfigured Webull, delta-preferred-over-wall,
     fall-back-to-wall-on-None, and skip-when-both-fail.
+- **Earnings-Week CSP Vega Harvest (landed, 2026-08-30)**: sells an ATM
+  cash-secured put right before a ticker's earnings report (when pre-earnings
+  IV is richest) and force-closes it once the post-earnings IV crush has
+  happened — the trade is a bet on the vega/IV collapse, not on the earnings
+  result, so the exit is date-driven, never P&L-driven. Turned out to be
+  single-leg (a plain CSP), not the multi-leg build originally assumed —
+  `execution_guard`'s existing strike-based SELL-to-open notional math already
+  covers it, no new risk formula needed.
+  - New `_fetch_upcoming_earnings()` in `vesper/nodes/playbooks.py` confirmed
+    live against TDPro: `get_earnings_flow`'s `symbol` param is **not** a
+    filter (same class of trap as the documented `get_conviction`/`ticker`
+    gotcha in CLAUDE.md) — it always returns the full market-wide upcoming
+    slate (`earnings[].event.symbol/earningsDate/earningsTime/expectedMovePct`).
+    Returns `None` (never a stale/fabricated calendar) if TDPro is
+    unconfigured or the call errors.
+  - Drafts the day before an AMC (after-market-close) report, or the same day
+    for a BMO (before-market-open) report — either way, right when the
+    pre-earnings IV premium is richest. New `OrderProposal.earnings_exit_date`
+    (ISO date) is `earnings_date + 1` for AMC (crush lands the next trading
+    session) or `earnings_date` for BMO (crush is already priced in same-day).
+    Strike is ATM (`round(spot, 0)`), premium and equity price both come from
+    the existing `_fetch_live_option_quote`/`_fetch_live_quote` helpers — skips
+    the draft (never approximates) if either is unavailable.
+  - `vesper/monitor.py`'s `evaluate_position()` gained an 8th step,
+    `EARNINGS_EXIT`: force-closes the position once `now_et.date() >=
+    earnings_exit_date`, regardless of current P&L — layered as an additional
+    trigger alongside the existing stop/target checks, same pattern as the
+    swing-option underlying-level stop. Fails closed (skips the check, logs a
+    warning) on a malformed date rather than crashing the monitoring cycle.
+    `earnings_exit_date` threads through `paper_ledger.record_paper_fill`
+    (both single- and multi-leg fill paths) exactly like
+    `underlying_stop_type`/`underlying_stop_basis` did.
+  - Selectable via `--playbook earnings_vega` (alias `earnings_harvest`).
+    Independent of the `technicals` loop other single-ticker playbooks share —
+    like Collar-Following/Premium-Recycling/Tax-Reserve, its ticker universe
+    (who's reporting earnings this window) comes from its own data source, not
+    from whatever scanner_node already flagged for unrelated reasons.
+  - Tested in `tests/test_earnings_vega_harvest.py` (calendar fetch,
+    AMC/BMO exit-date math, timing-window skip, missing-quote skips,
+    malformed-entry resilience) and `tests/test_monitor.py` (EARNINGS_EXIT
+    fires on/after the date regardless of P&L, never fires without the tag,
+    malformed date fails closed, paper-ledger wiring end to end).
 - **Portfolio-level circuit breaker & capital allocation buckets (landed)**:
   `vesper/circuit_breaker.py` tracks a persisted high-water-mark NLV
   (separate state file from `halt.py`'s, same atomic-write pattern) and trips

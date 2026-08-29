@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 
 from vesper.account import fetch_live_equity
@@ -587,6 +587,35 @@ def _fetch_income_fund_detail(fund: str) -> Optional[Dict[str, Any]]:
         return res if isinstance(res, dict) else None
     except Exception as e:
         logger.warning(f"Could not fetch TickerTrace income fund detail for {fund}: {e}")
+        return None
+
+
+def _fetch_upcoming_earnings() -> Optional[List[Dict[str, Any]]]:
+    """Fetch TraderDaddy's upcoming-earnings calendar via td.py's get_earnings_flow.
+
+    Confirmed live 2026-08-29: get_earnings_flow's `symbol` param is NOT a
+    filter (same class of gotcha as the documented get_conviction/`ticker`
+    trap in CLAUDE.md) -- it always returns the full market-wide upcoming
+    slate. Real confirmed fields per entry: event.symbol, event.earningsDate
+    ("YYYY-MM-DD"), event.earningsTime ("AMC" or "BMO"), event.expectedMovePct.
+
+    Blocking — wrap in asyncio.to_thread.
+    Returns the raw `earnings` list, or None (never a fabricated empty/stale
+    calendar) if TDPro is unconfigured or the call errors.
+    """
+    try:
+        from td import TDPro
+
+        client = TDPro()
+        if not client.configured:
+            return None
+        res = client.call("get_earnings_flow", {})
+        if not isinstance(res, dict):
+            return None
+        earnings = res.get("earnings")
+        return earnings if isinstance(earnings, list) else None
+    except Exception as e:
+        logger.debug(f"Could not fetch upcoming earnings calendar: {e}")
         return None
 
 
@@ -1371,6 +1400,100 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                         f"Tax Reserve Sweep: unswept reserve (${unswept_tax:,.2f}) below price of "
                         f"one share of {tax_reserve_ticker} (${tax_price:,.2f})"
                     )
+
+    # ── 8. EARNINGS-WEEK CSP VEGA HARVEST ───────────────────────────────────
+    # Sells an ATM cash-secured put the day before (or day of, for a
+    # before-market-open report) a ticker's earnings, when the pre-earnings
+    # IV premium is richest, and force-closes it once the post-earnings IV
+    # crush has happened -- the point of this trade is harvesting the
+    # vega/IV collapse, not directional conviction on the earnings result,
+    # so the exit is date-driven (see earnings_exit_date / monitor.py's
+    # EARNINGS_EXIT step), not P&L-driven.
+    #
+    # Independent of the technicals loop above (like Collar-Following/
+    # Premium-Recycling/Tax-Reserve) since the relevant ticker universe is
+    # "who reports earnings this window", not whatever scanner_node already
+    # flagged for other reasons -- get_earnings_flow is TraderDaddy's own
+    # market-wide calendar, not filtered to already-scanned candidates.
+    if selected_playbook in ("all", "earnings_vega", "earnings_harvest"):
+        earnings_list = await asyncio.to_thread(_fetch_upcoming_earnings)
+        if earnings_list is None:
+            audit_notes.append("Skipped Earnings-Week CSP Vega Harvest: earnings calendar unavailable")
+        else:
+            today = datetime.now(timezone.utc).date()
+            for entry in earnings_list:
+                event = entry.get("event") if isinstance(entry, dict) else None
+                if not isinstance(event, dict):
+                    continue
+                ticker = str(event.get("symbol") or "").upper()
+                earnings_date_str = event.get("earningsDate")
+                earnings_time = str(event.get("earningsTime") or "").upper()
+                if not ticker or not earnings_date_str:
+                    continue
+
+                try:
+                    earnings_date = datetime.strptime(str(earnings_date_str)[:10], "%Y-%m-%d").date()
+                except Exception:
+                    continue
+
+                days_out = (earnings_date - today).days
+                # Draft the day before an after-market-close report (IV is
+                # richest right before the print), or the same day for a
+                # before-market-open report (the print already happened,
+                # elevated IV is still priced in until the crush finishes
+                # settling that morning). Anything else -- too early, or
+                # already past -- is skipped, not approximated.
+                if earnings_time == "AMC" and days_out != 1:
+                    continue
+                if earnings_time == "BMO" and days_out != 0:
+                    continue
+                if earnings_time not in ("AMC", "BMO"):
+                    continue
+
+                # Exit the day after the crush has actually happened: AMC
+                # reports crush IV the NEXT trading day; BMO reports crush IV
+                # that SAME day (already priced in by the time this drafts).
+                exit_date = earnings_date + timedelta(days=1) if earnings_time == "AMC" else earnings_date
+                exit_date_str = exit_date.strftime("%Y-%m-%d")
+
+                equity_price = await asyncio.to_thread(_fetch_live_quote, ticker)
+                if equity_price is None or equity_price <= 0:
+                    audit_notes.append(f"Skipped Earnings Vega Harvest for {ticker}: no live equity quote available")
+                    continue
+
+                strike = round(equity_price, 0)
+                premium = await asyncio.to_thread(_fetch_live_option_quote, ticker, strike, "PUT")
+                if premium is None or premium <= 0:
+                    audit_notes.append(
+                        f"Skipped Earnings Vega Harvest for {ticker} strike ${strike:.2f}: no live option quote available"
+                    )
+                    continue
+
+                qty = 1
+                assignment_notional = round(strike * 100 * qty, 2)
+                prop = OrderProposal(
+                    id=f"prop-earnvega-{uuid.uuid4().hex[:6]}",
+                    ticker=ticker,
+                    asset_type="OPTION",
+                    side="SELL",
+                    order_type="LIMIT",
+                    quantity=qty,
+                    limit_price=round(premium, 2),
+                    strike=strike,
+                    option_type="put",
+                    earnings_exit_date=exit_date_str,
+                    stop_loss=round(premium * 2.5, 2),
+                    estimated_cost=assignment_notional,
+                    max_risk=assignment_notional,
+                    risk_reward_ratio=0.0,
+                )
+                proposals.append(prop)
+                audit_notes.append(
+                    f"Drafted Earnings Vega Harvest CSP for {ticker}: SELL 1x Put Strike ${strike:.2f} "
+                    f"@ ${premium:.2f} (Earnings {earnings_date_str} {earnings_time}, expected move "
+                    f"{event.get('expectedMovePct', 'N/A')}%, force-exit {exit_date_str}, "
+                    f"Assignment Notional: ${assignment_notional:,.2f})"
+                )
 
     audit_entry = {
         "node": "playbooks_node",

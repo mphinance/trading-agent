@@ -197,6 +197,7 @@ def record_paper_fill(
         "strategy_type": getattr(proposal, "strategy_type", None),
         "underlying_stop_type": getattr(proposal, "underlying_stop_type", None),
         "underlying_stop_basis": getattr(proposal, "underlying_stop_basis", None),
+        "earnings_exit_date": getattr(proposal, "earnings_exit_date", None),
         "timestamp": now,
         "status": "OPEN",
         "current_price": filled_price,
