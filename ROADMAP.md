@@ -573,10 +573,16 @@ kind of system.
   what `scanner_node` runs tomorrow, not just a score after the fact. Also
   worth stealing: risk-segmented playbook "personas" (maps onto the existing
   `--playbook` flag) and continuous streaming over interval polling.
-- **Hedge-vs-directional options flow classification**: score whether a
-  large print is a directional bet or a dealer/institutional hedge (trade
-  size vs. OI, IV skew, proximity to gamma flip) before it becomes a
-  `Candidate` — a layer on TraderDaddy's existing flow data, not a new source.
+- **Hedge-vs-directional options flow classification (pure classifier landed)**:
+  `vesper/flow_classifier.py` implements pure deterministic scoring (`DIRECTIONAL`,
+  `HEDGE`, `AMBIGUOUS`). Confirmed TraderDaddy field schemas:
+  - `get_unusual_activity`: `volume` (int), `openInterest` (int), `vsOI` (float %), `type` ("CALL"|"PUT"), `sentiment` ("Bullish"|"Bearish"), `moneynessPct` (float), `score` (int).
+  - `get_iv_rank`: `ivRank` (0-100 float), `atmIv` (float).
+  - `get_gex_ticker` / `td.levels()`: `gammaFlipLevel` (float), `spotPrice` (float).
+  Classifies large size vs OI far from gamma flip with high IV rank as `DIRECTIONAL`,
+  and size clustered at gamma flip (|dist| <= 0.75%) with low/moderate IV or ATM put overlay
+  as `HEDGE`. Tested in `tests/test_flow_classifier.py`. (Integration into candidate generation
+  pipeline remains future backlog).
 - **Vanna/Charm exposure (VEX/CHEX)**: same conceptual family as the dealer
   gamma (GEX) already tracked, just 2nd/3rd-order. Check whether TraderDaddy
   already exposes these before building anything new.
