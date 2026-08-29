@@ -94,10 +94,12 @@ that actually needs careful design saved for last so it doesn't get rushed:
   `audit_notes` *after* the proposal (quantity/price/side) is already fully
   constructed, so it cannot influence sizing or execution. Verified this
   directly by reading the call site. `audit_proposal_risk()` (an LLM
-  red-team check on a proposal) exists in the same file but is **never
-  called from anywhere** — dead code, same pattern as `vesper/whop.py`
-  below. `analyst_node`/`regime_node`/`scanner_node` remain pure
-  deterministic Python. See "LLM layer + voice" below.
+  red-team check on a proposal) is now wired into `risk_gate_node` — see
+  Known Gaps item 6 above for what it can and can't do, and the "OpenRouter
+  agent-building cookbook" section below for the one real refinement left
+  (model-tier escalation, not uniform Flash for every proposal).
+  `analyst_node`/`regime_node`/`scanner_node` remain pure deterministic
+  Python. See "LLM layer + voice" below.
 - **Callback receiver: registry + resume logic exists, but nothing feeds it
   real events yet.** `vesper/bot/inbound.py`'s `ApprovalRegistry` correctly
   uses LangGraph's `Command(resume=decision)` (the right mechanism — verified
