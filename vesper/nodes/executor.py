@@ -56,6 +56,32 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
             continue
 
         if mode == "dry_run" or state.get("human_decision") == "AUTO_DRY_RUN":
+            # The dry-run path never touches execution_guard (no broker call to
+            # guard), which also meant it never saw the guard's halt check --
+            # so a resume landing while halted still wrote a paper fill. No
+            # money moves, but a halt should mean STOP, and the paper ledger it
+            # writes to is what circuit_breaker reads NLV from, so a fill
+            # recorded during a freeze feeds back into the breaker's own
+            # drawdown maths. Checked explicitly here rather than by routing
+            # dry-run through the guard, which would require inventing a
+            # broker-less ticket for something that places no order.
+            from vesper.halt import is_halted
+
+            halted, halt_info = is_halted()
+            if halted:
+                reason = (halt_info or {}).get("reason", "halted")
+                results.append(
+                    ExecutionResult(
+                        order_proposal_id=prop.id,
+                        ticker=prop.ticker,
+                        status="BLOCKED_BY_GUARDRAIL",
+                        message=f"Vesper is HALTED: {reason}",
+                        timestamp=_now(),
+                    )
+                )
+                audit_notes.append(f"BLOCKED {prop.id}: halted — no paper fill recorded")
+                continue
+
             sim_res = ExecutionResult(
                 order_proposal_id=prop.id,
                 ticker=prop.ticker,

@@ -175,6 +175,34 @@ class ApprovalRegistry:
             }
 
         state = _load_approval_state()
+
+        # First decision wins, permanently. A proposal can be resolved twice in
+        # ordinary use -- Telegram/Discord redeliver callbacks, a tap can be
+        # double-registered, and more than one authorised user can be looking at
+        # the same card. LangGraph itself is safe here (verified: a duplicate
+        # Command(resume=...) on a completed thread does NOT re-execute, so
+        # there is no double-order risk), but the RECORD was not: this used to
+        # overwrite state["decisions"][proposal_id] unconditionally, so a REJECT
+        # landing after an APPROVE had already executed would rewrite the audit
+        # trail to say the order was rejected. The trail would then contradict
+        # what the broker actually did, which is the one thing it exists to
+        # prevent. Later decisions are logged and refused, never applied.
+        prior = state["decisions"].get(proposal_id)
+        if prior:
+            logger.warning(
+                f"Ignoring duplicate decision {decision_clean} for {proposal_id} from "
+                f"{source}/{user_id} — already resolved as {prior.get('decision')} by "
+                f"{prior.get('source')}/{prior.get('user_id')} at {prior.get('resolved_at')}"
+            )
+            return {
+                "status": "ALREADY_RESOLVED",
+                "proposal_id": proposal_id,
+                "decision": prior.get("decision"),
+                "resolved_at": prior.get("resolved_at"),
+                "resolved_by": f"{prior.get('source')}/{prior.get('user_id')}",
+                "ignored": decision_clean,
+            }
+
         item = state["pending"].get(proposal_id)
         record = {
             "proposal_id": proposal_id,

@@ -321,3 +321,32 @@ async def test_risk_gate_filters_invalid_and_forwards_valid(clean_paper_ledger, 
     assert len(exec_out["execution_results"]) == 1
     assert exec_out["execution_results"][0].ticker == "SPY"
     assert exec_out["execution_results"][0].status == "DRY_RUN_SIMULATED"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_records_no_paper_fill_while_halted(clean_paper_ledger, mock_wb):
+    """A halt must stop the dry-run path too. It bypasses execution_guard (no
+    broker call to guard), so it needs its own is_halted() check -- without it a
+    resume landing during a freeze still wrote a paper fill, which then fed
+    circuit_breaker's own NLV/drawdown maths."""
+    from vesper.halt import halt, resume as clear_halt
+    from vesper.paper_ledger import get_paper_summary
+
+    prop = _make_valid_equity_proposal("MSFT", 400.0, 5)
+    prop.approved = True
+    state: TradingState = {
+        "session_id": "sess-halted-dryrun", "mode": "dry_run",
+        "proposals": [prop], "audit_trail": [],
+    }
+
+    halt(reason="test freeze", source="test")
+    try:
+        exec_out = await executor_node(state)
+    finally:
+        clear_halt(source="test")
+
+    results = exec_out["execution_results"]
+    assert len(results) == 1
+    assert results[0].status == "BLOCKED_BY_GUARDRAIL"
+    assert "halted" in results[0].message.lower()
+    assert get_paper_summary()["open_positions_count"] == 0, "no fill may be recorded while halted"

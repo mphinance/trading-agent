@@ -415,3 +415,38 @@ async def test_graph_app_is_not_persisted_across_instances():
 
     registry2 = ApprovalRegistry()
     assert registry2._graph_app is None
+
+
+# ── First decision wins (audit-integrity, not double-execution) ─────────────
+# LangGraph itself is safe against a duplicate resume -- verified empirically:
+# Command(resume=...) on an already-completed thread does not re-execute, so
+# there is no double-order risk. What was NOT safe was the RECORD: a second
+# decision used to overwrite the first, so a REJECT arriving after an APPROVE
+# had already executed would rewrite the audit trail to contradict the broker.
+
+@pytest.mark.asyncio
+async def test_duplicate_decision_does_not_overwrite_the_first(clean_registry):
+    clean_registry.register_pending("prop-dup", "sess-1")
+    first = await clean_registry.submit_decision("prop-dup", "APPROVE", source="telegram", user_id="michael")
+    assert first["status"] == "RESOLVED"
+
+    # A REJECT lands afterwards -- redelivered callback, second authorised user,
+    # or a double-tap. It must NOT rewrite what happened.
+    second = await clean_registry.submit_decision("prop-dup", "REJECT", source="discord", user_id="someone_else")
+    assert second["status"] == "ALREADY_RESOLVED"
+    assert second["decision"] == "APPROVE", "must report the decision that actually stands"
+    assert second["ignored"] == "REJECT"
+
+    stored = clean_registry.get_decision("prop-dup")
+    assert stored["decision"] == "APPROVE"
+    assert stored["user_id"] == "michael", "the original resolver must survive"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_identical_decision_is_also_refused(clean_registry):
+    """Even a repeat of the SAME decision is refused rather than re-applied --
+    re-applying would re-invoke the graph for an already-resolved thread."""
+    clean_registry.register_pending("prop-dup2", "sess-1")
+    await clean_registry.submit_decision("prop-dup2", "APPROVE", source="telegram", user_id="michael")
+    again = await clean_registry.submit_decision("prop-dup2", "APPROVE", source="telegram", user_id="michael")
+    assert again["status"] == "ALREADY_RESOLVED"
