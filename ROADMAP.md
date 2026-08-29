@@ -1260,10 +1260,41 @@ Vetted ideas worth taking, roughly by value-per-effort:
 - **Replay/audit mode** — record sanitized inputs, tool calls, approvals and
   broker responses; replay a session in paper mode. Natural companion to the
   hash-chained ledger above; the two should be designed together.
-- **`ModelProvider` protocol** (`ClaudeProvider` / `OpenRouterProvider` /
-  `DeterministicProvider`). Lower urgency now that `chat.py` is gone and
-  `vesper/llm.py` is the only model path — but `DeterministicProvider` for
-  offline/test use has standalone value given the suite's hermetic contract.
+- ~~**`ModelProvider` protocol**~~ — scoped down and landed 2026-08-29, on
+  investigation the full three-class design didn't fit what's actually here.
+  `ClaudeProvider` is **dropped for good, not just deprioritized**: `chat.py`
+  and the Agent SDK path are confirmed dead (deleted in `de60d51`; the only
+  remaining `claude_agent_sdk` reference is `tests/conftest.py`'s import
+  stub, which nothing imports for real), so there is no call site for it and
+  none coming back. No formal `typing.Protocol`/class hierarchy was built
+  either — with exactly one real backend (OpenRouter) and no second one on
+  any roadmap, and with the doc's assumed `complete(messages, tools, model)`
+  shape not matching `vesper/llm.py` (`call_openrouter` takes no `tools`
+  param at all), a Protocol would be ceremony around a single implementation
+  plus a test double, which plain dependency injection already covers. What
+  *did* land: `DeterministicProvider`, a small async-callable test fake in
+  `tests/llm_fakes.py` (test-only — no production module references it),
+  backed by a response queue (`[turn_1_json, turn_2_json, ...]`, popped in
+  call order) and recording `.calls` for assertions. It's injected with
+  `monkeypatch.setattr("vesper.llm.call_openrouter", provider)`, which reaches
+  both `generate_candidate_thesis` and `audit_proposal_risk` for free since
+  they call the module-level name — zero changes to `vesper/llm.py`,
+  `vesper/nodes/playbooks.py`, or `vesper/nodes/risk_gate.py`. This collapsed
+  `tests/test_llm_openrouter.py`'s three previously-coexisting fake styles
+  (`httpx.AsyncClient.post` patch, ad hoc `AsyncMock(side_effect=...)`, and
+  env-var flipping) down to one for the "LLM enabled, provider replies with
+  X" tests; the env-var-flipping tests for `is_llm_enabled()` itself and the
+  direct `httpx.AsyncClient.post` patches in the metrics-outcome tests (which
+  test `call_openrouter`'s own network-boundary parsing, not a caller of it)
+  were deliberately left as-is. Covered by `tests/test_llm_openrouter.py`,
+  including a dedicated pair of tests for the fake itself (queued-response
+  order, and the exhausted-queue/`None` degraded path feeding into
+  `generate_candidate_thesis`'s existing fallback). Explicitly **not done**:
+  no `provider=` parameter was added to `generate_candidate_thesis` or
+  `audit_proposal_risk` — monkeypatching the module-level `call_openrouter`
+  already reaches both, so a parameter would be unused surface. If a second
+  real LLM backend becomes concrete, revisit the formal Protocol then; this
+  research does not support building it speculatively today.
 - **Idempotency keys on mutations.** Partly covered for orders already: the
   single-use ticket makes a replayed `place()` fail closed. Not covered for
   approvals — worth checking whether a redelivered Telegram/Discord callback

@@ -302,7 +302,7 @@ ROADMAP.md         Single planning doc: status, known gaps, ideas backlog
 
 ## Tests
 
-`pip install -r requirements-dev.txt && pytest -q`. **384 passing.** The suite
+`pip install -r requirements-dev.txt && pytest -q`. **480 passing.** The suite
 is hermetic — no network, no broker, no credentials — because a green build
 must not depend on TDPro or ntfy.sh being up.
 
@@ -325,6 +325,20 @@ must not depend on TDPro or ntfy.sh being up.
   `test_stream_runner.py` catches reverting the monitor's push wake-up back to
   a plain sleep. If a rule here changes, the test is the other half of the
   change.
+- **Faking `vesper/llm.py`'s OpenRouter calls has one pattern, not several.**
+  `tests/llm_fakes.py`'s `DeterministicProvider` is a small async-callable
+  test double matching `call_openrouter`'s signature, backed by a response
+  queue and recording `.calls`; wire it in with
+  `monkeypatch.setattr("vesper.llm.call_openrouter", provider)`, which reaches
+  both `generate_candidate_thesis` and `audit_proposal_risk` because they call
+  the module-level name. It's imported as `from llm_fakes import
+  DeterministicProvider` (not `tests.llm_fakes`) — `webull-openapi-mcp/tests/`
+  already claims the `tests` package name, and pytest's rootless import mode
+  puts this repo's `tests/` directly on `sys.path` anyway. Separately,
+  `patch("vesper.llm.is_llm_enabled", return_value=False)` is the standing
+  pattern for keeping the LLM out of a test entirely (portfolio-governance,
+  sector-concentration, execution-integration tests) — untouched, still
+  correct, don't replace it with provider injection.
 
 ## Status
 

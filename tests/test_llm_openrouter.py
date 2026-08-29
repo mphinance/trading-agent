@@ -11,6 +11,7 @@ from vesper.llm import (
     audit_proposal_risk,
 )
 from vesper.metrics import metrics
+from llm_fakes import DeterministicProvider
 
 
 def test_is_llm_enabled_detection(monkeypatch):
@@ -50,35 +51,26 @@ async def test_deterministic_fallback_when_openrouter_disabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_call_openrouter_mock_success(monkeypatch):
-    """Verify call_openrouter parses API response and handles model routing."""
+    """Verify generate_candidate_thesis parses the provider's response and handles model routing."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-validkey")
 
-    mock_resp_json = {
-        "choices": [
-            {
-                "message": {
-                    "content": '{"thesis": "Strong momentum pullback bounce", "confidence": 5, "key_catalysts": ["EMA cross"]}'
-                }
-            }
-        ]
-    }
+    provider = DeterministicProvider(
+        ['{"thesis": "Strong momentum pullback bounce", "confidence": 5, "key_catalysts": ["EMA cross"]}']
+    )
+    monkeypatch.setattr("vesper.llm.call_openrouter", provider)
 
-    mock_post = AsyncMock()
-    mock_post.return_value.status_code = 200
-    mock_post.return_value.json = lambda: mock_resp_json
+    thesis = await generate_candidate_thesis(
+        ticker="TSLA",
+        technical_summary="RSI 48, ADX 22",
+        candidate_rationale="Squeeze setup",
+        regime_posture="BULLISH",
+        model="deepseek/deepseek-v4-flash",
+    )
 
-    with patch("httpx.AsyncClient.post", mock_post):
-        thesis = await generate_candidate_thesis(
-            ticker="TSLA",
-            technical_summary="RSI 48, ADX 22",
-            candidate_rationale="Squeeze setup",
-            regime_posture="BULLISH",
-            model="deepseek/deepseek-v4-flash",
-        )
-
-        assert "openrouter/deepseek/deepseek-v4-flash" in thesis["source"]
-        assert thesis["confidence"] == 5
-        assert thesis["thesis"] == "Strong momentum pullback bounce"
+    assert "openrouter/deepseek/deepseek-v4-flash" in thesis["source"]
+    assert thesis["confidence"] == 5
+    assert thesis["thesis"] == "Strong momentum pullback bounce"
+    assert provider.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -97,12 +89,12 @@ async def test_audit_proposal_model_escalation(monkeypatch):
         "max_risk": 50.0,
     }
 
-    with patch("vesper.llm.call_openrouter", new_callable=AsyncMock) as mock_call:
-        mock_call.return_value = mock_resp
+    provider = DeterministicProvider([mock_resp])
+    with patch("vesper.llm.call_openrouter", provider):
         res_low = await audit_proposal_risk(low_notional_prop, regime_posture="NEUTRAL")
         assert res_low["recommendation"] == "PROCEED"
-        mock_call.assert_called_once()
-        assert mock_call.call_args.kwargs["model"] == "deepseek/deepseek-v4-flash"
+        assert provider.call_count == 1
+        assert provider.calls[0]["model"] == "deepseek/deepseek-v4-flash"
 
     # 2. High-notional proposal -> PRO_MODEL
     high_notional_prop = {
@@ -113,12 +105,12 @@ async def test_audit_proposal_model_escalation(monkeypatch):
         "max_risk": 350.0,
     }
 
-    with patch("vesper.llm.call_openrouter", new_callable=AsyncMock) as mock_call:
-        mock_call.return_value = mock_resp
+    provider = DeterministicProvider([mock_resp])
+    with patch("vesper.llm.call_openrouter", provider):
         res_high = await audit_proposal_risk(high_notional_prop, regime_posture="NEUTRAL")
         assert res_high["recommendation"] == "PROCEED"
-        mock_call.assert_called_once()
-        assert mock_call.call_args.kwargs["model"] == "deepseek/deepseek-v4-pro"
+        assert provider.call_count == 1
+        assert provider.calls[0]["model"] == "deepseek/deepseek-v4-pro"
 
 
 @pytest.mark.asyncio
@@ -139,14 +131,14 @@ async def test_audit_proposal_adversarial_review_loop(monkeypatch):
     # Turn 2: Revised verdict after reconsidering stop loss & regime
     turn_2_json = '{"passed": true, "risk_score": 4, "concerns": ["Tight trailing stop mitigates turbulence"], "recommendation": "PROCEED"}'
 
-    with patch("vesper.llm.call_openrouter", new_callable=AsyncMock) as mock_call:
-        mock_call.side_effect = [turn_1_json, turn_2_json]
+    provider = DeterministicProvider([turn_1_json, turn_2_json])
+    with patch("vesper.llm.call_openrouter", provider):
         final_verdict = await audit_proposal_risk(prop, regime_posture="BULLISH")
 
         # Verify exactly 2 sequential calls were made (1 follow-up critique round, capped)
-        assert mock_call.call_count == 2
+        assert provider.call_count == 2
         # Verify second call received the first verdict in history and adversarial prompt
-        second_call_messages = mock_call.call_args_list[1].args[0]
+        second_call_messages = provider.calls[1]["messages"]
         assert len(second_call_messages) == 4
         assert "Adversarial Self-Review" in second_call_messages[3]["content"]
 
@@ -237,3 +229,50 @@ async def test_audit_proposal_risk_disabled_records_disabled_outcome_on_selected
     assert res["passed"] is True
     snap = metrics.snapshot()["llm_calls"][PRO_MODEL]
     assert snap["disabled"] == 1
+
+
+# -- tests/llm_fakes.DeterministicProvider --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deterministic_provider_returns_queued_responses_in_order():
+    """Working path: responses pop off the queue in call order, and every
+    call's arguments are recorded for assertion."""
+    provider = DeterministicProvider(["first", "second"])
+
+    messages = [{"role": "user", "content": "hi"}]
+    r1 = await provider(messages, model="model-a", temperature=0.3, json_mode=True)
+    r2 = await provider(messages, model="model-b")
+
+    assert r1 == "first"
+    assert r2 == "second"
+    assert provider.call_count == 2
+    assert provider.calls[0]["model"] == "model-a"
+    assert provider.calls[0]["temperature"] == 0.3
+    assert provider.calls[0]["json_mode"] is True
+    assert provider.calls[1]["model"] == "model-b"
+
+
+@pytest.mark.asyncio
+async def test_deterministic_provider_returns_none_when_queue_exhausted(monkeypatch):
+    """Degraded path: an empty (or exhausted) queue returns None, exactly
+    like call_openrouter does on a network/parse failure -- so callers that
+    already handle call_openrouter returning None need no special-casing
+    when swapped over to this fake."""
+    provider = DeterministicProvider()
+    assert await provider([{"role": "user", "content": "x"}]) is None
+
+    # Wire it in as the module-level call_openrouter and confirm
+    # generate_candidate_thesis's existing "no response" fallback fires --
+    # it must not fabricate a thesis when the provider yields nothing.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-validkey")
+    monkeypatch.setattr("vesper.llm.call_openrouter", provider)
+
+    res = await generate_candidate_thesis(
+        ticker="NVDA",
+        technical_summary="RSI=52",
+        candidate_rationale="Pullback on 21 EMA",
+        regime_posture="NEUTRAL",
+    )
+    assert res["source"] == "deterministic_fallback"
+    assert res["thesis"] == "Pullback on 21 EMA"
