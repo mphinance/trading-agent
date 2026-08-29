@@ -31,6 +31,8 @@ from webull.core.client import ApiClient
 from webull.data.data_client import DataClient
 from webull.trade.trade_client import TradeClient
 
+from vesper.metrics import metrics
+
 LOCAL_ENV = Path(__file__).resolve().parent / ".env"
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env.webull"
 PROD_HOST = "api.webull.com"
@@ -183,16 +185,29 @@ class Webull:
     def _is_429(e: Exception) -> bool:
         return "429" in str(e) or "TOO_MANY_REQUESTS" in str(e)
 
-    def _retrying(self, fn):
-        """Retry once or twice on 429 — the limit is per 2s, so a short wait clears it."""
+    def _retrying(self, fn, endpoint: str = "unknown"):
+        """Retry once or twice on 429 — the limit is per 2s, so a short wait clears it.
+
+        Every attempt is timed and counted into metrics.py's "account" bucket
+        (the 2 req/2s one) — a 429 that gets retried away still counts as a
+        rate_limited attempt even though the eventual call succeeds.
+        """
         for attempt in range(RETRY_ON_429 + 1):
+            start = time.monotonic()
             try:
-                return fn()
+                result = fn()
             except Exception as e:
-                if self._is_429(e) and attempt < RETRY_ON_429:
+                dt = time.monotonic() - start
+                rate_limited = self._is_429(e)
+                retrying = rate_limited and attempt < RETRY_ON_429
+                metrics.record_broker_call("account", endpoint, dt, ok=False, rate_limited=rate_limited)
+                if retrying:
                     time.sleep(BACKOFF_SEC)
                     continue
                 raise
+            else:
+                metrics.record_broker_call("account", endpoint, time.monotonic() - start, ok=True)
+                return result
 
     def accounts(self) -> list[dict]:
         return self._cached("accounts", lambda: self._trade.account_v2.get_account_list().json(), ttl=60.0)
@@ -224,8 +239,12 @@ class Webull:
             aid = a["account_id"]
             if i:
                 time.sleep(PACE_SEC)  # stay inside the 2 req / 2s window
-            balance = self._retrying(lambda: self._trade.account_v2.get_account_balance(aid).json())
-            positions = self._retrying(lambda: self._trade.account_v2.get_account_position(aid).json()) or []
+            balance = self._retrying(
+                lambda: self._trade.account_v2.get_account_balance(aid).json(), endpoint="get_account_balance"
+            )
+            positions = self._retrying(
+                lambda: self._trade.account_v2.get_account_position(aid).json(), endpoint="get_account_position"
+            ) or []
             assets = (balance.get("account_currency_assets") or [{}])[0]
             accounts.append(
                 {
@@ -286,7 +305,9 @@ class Webull:
             for i, aid in enumerate(self.account_ids()):
                 if i:
                     time.sleep(PACE_SEC)
-                res = self._retrying(lambda: self._trade.order_v3.get_order_open(account_id=aid))
+                res = self._retrying(
+                    lambda: self._trade.order_v3.get_order_open(account_id=aid), endpoint="get_order_open"
+                )
                 out.extend(_orders(res.json(), aid))
             return out
         return self._cached("open_orders", fetch, ttl=ORDER_CACHE_TTL_SEC)
@@ -298,7 +319,8 @@ class Webull:
                 if i:
                     time.sleep(PACE_SEC)
                 res = self._retrying(
-                    lambda: self._trade.order_v3.get_order_history(aid, page_size=str(page_size))
+                    lambda: self._trade.order_v3.get_order_history(aid, page_size=str(page_size)),
+                    endpoint="get_order_history",
                 )
                 out.extend(_orders(res.json(), aid))
             return sorted(out, key=lambda o: o.get("create_time") or "", reverse=True)
@@ -313,7 +335,7 @@ class Webull:
         if not aid:
             return []
         def fetch():
-            res = self._retrying(lambda: self._trade.activity.get_activities(aid))
+            res = self._retrying(lambda: self._trade.activity.get_activities(aid), endpoint="get_activities")
             data = res.json()
             return data.get("items") or data.get("data") or (data if isinstance(data, list) else [])
         return self._cached(f"activities:{aid}", fetch, ttl=60.0)

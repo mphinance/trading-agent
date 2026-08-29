@@ -18,6 +18,7 @@ import time
 
 import alerts as alerts_mod
 import notify
+from vesper.metrics import metrics
 
 # Fast enough that a break is caught within a candle on any timeframe worth
 # alerting on, slow enough to stay far from Webull's limits. The snapshot call
@@ -95,6 +96,8 @@ class Watcher:
             return
 
         self.quotes.refresh(symbols)
+        qstatus = self.quotes.status()
+        metrics.record_quote_snapshot(qstatus.get("sources") or {}, qstatus.get("max_age_sec"))
         fired = self.store.sweep(
             price_of=lambda s: self.quotes.get(s, max_age=POLL_SEC * 2),
             levels_of=self.levels_of,

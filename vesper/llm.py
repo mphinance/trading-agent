@@ -10,8 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 import httpx
+
+from vesper.metrics import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -91,19 +94,29 @@ async def call_openrouter(
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
 
+    start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout_sec) as client:
             resp = await client.post(OPENROUTER_API_URL, headers=headers, json=payload)
+            dt = time.monotonic() - start
             if resp.status_code == 200:
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
+                try:
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+                    metrics.record_llm_call(model, dt, outcome="json_error")
+                    logger.warning(f"OpenRouter response shape/parse error: {e}")
+                    return None
+                metrics.record_llm_call(model, dt, outcome="ok")
                 return content.strip()
             else:
+                metrics.record_llm_call(model, dt, outcome="http_error")
                 logger.warning(
                     f"OpenRouter API call failed ({resp.status_code}): {resp.text[:200]}"
                 )
                 return None
     except Exception as e:
+        metrics.record_llm_call(model, time.monotonic() - start, outcome="timeout_or_network")
         logger.warning(f"OpenRouter network/request error: {e}")
         return None
 
@@ -117,6 +130,7 @@ async def generate_candidate_thesis(
 ) -> Dict[str, Any]:
     """Generate structured AI trade thesis and conviction scoring for a setup candidate."""
     if not is_llm_enabled():
+        metrics.record_llm_call(model, 0.0, outcome="disabled")
         return {
             "source": "deterministic_fallback",
             "thesis": candidate_rationale or f"Technical setup on {ticker} in {regime_posture} regime.",
@@ -183,10 +197,10 @@ async def audit_proposal_risk(
     verdict is REDUCE_SIZE, REJECT, or flags a risk_score >= 7, allowing the model
     to confirm or revise its assessment before final gate submission.
     """
-    if not is_llm_enabled():
-        return {"passed": True, "notes": "Risk audit bypassed (deterministic mode active)."}
-
     chosen_model = model or select_audit_model(proposal_dict, regime_posture)
+    if not is_llm_enabled():
+        metrics.record_llm_call(chosen_model, 0.0, outcome="disabled")
+        return {"passed": True, "notes": "Risk audit bypassed (deterministic mode active)."}
 
     system_prompt = (
         "You are a strict risk management officer auditing an algorithmic trade proposal. "

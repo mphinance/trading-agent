@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
 import uuid
 import logging
 from typing import Optional, Dict, Any
 
+from vesper.metrics import metrics
 from vesper.state import TradingState
 from vesper.graph import build_trading_graph
 
@@ -100,9 +103,17 @@ async def run_agent_session(
                 for p in props:
                     print(f"     • [{p.id}] {p.side} {p.quantity}x {p.ticker} ({p.asset_type}) @ ${p.limit_price:.2f} (Est Cost: ${p.estimated_cost:,.2f})")
 
+            elif node_name == "risk_gate_node":
+                passed = len(output.get("proposals", []))
+                rejected = len(output.get("rejected_proposals", []))
+                metrics.record_tool_rejection("risk_gate_node", passed=passed, rejected=rejected)
+
             elif node_name == "executor_node" and "execution_results" in output:
+                broker = os.getenv("EXECUTION_BROKER", "webull")
                 for res in output["execution_results"]:
                     print(f"    Execution: [{res.status}] {res.ticker} - {res.message}")
+                    digest = hashlib.sha256(f"{res.order_proposal_id}:{res.ticker}".encode()).hexdigest()[:16]
+                    metrics.record_order_outcome(mode=mode, status=res.status, broker=broker, payload_digest=digest)
 
             elif node_name == "reflection_node" and "reflection_notes" in output:
                 for note in output["reflection_notes"]:

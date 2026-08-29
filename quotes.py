@@ -60,9 +60,22 @@ class Quotes:
         return self._wb_data is not None and not self._snapshot_dead
 
     def status(self) -> dict:
+        """`sources` and `max_age_sec` aggregate the per-symbol cache
+        (never symbol-level detail) for metrics.py's record_quote_snapshot --
+        see watcher.py's _tick(), the one caller. source_of()/age_of() above
+        already expose the per-symbol detail this deliberately does NOT
+        duplicate."""
+        now = time.time()
+        sources: dict[str, int] = {}
+        max_age = 0.0
+        for _sym, (ts, _price, source) in self._cache.items():
+            sources[source] = sources.get(source, 0) + 1
+            max_age = max(max_age, now - ts)
         return {
             "snapshot": "ok" if self.snapshot_available else (self._snapshot_error or "unavailable"),
             "cached": len(self._cache),
+            "sources": sources,
+            "max_age_sec": max_age if self._cache else None,
         }
 
     def refresh(self, symbols: list[str]) -> dict[str, float]:

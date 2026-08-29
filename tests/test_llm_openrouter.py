@@ -10,6 +10,7 @@ from vesper.llm import (
     generate_candidate_thesis,
     audit_proposal_risk,
 )
+from vesper.metrics import metrics
 
 
 def test_is_llm_enabled_detection(monkeypatch):
@@ -154,3 +155,85 @@ async def test_audit_proposal_adversarial_review_loop(monkeypatch):
         assert final_verdict["risk_score"] == 4
         assert final_verdict["recommendation"] == "PROCEED"
         assert final_verdict.get("self_critique_performed") is True
+
+
+# -- metrics.py instrumentation (record_llm_call) ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_call_openrouter_records_ok_outcome(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-validkey")
+    mock_resp = AsyncMock()
+    mock_resp.return_value.status_code = 200
+    mock_resp.return_value.json = lambda: {"choices": [{"message": {"content": "hi"}}]}
+    with patch("httpx.AsyncClient.post", mock_resp):
+        await call_openrouter([{"role": "user", "content": "x"}], model="deepseek/deepseek-v4-flash")
+    snap = metrics.snapshot()["llm_calls"]["deepseek/deepseek-v4-flash"]
+    assert snap["ok"] == 1
+
+
+@pytest.mark.asyncio
+async def test_call_openrouter_records_http_error_outcome(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-validkey")
+    mock_resp = AsyncMock()
+    mock_resp.return_value.status_code = 500
+    mock_resp.return_value.text = "server error"
+    with patch("httpx.AsyncClient.post", mock_resp):
+        result = await call_openrouter([{"role": "user", "content": "x"}], model="deepseek/deepseek-v4-flash")
+    assert result is None
+    snap = metrics.snapshot()["llm_calls"]["deepseek/deepseek-v4-flash"]
+    assert snap["http_error"] == 1
+
+
+@pytest.mark.asyncio
+async def test_call_openrouter_records_timeout_or_network_outcome(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-validkey")
+    with patch("httpx.AsyncClient.post", AsyncMock(side_effect=RuntimeError("connection reset"))):
+        result = await call_openrouter([{"role": "user", "content": "x"}], model="deepseek/deepseek-v4-flash")
+    assert result is None
+    snap = metrics.snapshot()["llm_calls"]["deepseek/deepseek-v4-flash"]
+    assert snap["timeout_or_network"] == 1
+
+
+@pytest.mark.asyncio
+async def test_call_openrouter_records_json_error_outcome_on_unparseable_response(monkeypatch):
+    """A 200 whose body doesn't have the expected choices/message/content
+    shape must count as json_error, not silently as ok."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-validkey")
+    mock_resp = AsyncMock()
+    mock_resp.return_value.status_code = 200
+    mock_resp.return_value.json = lambda: {"unexpected": "shape"}
+    with patch("httpx.AsyncClient.post", mock_resp):
+        result = await call_openrouter([{"role": "user", "content": "x"}], model="deepseek/deepseek-v4-flash")
+    assert result is None
+    snap = metrics.snapshot()["llm_calls"]["deepseek/deepseek-v4-flash"]
+    assert snap["json_error"] == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_candidate_thesis_disabled_records_disabled_outcome(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    from vesper.llm import DEFAULT_MODEL
+
+    await generate_candidate_thesis(
+        ticker="NVDA", technical_summary="x", candidate_rationale="y", regime_posture="NEUTRAL",
+    )
+    snap = metrics.snapshot()["llm_calls"][DEFAULT_MODEL]
+    assert snap["disabled"] == 1
+
+
+@pytest.mark.asyncio
+async def test_audit_proposal_risk_disabled_records_disabled_outcome_on_selected_tier(monkeypatch):
+    """Disabled-mode outcome is recorded under whichever tier
+    select_audit_model would have escalated to -- not always DEFAULT_MODEL --
+    so a disabled high-notional proposal is still distinguishable from a
+    disabled low-notional one."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    from vesper.llm import PRO_MODEL
+
+    high_notional_prop = {"ticker": "NVDA", "quantity": 20, "limit_price": 125.0,
+                           "estimated_cost": 2500.0, "max_risk": 350.0}
+    res = await audit_proposal_risk(high_notional_prop, regime_posture="NEUTRAL")
+    assert res["passed"] is True
+    snap = metrics.snapshot()["llm_calls"][PRO_MODEL]
+    assert snap["disabled"] == 1

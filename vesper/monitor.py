@@ -8,13 +8,17 @@ and dynamic Dealer Gamma flip crossings.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+from collections import deque
 from datetime import datetime, timezone, time
+from time import monotonic as _monotonic
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from vesper.execution_guard import guard, GuardError, TradingDisabled
 from vesper.bot.manager import channel_manager
+from vesper.metrics import metrics
 from vesper.state import OrderProposal, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -85,6 +89,28 @@ class PositionMonitor:
         self.time_stop_hour_et = time_stop_hour_et
         self.time_stop_minute_et = time_stop_minute_et
         self.tracked_positions: Dict[str, MonitoredPosition] = {}
+        # Cycle-timing for status() -- kept local to this instance rather than
+        # in vesper/metrics.py, same separation-of-concerns watcher.py's own
+        # status() (ticks/last_tick/last_error, local to Watcher) models: this
+        # is monitor-cycle-specific state, not a cross-cutting broker/LLM/
+        # order signal.
+        self._cycles = 0
+        self._last_cycle_at: Optional[str] = None
+        self._last_cycle_error: Optional[str] = None
+        self._cycle_durations: "deque[float]" = deque(maxlen=50)
+
+    def status(self) -> Dict[str, Any]:
+        """Cycle count/timing + currently-tracked position count. Report-only,
+        same as everything in vesper/metrics.py -- nothing here gates."""
+        durations = list(self._cycle_durations)
+        return {
+            "cycles": self._cycles,
+            "last_cycle_at": self._last_cycle_at,
+            "last_cycle_error": self._last_cycle_error,
+            "tracked_positions": len(self.tracked_positions),
+            "last_cycle_duration_sec": round(durations[-1], 3) if durations else None,
+            "avg_cycle_duration_sec": round(sum(durations) / len(durations), 3) if durations else None,
+        }
 
     def evaluate_position(
         self,
@@ -288,6 +314,12 @@ class PositionMonitor:
         pos = trigger.position
         logger.warning(f"🚨 EXIT TRIGGERED for {pos.symbol}: {trigger.reason} (PnL: {trigger.pnl_pct:+.1%})")
 
+        # Metrics: paper-vs-live outcome signal. Digest is over the symbol
+        # only (never the fill/quantity/price payload) -- mirrors
+        # execution_guard._digest's "hash, never raw payload" pattern.
+        _metrics_mode = "live" if live else "paper"
+        _metrics_digest = hashlib.sha256(pos.symbol.encode()).hexdigest()[:16]
+
         # Alert external channels immediately
         await channel_manager.broadcast_alert(
             title=f"🚨 EXIT CASCADE: {pos.symbol} ({trigger.reason})",
@@ -330,6 +362,7 @@ class PositionMonitor:
             except Exception as e:
                 logger.warning(f"Could not close paper position for {pos.symbol}: {e}")
 
+            metrics.record_order_outcome(mode=_metrics_mode, status=res.status, broker="webull", payload_digest=_metrics_digest)
             await channel_manager.broadcast_execution(res)
             return res
 
@@ -390,6 +423,7 @@ class PositionMonitor:
                 message=f"Live {trigger.reason} exit order placed: {place_res.get('data', place_res) if isinstance(place_res, dict) else place_res}",
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
+            metrics.record_order_outcome(mode=_metrics_mode, status=res.status, broker="webull", payload_digest=_metrics_digest)
             await channel_manager.broadcast_execution(res)
             return res
         except (GuardError, TradingDisabled) as e:
@@ -400,6 +434,7 @@ class PositionMonitor:
                 message=f"Exit blocked by guardrail: {e}",
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
+            metrics.record_order_outcome(mode=_metrics_mode, status=res.status, broker="webull", payload_digest=_metrics_digest)
             await channel_manager.broadcast_execution(res)
             return res
         except Exception as e:
@@ -411,11 +446,31 @@ class PositionMonitor:
                 message=str(e),
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
+            metrics.record_order_outcome(mode=_metrics_mode, status=res.status, broker="webull", payload_digest=_metrics_digest)
             await channel_manager.broadcast_execution(res)
             return res
 
     async def run_monitoring_cycle(self, live: bool = False) -> List[ExecutionResult]:
-        """Runs a single evaluation sweep across all positions."""
+        """Runs a single evaluation sweep across all positions.
+
+        Thin timing wrapper around _run_monitoring_cycle_impl -- see status()
+        for why cycle count/duration lives on this instance rather than in
+        vesper/metrics.py."""
+        start = _monotonic()
+        try:
+            results = await self._run_monitoring_cycle_impl(live=live)
+        except Exception as e:
+            self._last_cycle_error = str(e)
+            raise
+        else:
+            self._last_cycle_error = None
+            return results
+        finally:
+            self._cycles += 1
+            self._last_cycle_at = datetime.now(timezone.utc).isoformat()
+            self._cycle_durations.append(_monotonic() - start)
+
+    async def _run_monitoring_cycle_impl(self, live: bool = False) -> List[ExecutionResult]:
         positions = await self.poll_webull_positions()
         if not live:
             positions.extend(self.poll_paper_positions())

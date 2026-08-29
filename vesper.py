@@ -90,6 +90,7 @@ Examples:
     if args.command == "status":
         from vesper.halt import get_halt_status
         from vesper.paper_ledger import get_paper_summary
+        from vesper.metrics import read_snapshot, bucket_approval_ages
         hs = get_halt_status()
         ps = get_paper_summary()
         print("\n" + "=" * 60)
@@ -107,6 +108,50 @@ Examples:
         print(f"  Unrealized PnL: ${ps['unrealized_pnl']:+,.2f}")
         print(f"  Open Positions: {ps['open_positions_count']}")
         print(f"  Closed Trades:  {ps['closed_trades_count']} (Win Rate: {ps['win_rate_pct']:.1f}%)")
+
+        # Health/observability metrics -- written by a separately-running
+        # `vesper loop` process on its own poll cadence (see vesper/loop.py),
+        # not by this one-shot process. Report-only, and deliberately never
+        # claims liveness: this is "as of" whenever that process last wrote
+        # it, which may be minutes ago, or may not exist at all if `vesper
+        # loop` was never started this session.
+        snap = read_snapshot()
+        print("\n📈 Health Metrics:")
+        if snap is None:
+            print("  (none yet -- start `vesper loop` to begin collecting)")
+        else:
+            print(f"  As of: {snap.get('generated_at', '?')} (from the last-running `vesper loop`, may be stale)")
+            for bucket, endpoints in snap.get("broker_calls", {}).items():
+                for endpoint, e in endpoints.items():
+                    print(
+                        f"  Broker[{bucket}] {endpoint}: ok={e['ok']} error={e['error']} "
+                        f"rate_limited={e['rate_limited']} p50={e['p50_ms']}ms p95={e['p95_ms']}ms"
+                    )
+            for tier, e in snap.get("llm_calls", {}).items():
+                counts = ", ".join(f"{k}={v}" for k, v in e.items() if k not in ("p50_ms", "p95_ms", "count"))
+                print(f"  LLM[{tier}]: {counts} p50={e['p50_ms']}ms p95={e['p95_ms']}ms")
+            for node, e in snap.get("tool_rejections", {}).items():
+                print(f"  RiskGate[{node}]: passed={e['passed']} rejected={e['rejected']}")
+            for mode, brokers in snap.get("order_outcomes", {}).items():
+                for broker, statuses in brokers.items():
+                    counts = ", ".join(f"{k}={v}" for k, v in statuses.items())
+                    print(f"  Orders[{mode}/{broker}]: {counts}")
+            qsnap = snap.get("quote_snapshot", {})
+            if qsnap.get("sources"):
+                print(f"  Quotes: sources={qsnap['sources']} max_age_sec={qsnap.get('max_age_sec')}")
+
+        # Pending-approval age -- report-only labeling, see metrics.py's
+        # bucket_approval_ages() docstring for why "stale" here is a label,
+        # not an expiry. Read directly from this process (ApprovalRegistry is
+        # disk-backed), not from the loop-written snapshot above.
+        try:
+            from vesper.bot.inbound import approval_registry
+            pending = approval_registry.list_pending()
+            if pending:
+                ages = bucket_approval_ages([p.get("registered_at") for p in pending])
+                print(f"\n⏳ Pending Approvals ({len(pending)}): {ages}")
+        except Exception as e:
+            print(f"\n⏳ Pending Approvals: unavailable ({e})")
         print("=" * 60)
         sys.exit(0)
 

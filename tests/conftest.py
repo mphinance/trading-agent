@@ -128,6 +128,14 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     monkeypatch.setattr("vesper.bot.inbound._DATA_DIR", vesper_data_dir)
     monkeypatch.setattr("vesper.bot.inbound._APPROVAL_STATE_PATH", vesper_data_dir / "approval_registry_state.json")
 
+    # vesper/metrics.py's cross-process snapshot file (Health/observability
+    # metrics module) -- same reasoning as the state files above: a
+    # hardcoded module-level _DATA_DIR that would otherwise read/write the
+    # developer's real vesper/data/metrics_snapshot.json.
+    import vesper.metrics as _metrics_module
+    monkeypatch.setattr(_metrics_module, "_DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr(_metrics_module, "_SNAPSHOT_PATH", vesper_data_dir / "metrics_snapshot.json")
+
     # vesper/graph.py's persistent checkpointer -- redirect the sqlite path
     # AND reset the process-lifetime connection/saver singletons, since a
     # real connection opened by an earlier test would otherwise point at a
@@ -138,6 +146,27 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     monkeypatch.setattr(_graph_module, "_sqlite_conn", None)
     monkeypatch.setattr(_graph_module, "_sqlite_saver", None)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolated_metrics_state():
+    """Reset vesper/metrics.py's process-wide `metrics` singleton before
+    every test.
+
+    Unlike the disk-backed state above, this is in-memory and NOT redirected
+    by tmp_path -- every module that instruments itself does `from
+    vesper.metrics import metrics`, binding its own reference to the one
+    object, so a test-order leak here (one test's record_broker_call calls
+    showing up in another test's snapshot() assertions) would be exactly the
+    kind of order-dependent failure _isolated_vesper_state's own docstring
+    describes for disk state. metrics.reset() clears state on the existing
+    object rather than replacing it, which is what keeps every already-bound
+    reference in sync -- see reset()'s own docstring.
+    """
+    from vesper.metrics import metrics as _metrics_singleton
+    _metrics_singleton.reset()
+    yield
+    _metrics_singleton.reset()
 
 
 @pytest.fixture(autouse=True)

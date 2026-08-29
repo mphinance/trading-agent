@@ -561,6 +561,92 @@ graph/node layer instead.
 
 ---
 
+### ✅ Module 10 — Health / Observability Metrics (done)
+Landed the "Health/observability metrics" idea from the backlog below. New
+`vesper/metrics.py` (process-wide singleton `metrics = Metrics()`, same
+pattern as `notify.Notifier()`) is a thread-safe counter/rolling-duration
+store — Vesper had effectively none of this before. Report-only, same as
+`audit_chain.py`'s "reports, never refuses": nothing here gates or blocks
+execution, and no metric is wired into any risk/gating decision.
+
+Six signals, each fed from the choke point the research pass identified
+rather than a new one invented for this: broker latency + 429s (`wb.py`'s
+`_retrying()`, now timed/counted per endpoint into the "account" bucket),
+market-data latency/errors (`md.py`'s `Market._cached()` cache-miss branch,
+generically covering every method that routes through it), LLM call
+outcomes (`vesper/llm.py`'s `call_openrouter()`, the one choke point both
+thesis generation and risk-audit — including its adversarial reconsideration
+round — funnel through; `outcome="disabled"` is recorded separately at both
+callers' `is_llm_enabled()`-false early return so "disabled by config" reads
+differently from "attempted and failed"), risk-gate tool-call rejections
+(`vesper/runner.py`'s `run_agent_session` event loop, reading the
+`proposals`/`rejected_proposals` counts `risk_gate_node` already returns —
+zero changes to the off-limits `risk_gate.py`), paper-vs-live order outcomes
+(the same event loop's `executor_node` branch, plus all four
+`ExecutionResult` construction sites in `monitor.py`'s
+`execute_exit_cascade`), and quote-source freshness (`quotes.py`'s
+`status()` now aggregates its cache into a source-distribution + max-age,
+fed into `metrics.py` once per tick by `watcher.py`'s `_tick()`).
+
+Every `record_*` method takes only scalars, enums-as-`str`, and digests the
+caller already hashed (mirroring `execution_guard._digest`'s
+`sha256(json.dumps(..., sort_keys=True))` formula) — never a raw order
+payload, account id, or balance. `record_quote_snapshot`'s `source_counts`
+is the one dict-shaped parameter, and it's a documented, allowlisted
+exception: a pre-aggregated `{source: count}` tally, never per-symbol
+detail. `tests/test_metrics.py` enforces this by signature shape, not just
+convention — `inspect.signature` over every `record_*` method.
+
+Cross-process surfacing (the real design tension the research flagged):
+`vesper status` runs as a fresh one-shot process and can't see a separately
+running `vesper loop` daemon's in-memory counters. Landed option (a):
+`run_continuous_loop`'s existing poll tick now also calls
+`metrics.write_snapshot()` (same atomic write-`.tmp`-then-`os.replace`
+pattern `halt.py`'s `_save_state` uses) to `vesper/data/metrics_snapshot.json`,
+and `vesper status` reads it back via `read_snapshot()`, printing it labeled
+"as of \<generated_at\>" — never claiming liveness. This is a new on-disk
+state file, so `tests/conftest.py`'s `_isolated_vesper_state` fixture now
+also redirects `vesper.metrics._DATA_DIR`/`_SNAPSHOT_PATH`. A second new
+fixture, `_isolated_metrics_state`, resets the in-memory singleton itself
+between tests (`Metrics.reset()` re-runs `__init__` on the same object
+rather than replacing it, since every instrumented module already holds its
+own `from vesper.metrics import metrics` reference) — the disk-redirect
+fixture alone doesn't cover process-lifetime state the way it does for
+halt/circuit_breaker/paper_ledger.
+
+Also landed: pending-approval age labeling. `ApprovalRegistry.list_pending()`
+(read-only, unmodified) already carries each item's `registered_at`;
+`bucket_approval_ages()` classifies a list of those timestamps into
+under_5min/under_30min/stale counts, called from `vesper status` (not from
+`inbound.py`). `VESPER_APPROVAL_STALE_AFTER_SEC` (default 1800s) is a
+documented MODELING CONSTANT for the "stale" label only — never read by
+`inbound.py`, never wired into any gate.
+
+**Explicitly NOT done:** No enforcement tied to any metric anywhere —
+report-only, full stop. No approval **expiry** — only an age *label*; a real
+TTL/auto-reject policy for a stale pending approval is a genuine open
+decision this module deliberately leaves to `inbound.py` itself, not
+decided here. Cross-process visibility is only as fresh as the last
+`vesper loop` poll tick — blank entirely if `loop` was never started this
+session, stale during the gap between ticks, and `vesper status` says so
+rather than pretending otherwise. `PositionMonitor.status()`'s cycle
+count/timing is deliberately local state, not funneled into the generic
+`metrics` singleton — same separation-of-concerns `watcher.py`'s own
+`status()` already models for watcher-specific vs. cross-cutting state.
+
+Tests: `tests/test_metrics.py` (new — counters/timing/bounding, the
+signature-shape redaction check, snapshot-file round-trip and corrupt-file
+handling, approval-age bucketing including the missing-data path, and the
+runner.py/monitor.py-shaped integration checks), plus instrumentation-site
+additions to `tests/test_quotes.py` (status() aggregation), `tests/test_watcher.py`
+(new — `_tick()`'s metrics call, including the defensive missing-key path),
+`tests/test_llm_openrouter.py` (all four `call_openrouter` outcomes plus
+both `disabled` call sites), and `tests/test_monitor.py` (all four
+`execute_exit_cascade` outcomes, plus `run_monitoring_cycle`'s new timing
+wrapper on both the healthy and the raising path).
+
+---
+
 ## 💡 Ideas Backlog (speculative — not committed, no phase number)
 
 ### ⭐ Do first: gaps against Michael's own documented strategy
@@ -1165,11 +1251,12 @@ Vetted ideas worth taking, roughly by value-per-effort:
   this codebase's rule (see the multi-leg `_MULTI_LEG_RISK_FORMULAS`
   whitelist refusing unregistered strategies) — worth generalizing as the
   Public.com/IBKR adapters mature.
-- **Health/observability metrics** — broker latency + rate-limit events,
-  quote freshness, model failure/fallback rate, tool-call rejection rate,
-  approval age/expiry, paper-vs-live outcomes. Vesper has effectively none of
-  this today. Doc's caveat is right and matches rule 5: hashes and redacted
-  summaries, never raw payloads.
+- ~~**Health/observability metrics**~~ — now landed as Module 10 above
+  (`vesper/metrics.py`): broker latency + rate-limit events, quote freshness,
+  model outcome/disabled rate, tool-call rejection rate, paper-vs-live
+  outcomes, and a report-only approval-age label. Approval **expiry**
+  (as opposed to just an age label) is still explicitly open — see Module
+  10's "NOT done" note.
 - **Replay/audit mode** — record sanitized inputs, tool calls, approvals and
   broker responses; replay a session in paper mode. Natural companion to the
   hash-chained ledger above; the two should be designed together.

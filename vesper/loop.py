@@ -194,6 +194,18 @@ async def run_continuous_loop(
                 )
             except Exception as e:
                 logger.error(f"Error in continuous loop scheduling tick: {e}")
+
+            # Cross-process metrics surfacing: `vesper status` runs as a
+            # fresh one-shot process and can't see this process's in-memory
+            # counters, so write them out on the existing poll cadence (same
+            # atomic write pattern halt.py's _save_state uses). Best-effort --
+            # a metrics-write failure must never take down the loop itself.
+            try:
+                from vesper.metrics import write_snapshot
+                write_snapshot()
+            except Exception as e:
+                logger.warning(f"Metrics snapshot write failed (continuing): {e}")
+
             await asyncio.sleep(poll_interval_sec)
     finally:
         monitor_task.cancel()

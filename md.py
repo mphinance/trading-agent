@@ -18,6 +18,8 @@ from typing import Any
 
 from webull.data.common.category import Category
 
+from vesper.metrics import metrics
+
 # Snapshots are cheap; a 1s TTL still leaves ~540 req/min of headroom for
 # research calls even if the UI polls hard.
 QUOTE_TTL_SEC = 1.0
@@ -76,7 +78,20 @@ class Market:
             hit = self._cache.get(key)
             if hit and now - hit[0] < ttl:
                 return hit[1]
-            val = fn()
+            # Every method on this class funnels through here on a cache
+            # miss, so this is the one place to time+count the whole
+            # "market_data" bucket generically rather than instrumenting
+            # each method separately. endpoint is the key's prefix before
+            # its first ":" (e.g. "snap", "l2", "tick", "scr", "wl") --
+            # every cache key in this module is built that way.
+            endpoint = key.split(":", 1)[0]
+            start = time.monotonic()
+            try:
+                val = fn()
+            except Exception:
+                metrics.record_broker_call("market_data", endpoint, time.monotonic() - start, ok=False)
+                raise
+            metrics.record_broker_call("market_data", endpoint, time.monotonic() - start, ok=True)
             self._cache[key] = (time.monotonic(), val)
             return val
 

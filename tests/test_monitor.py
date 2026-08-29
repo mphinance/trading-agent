@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from vesper.monitor import PositionMonitor, MonitoredPosition, ExitTrigger
 from vesper.state import OrderProposal, ExecutionResult
+from vesper.metrics import metrics
 
 
 @pytest.fixture(autouse=True)
@@ -447,3 +448,105 @@ def test_poll_paper_positions_wires_earnings_exit_date(tmp_path, monkeypatch):
     positions = monitor.poll_paper_positions()
     assert len(positions) == 1
     assert positions[0].earnings_exit_date == "2026-09-02"
+
+
+# -- metrics.py instrumentation --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_cascade_dry_run_records_order_outcome():
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(symbol="NVDA", quantity=10, entry_price=100.0, current_price=160.0)
+    trigger = ExitTrigger(position=pos, reason="TAKE_PROFIT", sell_quantity=10, est_proceeds=1600.0, pnl_pct=0.60)
+    await monitor.execute_exit_cascade(trigger, live=False)
+    snap = metrics.snapshot()["order_outcomes"]["paper"]["webull"]
+    assert snap == {"DRY_RUN_SIMULATED": 1}
+    # digest is over the symbol only, never the fill quantity/price
+    digest = metrics.snapshot()["recent_order_digests"][-1]
+    assert digest["mode"] == "paper" and digest["status"] == "DRY_RUN_SIMULATED"
+    assert "160.0" not in digest["payload_digest"] and "NVDA" not in digest["payload_digest"]
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_cascade_live_submitted_records_order_outcome(monkeypatch):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(symbol="NVDA", quantity=10, entry_price=100.0, current_price=160.0)
+    trigger = ExitTrigger(position=pos, reason="TAKE_PROFIT", sell_quantity=10, est_proceeds=1600.0, pnl_pct=0.60)
+
+    mock_wb = MagicMock()
+    mock_wb.accounts.return_value = [{"account_id": "ACC1"}]
+    mock_wb.portfolio.return_value = {"totals": {"buying_power": 100000.0}}
+    mock_wb.trade.order_v2.place_order.return_value = {"data": {"order_id": "ORD123"}}
+
+    with patch("wb.Webull", return_value=mock_wb):
+        await monitor.execute_exit_cascade(trigger, live=True)
+
+    snap = metrics.snapshot()["order_outcomes"]["live"]["webull"]
+    assert snap == {"SUBMITTED": 1}
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_cascade_blocked_by_kill_switch_records_order_outcome(monkeypatch):
+    monkeypatch.delenv("VESPER_TRADING", raising=False)
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(symbol="NVDA", quantity=10, entry_price=100.0, current_price=55.0)
+    trigger = ExitTrigger(position=pos, reason="STOP_LOSS", sell_quantity=10, est_proceeds=550.0, pnl_pct=-0.45)
+
+    mock_wb = MagicMock()
+    with patch("wb.Webull", return_value=mock_wb):
+        await monitor.execute_exit_cascade(trigger, live=True)
+
+    snap = metrics.snapshot()["order_outcomes"]["live"]["webull"]
+    assert snap == {"BLOCKED_BY_GUARDRAIL": 1}
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_cascade_broker_exception_records_failed_outcome(monkeypatch):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(symbol="NVDA", quantity=10, entry_price=100.0, current_price=160.0)
+    trigger = ExitTrigger(position=pos, reason="TAKE_PROFIT", sell_quantity=10, est_proceeds=1600.0, pnl_pct=0.60)
+
+    with patch("wb.Webull", side_effect=RuntimeError("connection refused")):
+        res = await monitor.execute_exit_cascade(trigger, live=True)
+
+    assert res.status == "FAILED"
+    snap = metrics.snapshot()["order_outcomes"]["live"]["webull"]
+    assert snap == {"FAILED": 1}
+
+
+@pytest.mark.asyncio
+async def test_run_monitoring_cycle_updates_status_timing():
+    """Wraps _run_monitoring_cycle_impl -- status() should report a cycle
+    count and a duration even when there are no positions to evaluate."""
+    monitor = PositionMonitor()
+    assert monitor.status() == {
+        "cycles": 0, "last_cycle_at": None, "last_cycle_error": None,
+        "tracked_positions": 0, "last_cycle_duration_sec": None, "avg_cycle_duration_sec": None,
+    }
+
+    with patch.object(monitor, "poll_webull_positions", AsyncMock(return_value=[])):
+        await monitor.run_monitoring_cycle(live=True)
+
+    st = monitor.status()
+    assert st["cycles"] == 1
+    assert st["last_cycle_at"] is not None
+    assert st["last_cycle_error"] is None
+    assert st["last_cycle_duration_sec"] is not None and st["last_cycle_duration_sec"] >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_run_monitoring_cycle_records_error_in_status_and_still_reraises():
+    """A cycle that raises must still update cycle count/timing (finally),
+    record the error string, and propagate the exception -- run_monitor_loop
+    is what catches it, not this method."""
+    monitor = PositionMonitor()
+
+    with patch.object(monitor, "poll_webull_positions", AsyncMock(side_effect=RuntimeError("wb down"))):
+        with pytest.raises(RuntimeError, match="wb down"):
+            await monitor.run_monitoring_cycle(live=True)
+
+    st = monitor.status()
+    assert st["cycles"] == 1
+    assert st["last_cycle_error"] == "wb down"

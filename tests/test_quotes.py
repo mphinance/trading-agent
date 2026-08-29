@@ -211,3 +211,27 @@ def test_partial_inline_errors_do_not_latch_when_some_symbols_work():
     assert got["SPY"] == 747.1
     assert q.source_of("SPY") == "webull"
     assert q.snapshot_available is True, "one bad symbol must not kill the source"
+
+
+# --------------------------------------------------------------------------
+# status() source-distribution / max-age aggregation (feeds
+# metrics.record_quote_snapshot via watcher.py's _tick -- see test_metrics.py
+# for the aggregator side).
+# --------------------------------------------------------------------------
+
+def test_status_aggregates_source_distribution_and_max_age():
+    q = Q.Quotes(wb_data=OkSnapshot([{"symbol": "SPY", "close": 747.1}]),
+                 portfolio_fn=lambda: PORTFOLIO, td=td_stub())
+    # SPY -> webull (in OkSnapshot's rows); GLD -> not in the snapshot rows or
+    # PORTFOLIO's positions, so it falls all the way to TDPro spot.
+    q.refresh(["SPY", "GLD"])
+    st = q.status()
+    assert st["sources"] == {"webull": 1, "tdpro-spot": 1}
+    assert st["max_age_sec"] is not None and st["max_age_sec"] >= 0.0
+
+
+def test_status_reports_no_sources_and_none_max_age_when_cache_is_empty():
+    q = Q.Quotes(wb_data=DeadSnapshot(), portfolio_fn=lambda: {}, td=None)
+    st = q.status()
+    assert st["sources"] == {}
+    assert st["max_age_sec"] is None
