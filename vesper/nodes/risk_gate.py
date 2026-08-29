@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List
 
-from vesper.account import FALLBACK_EQUITY, fetch_live_equity
+from vesper.account import FALLBACK_EQUITY, fetch_live_equity, fetch_live_buying_power
 from vesper.state import TradingState, OrderProposal
 from vesper.risk import RiskEnforcer
 
@@ -128,11 +128,29 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
     rejected_proposals: List[OrderProposal] = []
     audit_notes = []
     mode = state.get("mode", "dry_run")
+    # Per-proposal allocation-bucket snapshot, captured mid-loop (see below)
+    # BEFORE each proposal's own same-batch-stacking increment -- carrying
+    # only the final post-loop totals forward would show every proposal in
+    # a multi-proposal batch the same post-batch numbers, not the state as
+    # of when it was actually evaluated. Keyed by proposal.id, surfaced to
+    # human_gate_node's approval card via the `capital_snapshot` return key.
+    capital_snapshots: Dict[str, dict] = {}
 
     # One live-equity read per risk-gate pass, not per proposal — wb.py already
     # caches/rate-limits the underlying account-balance call, but there's no
     # reason to hit it more than once here.
     account_equity = await asyncio.to_thread(fetch_live_equity) if proposals else FALLBACK_EQUITY
+
+    # Live buying power, for the approval card's buying-power-impact line
+    # (see vesper/bot/base.py ProposalCard). Unlike account_equity there is
+    # no accepted fallback constant -- None means "unknown", and the card
+    # must omit the line rather than guess.
+    live_buying_power = await asyncio.to_thread(fetch_live_buying_power) if proposals else None
+    if proposals and live_buying_power is None and mode != "dry_run":
+        audit_notes.append(
+            "Capital allocation: live buying power unavailable this pass — "
+            "approval card will omit buying-power-impact for these proposals."
+        )
 
     # Portfolio-level drawdown circuit breaker -- runs once per pass,
     # independent of whether there are any proposals to check, because a
@@ -185,6 +203,17 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
                 wheel_stock_notional=wheel_stock_notional,
                 account_equity=account_equity,
             )
+            if is_valid:
+                # Snapshot BEFORE the same-batch-stacking increment just
+                # below, so a before/after diff on the approval card
+                # reflects state as of when THIS proposal was evaluated,
+                # not the batch's final post-loop totals.
+                capital_snapshots[prop.id] = {
+                    "open_long_option_count_before": open_long_option_count,
+                    "wheel_stock_notional_before": wheel_stock_notional,
+                    "sector": None,
+                    "sector_notional_before": None,
+                }
             if is_valid and prop.asset_type == "OPTION" and prop.side.upper() in ("BUY", "LONG"):
                 # A proposal in THIS batch that will itself become an open
                 # long option must count against the next one in the same
@@ -202,6 +231,16 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
             if is_adding_exposure:
                 from vesper.sector import get_sector
                 sector = await asyncio.to_thread(get_sector, prop.ticker)
+            if prop.id in capital_snapshots:
+                # A SELL/closing proposal never reaches here with a sector
+                # (is_adding_exposure gates the lookup above) -- snapshot
+                # stays None rather than fabricating one, matching the same
+                # honesty rule the live-mode OPTION-sector gap already
+                # follows.
+                capital_snapshots[prop.id]["sector"] = sector
+                capital_snapshots[prop.id]["sector_notional_before"] = (
+                    sector_notional.get(sector, 0.0) if sector else None
+                )
             is_valid, err = RiskEnforcer.check_sector_concentration(
                 prop,
                 sector=sector,
@@ -260,4 +299,7 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
         "rejected_proposals": rejected_proposals,
         "needs_human_approval": len(valid_proposals) > 0,
         "audit_trail": [audit_entry],
+        "account_equity": account_equity,
+        "live_buying_power": live_buying_power,
+        "capital_snapshot": capital_snapshots,
     }

@@ -12,6 +12,14 @@ from vesper.state import ExecutionResult
 
 logger = logging.getLogger(__name__)
 
+# Telegram's sendPhoto `caption` has a materially lower length cap than a
+# plain sendMessage `text` (~1024 vs ~4096 chars). The enriched card (worst-
+# case notional, buying-power impact, before/after diff, thesis, digest) can
+# get close to or past that once every optional line is populated -- rather
+# than let Telegram silently truncate the caption, drop the chart and send
+# the full text via sendMessage instead.
+_TELEGRAM_CAPTION_LIMIT = 1024
+
 
 class TelegramAdapter(ApprovalChannel):
     """Telegram Bot channel adapter."""
@@ -74,6 +82,15 @@ class TelegramAdapter(ApprovalChannel):
             except Exception as e:
                 logger.debug("5m chart generation for %s unavailable: %s", card.ticker, e)
                 chart_bytes = None
+
+        if chart_bytes and len(text) > _TELEGRAM_CAPTION_LIMIT:
+            logger.info(
+                "Proposal card for %s is %d chars, over Telegram's sendPhoto caption cap "
+                "(%d) -- sending as sendMessage without the chart rather than letting "
+                "Telegram truncate the caption.",
+                card.proposal_id, len(text), _TELEGRAM_CAPTION_LIMIT,
+            )
+            chart_bytes = None
 
         # 2. Send via Telegram sendPhoto API (multipart photo + caption + inline buttons)
         if chart_bytes:

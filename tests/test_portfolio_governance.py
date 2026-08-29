@@ -211,3 +211,112 @@ async def test_risk_gate_tripped_circuit_breaker_note_and_halts(clean_paper_ledg
     assert is_halted()[0]
     notes = res2["audit_trail"][0]["notes"]
     assert any("CIRCUIT BREAKER TRIPPED" in n for n in notes)
+
+
+# ── capital_snapshot: per-proposal before/after diff (approval-card enrichment) ──
+
+@pytest.mark.asyncio
+async def test_risk_gate_capital_snapshot_reflects_stacked_state_not_final_totals(clean_paper_ledger):
+    """Two long-option proposals in one batch: the SECOND proposal's snapshot
+    must show open_long_option_count_before=1 (the first one's own stacking
+    increment already applied), not the pre-batch 0 and not some
+    bulk-carried-forward post-loop value that would be wrong for the first
+    proposal too."""
+    props = [_long_call("prop-lc-a"), _long_call("prop-lc-b")]
+    state: TradingState = {
+        "session_id": "sess-snapshot-batch", "mode": "dry_run",
+        "proposals": props, "audit_trail": [],
+    }
+    with patch("vesper.llm.is_llm_enabled", return_value=False):
+        res = await risk_gate_node(state)
+
+    # prop-lc-a passes (first long option), prop-lc-b is rejected (would be
+    # the second) -- but a snapshot is only captured for a proposal that
+    # cleared the allocation-bucket check, so only prop-lc-a has one.
+    snap = res["capital_snapshot"]
+    assert snap["prop-lc-a"]["open_long_option_count_before"] == 0
+    assert "prop-lc-b" not in snap
+
+
+@pytest.mark.asyncio
+async def test_risk_gate_capital_snapshot_second_proposal_sees_first_stacked(clean_paper_ledger):
+    """Same batch shape, but with the second proposal drafted small enough
+    to independently qualify were the cap not '1' -- verifies the *sector*
+    half of the snapshot picks up the same-batch stacking too, by using
+    two different tickers assumed to map to different (stubbed) sectors so
+    both proposals clear check_capital_allocation_buckets and reach the
+    sector-snapshot line."""
+    prop_a = OrderProposal(
+        id="prop-sec-a", ticker="AAPL", asset_type="EQUITY", side="BUY",
+        limit_price=100.0, quantity=10, estimated_cost=1000.0, max_risk=1000.0,
+    )
+    prop_b = OrderProposal(
+        id="prop-sec-b", ticker="MSFT", asset_type="EQUITY", side="BUY",
+        limit_price=100.0, quantity=10, estimated_cost=1000.0, max_risk=1000.0,
+    )
+    state: TradingState = {
+        "session_id": "sess-snapshot-sector", "mode": "dry_run",
+        "proposals": [prop_a, prop_b], "audit_trail": [],
+    }
+    with patch("vesper.llm.is_llm_enabled", return_value=False):
+        res = await risk_gate_node(state)
+
+    snap = res["capital_snapshot"]
+    assert len(res["proposals"]) == 2  # both cleared (different sectors, well under cap)
+    assert snap["prop-sec-a"]["sector"] == "TEST_SECTOR_AAPL"
+    assert snap["prop-sec-a"]["sector_notional_before"] == 0.0
+    assert snap["prop-sec-b"]["sector"] == "TEST_SECTOR_MSFT"
+    assert snap["prop-sec-b"]["sector_notional_before"] == 0.0  # different sector bucket, unaffected by prop_a
+
+
+@pytest.mark.asyncio
+async def test_risk_gate_sell_to_open_snapshot_has_no_sector(clean_paper_ledger):
+    """A SELL-to-open (e.g. a CSP) never runs the sector lookup -- its
+    capital_snapshot entry must carry sector=None, never a fabricated one."""
+    csp = OrderProposal(
+        id="prop-csp-snap", ticker="AAPL", asset_type="OPTION", side="SELL",
+        limit_price=2.50, quantity=1, strike=90.0,
+        estimated_cost=9000.0, max_risk=9000.0,
+    )
+    state: TradingState = {
+        "session_id": "sess-snapshot-sell", "mode": "dry_run",
+        "proposals": [csp], "audit_trail": [],
+    }
+    with patch("vesper.llm.is_llm_enabled", return_value=False):
+        res = await risk_gate_node(state)
+
+    assert len(res["proposals"]) == 1
+    snap = res["capital_snapshot"]["prop-csp-snap"]
+    assert snap["sector"] is None
+    assert snap["sector_notional_before"] is None
+
+
+@pytest.mark.asyncio
+async def test_risk_gate_returns_account_equity_and_buying_power(clean_paper_ledger):
+    with patch("vesper.nodes.risk_gate.fetch_live_equity", return_value=25_000.0), \
+         patch("vesper.nodes.risk_gate.fetch_live_buying_power", return_value=12_500.0), \
+         patch("vesper.llm.is_llm_enabled", return_value=False):
+        state: TradingState = {
+            "session_id": "sess-equity-bp", "mode": "dry_run",
+            "proposals": [_long_call("prop-eq-1")], "audit_trail": [],
+        }
+        res = await risk_gate_node(state)
+
+    assert res["account_equity"] == 25_000.0
+    assert res["live_buying_power"] == 12_500.0
+
+
+@pytest.mark.asyncio
+async def test_risk_gate_missing_buying_power_is_none_not_fabricated(clean_paper_ledger):
+    """fetch_live_buying_power failing/unconfigured must surface as None on
+    the return dict, never a guessed number -- rule 1's fabrication ban
+    applies here exactly as it does to account_equity's own fallback."""
+    with patch("vesper.nodes.risk_gate.fetch_live_buying_power", return_value=None), \
+         patch("vesper.llm.is_llm_enabled", return_value=False):
+        state: TradingState = {
+            "session_id": "sess-no-bp", "mode": "dry_run",
+            "proposals": [_long_call("prop-eq-2")], "audit_trail": [],
+        }
+        res = await risk_gate_node(state)
+
+    assert res["live_buying_power"] is None

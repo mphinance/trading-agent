@@ -426,6 +426,68 @@ authoring. 5 tests in `tests/test_leveraged_and_skills.py`.
       open-vs-close distinction, so a naive wire-up would open a *new*
       position instead of closing the existing one.
 
+### ✅ Module 8 — Approval Card Enrichment & Before/After Diff (done)
+Landed the "Enrich the approval card" and "Before/after portfolio diff on
+the approval card" backlog items below as one feature. `risk_gate_node`
+now returns `account_equity`, `live_buying_power` (new
+`vesper/account.fetch_live_buying_power`, mirrors `fetch_live_equity`'s
+shape but has no fallback constant -- `None` on any failure, never a
+guessed number) and a per-proposal `capital_snapshot` captured INSIDE the
+existing allocation-bucket loop, immediately before each proposal's own
+same-batch-stacking increment. That snapshot-before-increment step is the
+actual work here: the locals it reads (`open_long_option_count`,
+`sector_notional`) were already computed one node earlier but only ever
+existed as post-loop values, which would have shown every proposal in a
+multi-proposal batch the same post-batch totals rather than the state as
+of when it was actually evaluated (see
+`tests/test_portfolio_governance.py`'s
+`test_risk_gate_capital_snapshot_reflects_stacked_state_not_final_totals`).
+A SELL-to-open proposal's snapshot carries `sector=None` rather than a
+fabricated value, since `risk_gate_node` never looks up a sector for it.
+
+`vesper/bot/card_builder.py` (new) computes worst-case notional and a
+proposal-time digest, both `Optional` and `None` on anything uncomputable
+(missing strike on a SELL-to-open, an unregistered multi-leg strategy, a
+malformed leg composition) rather than showing a placeholder. Deliberate
+deviation from how this was originally scoped: the plan called for
+extracting this math out of `vesper/execution_guard.py` itself, but that
+file is off-limits to routine edits per this batch's task rules -- so the
+single-leg strike-vs-premium branch is a small, deliberate DUPLICATE of
+`_validate`'s logic instead of a shared extraction, while the multi-leg
+formulas (`THEGA`/`SYNTHETIC_LONG`) are still reused via a read-only
+import of `execution_guard._MULTI_LEG_RISK_FORMULAS` so that math stays
+defined exactly once. `execution_guard.py` itself has zero changes from
+this module -- `tests/test_execution_guard.py`'s 40+ existing cases pin
+that.
+
+`OrderProposal` gained `thesis`/`thesis_source`, now actually populated at
+`playbooks.py`'s `generate_candidate_thesis` call site -- closing a
+pre-existing gap where the LLM thesis was appended to `audit_notes` only
+and never reached the card, so the card's thesis line was always empty in
+production. `ProposalCard` gained the digest, worst-case notional,
+buying-power impact, and before/after diff fields, all `Optional` and
+included in `format_text()`/the Discord embed only when not `None`.
+`human_gate_node` now threads `state` through
+`channel_manager.broadcast_proposal`, which is what makes both the diff
+and the (now finally non-empty) thesis line reach the card.
+
+**Explicitly NOT done:** no ticket is created earlier in the flow. The
+card's "Proposal Digest" is a hash of the DRAFTED proposal (ticker/side/
+quantity/... -- no `account_id`, no resolved `contract_symbol`), labeled
+and documented as different from the execution-time ticket's own digest
+(`execution_guard.Ticket`, minted only after approval, TTL
+`execution_guard.TICKET_TTL_SEC`=120s) -- showing a real ticket
+pre-approval would mean minting one before the human decision, which is a
+change to the execution path this module deliberately did not make.
+Telegram's sendPhoto caption cap (~1024 chars, materially lower than
+sendMessage's) is handled by measuring the enriched text and falling back
+to a chart-less sendMessage rather than letting Telegram truncate -- not
+by shortening the card.
+
+Tests: `tests/test_card_builder.py` (new), enrichment additions to
+`tests/test_bot_channel.py`, `tests/test_portfolio_governance.py`, and
+`tests/test_risk_and_bounce.py`.
+
 ---
 
 ## 💡 Ideas Backlog (speculative — not committed, no phase number)
@@ -977,17 +1039,12 @@ them as "obvious wins" and quietly erode that property.
   `paper_ledger.py` already establish the atomic-write persistence pattern.
   Deliberately post-trade/append-only: this is for after-the-fact integrity,
   NOT a new gate in the execution path.
-- **Before/after portfolio diff on the approval card** (from claude-ads,
-  whose mutation gate requires showing before/after state, not just the
-  proposed change). Today's Telegram/Discord cards render the order in
-  isolation — side, strike, quantity, price. They never show what the
-  portfolio looks like now vs. projected-after-fill. A human reviewing
-  "SELL 1x AAPL PUT $190" in isolation has a much harder time catching
-  "that's my third open tech position" or "that takes the sector bucket to
-  14.8%" than one shown the projected state. Note that the data is already
-  computed: `risk_gate_node` builds sector-notional maps and open-position
-  counts for the allocation buckets, so this is largely a matter of carrying
-  those figures onto the card rather than new calculation.
+- **Before/after portfolio diff on the approval card** (from claude-ads) —
+  now landed as Module 8 above. Turned out the underlying locals were
+  computed one node earlier but never returned to state, AND were mutated
+  in-place across a proposal batch, so "carrying those figures onto the
+  card" needed a real per-proposal snapshot captured mid-loop, not a bulk
+  carry-forward of the final post-loop dict — see Module 8's note for why.
 
 ### From `docs/EXPANSION_AND_DISTRIBUTION_PLAN.md` (external, 2026-08-29)
 
@@ -1026,14 +1083,15 @@ MCP surface (`mcp_server/server.py`, FastMCP, stdio default).
 
 Vetted ideas worth taking, roughly by value-per-effort:
 
-- **Enrich the approval card** — highest value, lowest effort, and it
-  compounds with the claude-ads before/after diff above. The doc's proposed
-  card contents that Vesper doesn't currently show: worst-case notional,
-  buying-power impact, payload hash, ticket expiration time, and which model
-  produced the rationale. Every one of those already exists somewhere at
-  approval time (`execution_guard` computes the notional and the digest and
-  owns the 120s TTL; `risk_gate_node` has buying power) — this is surfacing
-  data, not computing it.
+- **Enrich the approval card** — now landed as Module 8 above, together
+  with the claude-ads before/after diff. Two of this bullet's own factual
+  claims turned out wrong when checked against the code and are corrected
+  there: buying power was NOT already available at approval time (only at
+  execution time, via `executor.py` — `risk_gate_node` needed a new
+  `fetch_live_buying_power`), and "payload hash"/"ticket expiration" could
+  not be shown as literal ticket fields since no ticket exists until after
+  approval — the card shows a clearly-labeled proposal digest (a different
+  hash, over a different key set) plus the static TTL constant instead.
 - **Broker-neutral canonical order schema**, with unsupported features kept
   **explicit rather than silently approximated**. That last clause is already
   this codebase's rule (see the multi-leg `_MULTI_LEG_RISK_FORMULAS`

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock, patch
 from vesper.risk import RiskEnforcer
 from vesper.state import TechnicalAudit, MarketRegime, TradingState
 from vesper.nodes.playbooks import playbooks_node
@@ -97,6 +98,39 @@ async def test_playbooks_node_synthesizes_bounce_2_proposal():
     assert nvda_prop.stop_loss < 198.5
     assert nvda_prop.profit_target > 198.5
     assert nvda_prop.risk_reward_ratio >= 1.5
+
+
+@pytest.mark.asyncio
+async def test_bounce_2_proposal_gets_thesis_attached_when_llm_enabled():
+    """Regression: generate_candidate_thesis's result used to be appended
+    only to audit_notes (never reaching the OrderProposal, so the approval
+    card's thesis line was always empty in production -- see
+    ROADMAP.md/CLAUDE.md). Must now land on prop.thesis/thesis_source too."""
+    thesis_result = {
+        "source": "openrouter/deepseek/deepseek-v4-flash",
+        "thesis": "Pullback into the 21 EMA with an RSI(2) reset, bullish regime.",
+        "confidence": 4,
+        "key_catalysts": ["EMA alignment", "Action Zone pullback"],
+    }
+    with patch("vesper.llm.is_llm_enabled", return_value=True), \
+         patch("vesper.llm.generate_candidate_thesis", new_callable=AsyncMock) as mock_thesis:
+        mock_thesis.return_value = thesis_result
+        out = await playbooks_node(_state_for(_bounce_ready_tech()))
+
+    nvda_prop = next(p for p in out["proposals"] if p.ticker == "NVDA")
+    assert nvda_prop.thesis == thesis_result["thesis"]
+    assert nvda_prop.thesis_source == "openrouter/deepseek/deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
+async def test_bounce_2_proposal_thesis_stays_none_without_llm():
+    """No LLM configured -- generate_candidate_thesis is never called, and
+    the proposal's thesis fields must stay None (never a placeholder), so
+    the approval card correctly omits the thesis line."""
+    out = await playbooks_node(_state_for(_bounce_ready_tech()))
+    nvda_prop = next(p for p in out["proposals"] if p.ticker == "NVDA")
+    assert nvda_prop.thesis is None
+    assert nvda_prop.thesis_source is None
 
 
 @pytest.mark.asyncio

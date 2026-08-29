@@ -9,7 +9,7 @@ from vesper.bot.base import ApprovalChannel, ProposalCard
 from vesper.bot.telegram_adapter import TelegramAdapter
 from vesper.bot.discord_adapter import DiscordAdapter
 from vesper.bot.webhook_adapter import WebhookAdapter
-from vesper.state import OrderProposal, ExecutionResult
+from vesper.state import OrderProposal, ExecutionResult, TradingState
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,19 @@ class ChannelManager:
         """Returns only channels that have valid credentials set."""
         return [c for c in self.channels if c.configured]
 
-    async def broadcast_proposal(self, prop: OrderProposal, thesis: str = "") -> Dict[str, Optional[str]]:
-        """Broadcast an interactive proposal card across all configured channels."""
-        card = ProposalCard.from_proposal(prop, thesis)
+    async def broadcast_proposal(
+        self,
+        prop: OrderProposal,
+        thesis: str = "",
+        state: Optional[TradingState] = None,
+    ) -> Dict[str, Optional[str]]:
+        """Broadcast an interactive proposal card across all configured channels.
+
+        `state` (risk_gate_node's TradingState return) enriches the card with
+        the before/after allocation-bucket diff and buying-power impact when
+        given -- see ProposalCard.from_proposal. Optional so existing callers
+        that only need the bare card keep working."""
+        card = ProposalCard.from_proposal(prop, thesis, state)
         results = {}
         for chan in self.active_channels:
             try:

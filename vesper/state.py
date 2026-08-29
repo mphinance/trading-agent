@@ -118,6 +118,12 @@ class OrderProposal(BaseModel):
     # regardless of P&L, since the point of the trade is IV crush, not a
     # profit target. None for every other playbook.
     earnings_exit_date: Optional[str] = None
+    # Approval-card thesis enrichment (see vesper/nodes/playbooks.py's
+    # generate_candidate_thesis call site). None for every playbook that
+    # never calls the LLM enrichment step -- the card must omit its
+    # thesis/model lines entirely in that case, never show a placeholder.
+    thesis: Optional[str] = None
+    thesis_source: Optional[str] = None  # e.g. "openrouter/deepseek/deepseek-v4-flash" or "deterministic_fallback"
     contract_symbol: Optional[str] = None
     expiry: Optional[str] = None
     strike: Optional[float] = None
@@ -179,6 +185,16 @@ class TradingState(TypedDict):
     proposals: List[OrderProposal]
     rejected_proposals: Annotated[List[OrderProposal], operator.add]
     execution_results: List[ExecutionResult]
+
+    # Approval-card enrichment (see vesper/nodes/risk_gate.py): the risk
+    # gate's own live-equity read and per-proposal allocation-bucket
+    # snapshots, surfaced so human_gate_node's approval card can show a
+    # before/after diff instead of the order in isolation. All Optional --
+    # a failed live fetch must be representable as "unknown", never a
+    # fabricated number (rule: never fabricate a market-data value).
+    account_equity: Optional[float]
+    live_buying_power: Optional[float]
+    capital_snapshot: Optional[Dict[str, Dict[str, Any]]]  # keyed by proposal.id
     
     # Human-in-the-Loop & Audit
     needs_human_approval: bool

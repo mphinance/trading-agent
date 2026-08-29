@@ -39,7 +39,13 @@ async def human_gate_node(state: TradingState) -> Dict[str, Any]:
     from vesper.bot.manager import channel_manager
     if channel_manager.active_channels:
         for p in proposals:
-            await channel_manager.broadcast_proposal(p)
+            # Pass `state` through so the card can show the before/after
+            # allocation-bucket diff risk_gate_node computed one node
+            # earlier (account_equity/live_buying_power/capital_snapshot),
+            # and so p.thesis (now populated at draft time -- see
+            # playbooks.py) actually reaches the card instead of a
+            # never-passed empty string.
+            await channel_manager.broadcast_proposal(p, state=state)
 
     # Check if human decision already provided (e.g. via CLI, inbound callback, or resume)
     decision = state.get("human_decision")

@@ -907,6 +907,11 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                         )
                         if thesis_res and thesis_res.get("thesis"):
                             audit_notes.append(f"AI Thesis ({thesis_res.get('source')}): {thesis_res['thesis']}")
+                            # Also attach to the proposal itself so the
+                            # approval card can show it -- audit_notes is
+                            # audit-trail-only and never reaches the card.
+                            prop.thesis = thesis_res.get("thesis")
+                            prop.thesis_source = thesis_res.get("source")
                     except Exception as e:
                         logger.debug("OpenRouter thesis enrichment skipped: %s", e)
 

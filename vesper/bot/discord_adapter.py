@@ -66,6 +66,40 @@ class DiscordAdapter(ApprovalChannel):
             "footer": {"text": "Vesper Quant Engine • Reply with approve / reject"},
         }
 
+        # Approval-card enrichment fields -- each added only when the card
+        # actually has the value (never a 0/placeholder for something that
+        # couldn't be computed or wasn't fetched; see vesper/bot/base.py).
+        if card.worst_case_notional is not None:
+            impact = (
+                f" ({card.buying_power_impact_pct:.1%} of BP)"
+                if card.buying_power_impact_pct is not None else ""
+            )
+            embed["fields"].append({
+                "name": "Worst-Case Notional",
+                "value": f"${card.worst_case_notional:,.2f}{impact}",
+                "inline": True,
+            })
+        if card.open_long_option_count_before is not None:
+            embed["fields"].append({
+                "name": "Open Long Options",
+                "value": f"{card.open_long_option_count_before} → {card.open_long_option_count_after}",
+                "inline": True,
+            })
+        if card.sector and card.sector_notional_before is not None:
+            embed["fields"].append({
+                "name": f"{card.sector} Sector Notional",
+                "value": f"${card.sector_notional_before:,.2f} → ${card.sector_notional_after:,.2f}",
+                "inline": True,
+            })
+        if card.thesis_source:
+            embed["fields"].append({"name": "Thesis Source", "value": card.thesis_source, "inline": True})
+        if card.proposal_digest:
+            embed["fields"].append({
+                "name": "Proposal Digest",
+                "value": f"`{card.proposal_digest[:16]}…`",
+                "inline": False,
+            })
+
         # 1. Attempt 5-minute candlestick chart generation
         chart_bytes: Optional[bytes] = None
         if card.ticker:
