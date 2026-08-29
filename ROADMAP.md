@@ -556,9 +556,10 @@ kind of system.
   wrong stack for an already-existing product, not a gap to fill.
 
 ### Trading-specific
-- **Vol-targeting position sizing — best effort:impact ratio here, do this
-  one first.** `RiskEnforcer.calculate_equity_size` already computes ATR;
-  size ∝ `target_vol / realized_vol` is a formula change, not new infra.
+- ~~Vol-targeting position sizing~~ — already landed as
+  `RiskEnforcer.calculate_vol_targeted_size` (`vol_scalar = clip(daily_target_vol
+  / realized_daily_vol, 0.4, 1.6)` scaling `effective_risk_pct`), used by the
+  ADX/IV router's Training Wheels branch and Bounce 2.0.
 - **Holly (Trade Ideas AI)'s nightly re-optimization**: re-backtest strategy
   variants nightly, only activate ones clearing a win-rate/reward:risk bar
   for the next session. Ties Module 4 and Module 5 into an actual gate on
