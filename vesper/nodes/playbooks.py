@@ -702,6 +702,49 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                     "multi-leg execution pipeline deferred"
                 )
 
+    # ── 5. PREMIUM-RECYCLING "FREE SHARE" ENGINE ───────────────────────────
+    # Sweeps realized options-selling P&L from paper ledger into accumulating
+    # 100-share blocks of a stabilizing asset (default $SGOV), funded entirely
+    # from collected premium (not fresh capital).
+    # Configured via VESPER_PREMIUM_RECYCLE_TICKER (default SGOV).
+    if selected_playbook in ("all", "recycle", "premium_recycle", "free_shares"):
+        from vesper.paper_ledger import get_unswept_premium
+        unswept_pnl = await asyncio.to_thread(get_unswept_premium)
+        recycle_ticker = os.getenv("VESPER_PREMIUM_RECYCLE_TICKER", "SGOV").strip().upper()
+
+        if recycle_ticker and unswept_pnl > 0:
+            recycle_price = await asyncio.to_thread(_fetch_live_quote, recycle_ticker)
+            if recycle_price is None:
+                audit_notes.append(
+                    f"Skipped Premium Recycling for {recycle_ticker}: no live quote available"
+                )
+            else:
+                block_cost = round(recycle_price * 100, 2)
+                if unswept_pnl >= block_cost:
+                    recycle_prop = OrderProposal(
+                        id=f"prop-recycle-{uuid.uuid4().hex[:6]}",
+                        ticker=recycle_ticker,
+                        asset_type="EQUITY",
+                        side="BUY",
+                        order_type="LIMIT",
+                        quantity=100,
+                        limit_price=recycle_price,
+                        stop_loss=round(recycle_price * 0.98, 2),
+                        profit_target=round(recycle_price * 1.05, 2),
+                        estimated_cost=block_cost,
+                        max_risk=block_cost,
+                        risk_reward_ratio=1.0,
+                    )
+                    proposals.append(recycle_prop)
+                    audit_notes.append(
+                        f"Drafted Premium Recycling Buy: 100 shares of {recycle_ticker} @ ${recycle_price:.2f} "
+                        f"(Funded by ${block_cost:,.2f} of ${unswept_pnl:,.2f} unswept realized options premium)"
+                    )
+                else:
+                    audit_notes.append(
+                        f"Premium Recycling: unswept PnL (${unswept_pnl:,.2f}) below 100-share threshold for {recycle_ticker} (${block_cost:,.2f})"
+                    )
+
     audit_entry = {
         "node": "playbooks_node",
         "timestamp": datetime.now(timezone.utc).isoformat(),

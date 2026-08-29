@@ -29,6 +29,7 @@ def _load_ledger() -> Dict[str, Any]:
                 "cash": DEFAULT_STARTING_CASH,
                 "unrealized_pnl": 0.0,
                 "realized_pnl": 0.0,
+                "swept_premium": 0.0,
                 "total_nlv": DEFAULT_STARTING_CASH,
                 "last_marked_at": datetime.now(timezone.utc).isoformat(),
             },
@@ -40,6 +41,10 @@ def _load_ledger() -> Dict[str, Any]:
             data = json.load(f)
             if not isinstance(data, dict):
                 raise ValueError("Ledger data is not a dict")
+            # Ensure swept_premium is initialized
+            acc = data.setdefault("account", {})
+            if "swept_premium" not in acc:
+                acc["swept_premium"] = 0.0
             return data
     except Exception as e:
         logger.warning(f"Failed to load paper ledger: {e}")
@@ -49,6 +54,7 @@ def _load_ledger() -> Dict[str, Any]:
                 "cash": DEFAULT_STARTING_CASH,
                 "unrealized_pnl": 0.0,
                 "realized_pnl": 0.0,
+                "swept_premium": 0.0,
                 "total_nlv": DEFAULT_STARTING_CASH,
                 "last_marked_at": datetime.now(timezone.utc).isoformat(),
             },
@@ -120,6 +126,16 @@ def record_paper_fill(
         account["cash"] = round(current_cash + total_cost, 2)
 
     fills.append(fill_entry)
+
+    # If this fill is from a premium recycling proposal, mark the premium as swept
+    if str(order_id).startswith("prop-recycle-"):
+        current_swept = float(account.get("swept_premium", 0.0))
+        account["swept_premium"] = round(current_swept + total_cost, 2)
+        logger.info(
+            f"♻️ [PREMIUM RECYCLED] Swept ${total_cost:,.2f} into {quantity}x {ticker} "
+            f"(Total swept: ${account['swept_premium']:,.2f})"
+        )
+
     _save_ledger(ledger)
 
     logger.info(
@@ -270,15 +286,38 @@ def get_paper_summary() -> Dict[str, Any]:
     wins = sum(1 for c in closed if (c.get("realized_pnl") or 0) > 0)
     win_rate = (wins / len(closed) * 100.0) if closed else 0.0
 
+    realized_pnl = float(account.get("realized_pnl", 0.0))
+    swept_premium = float(account.get("swept_premium", 0.0))
+    unswept_premium = max(0.0, round(realized_pnl - swept_premium, 2))
+
     return {
         "initial_cash": init_cash,
         "cash": float(account.get("cash", init_cash)),
         "total_nlv": total_nlv,
         "total_return_pct": round(total_return_pct, 2),
-        "realized_pnl": float(account.get("realized_pnl", 0.0)),
+        "realized_pnl": realized_pnl,
+        "swept_premium": swept_premium,
+        "unswept_premium": unswept_premium,
         "unrealized_pnl": float(account.get("unrealized_pnl", 0.0)),
         "open_positions_count": len(open_fills),
         "closed_trades_count": len(closed),
         "win_rate_pct": round(win_rate, 1),
         "last_marked_at": account.get("last_marked_at"),
     }
+
+
+def mark_premium_swept(amount: float) -> float:
+    """Mark an amount of realized options premium as swept into share accumulation."""
+    ledger = _load_ledger()
+    account = ledger.setdefault("account", {})
+    current_swept = float(account.get("swept_premium", 0.0))
+    new_swept = round(current_swept + amount, 2)
+    account["swept_premium"] = new_swept
+    _save_ledger(ledger)
+    return new_swept
+
+
+def get_unswept_premium() -> float:
+    """Return available unswept realized options premium."""
+    summary = get_paper_summary()
+    return float(summary.get("unswept_premium", 0.0))

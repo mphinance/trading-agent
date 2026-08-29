@@ -388,9 +388,17 @@ research pass done on this repo:
   - `ADX >= 20` + `IV < 70%` -> "LEAPS": buy far-dated call (6-12 months out, ~180-400 DTE) with premium-based notional (`premium * 100 * qty`).
   - `ADX >= 20` + `IV >= 70%` -> "Synthetic Long": **explicitly NOT done** (skipped with audit note; multi-leg pipeline deferred to dedicated multi-leg order execution milestone).
   Tested in `tests/test_adx_iv_router.py`.
-- **Two strategies with zero code**: a premium-recycling "free share" engine
-  (sweep 100% of options-selling P&L into shares until a free 100-share block
-  accumulates); and a delta-neutral "Thega" volatility harvest for high-IV binary
+- **Premium-recycling "free share" engine (landed — paper ledger)**:
+  Sweeps cumulative options-selling realized P&L from paper ledger into accumulating
+  100-share blocks of a stabilizing asset (`VESPER_PREMIUM_RECYCLE_TICKER`, default `$SGOV`),
+  funded entirely from collected premium rather than fresh capital.
+  - Computes `unswept_premium = realized_pnl - swept_premium`.
+  - When `unswept_premium >= 100 * live_quote`, drafts a 100-share BUY proposal.
+  - Premium is marked as swept only upon fill execution (`record_paper_fill`), preventing
+    premature spending if rejected.
+  - Tested in `tests/test_premium_recycling.py`. (Live Webull trade-history premium mining
+    remains future work).
+- **One strategy with zero code**: a delta-neutral "Thega" volatility harvest for high-IV binary
   events (100 shares + 1 ATM covered call + 3 ATM CSPs, net delta ≈0).
 - **`0dte_flow` tightening**: only run weeklies where IV>70%, sell puts at
   0.30 delta or at major OI put walls, reject wide-spread chains, harvest ATM
