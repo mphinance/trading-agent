@@ -8,6 +8,7 @@ from pathlib import Path
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
+from vesper import audit_chain
 from vesper.state import TradingState
 from vesper.nodes import (
     regime_node,
@@ -61,6 +62,47 @@ async def _get_sqlite_checkpointer():
     return _sqlite_saver
 
 
+def _with_audit_chain(node_name, node_fn):
+    """Wrap a node so every `audit_trail` entry it returns is also committed
+    to the hash-chained ledger (see `vesper/audit_chain.py`) the instant
+    it's produced -- not batched at session end.
+
+    Why per-node, not a session-end hook: `run_agent_session`'s own
+    `final_state` (vesper/runner.py) only ever ends up holding the LAST
+    node's own delta -- `app.astream()` yields per-node output dicts, not
+    merged state -- so a session-end hook would silently chain only
+    reflection_node's entry and lose every earlier one, the opposite of
+    tamper-evidence. `human_gate_node` can also `interrupt()` and pause a
+    thread across a process restart (the whole reason this graph has a
+    persistent SQLite checkpointer), so a session may never reach a clean
+    end within one process's lifetime at all. Per-node persistence commits
+    each entry the instant it's produced, so a crash mid-approval-wait still
+    leaves a gapless, verifiable chain up to whatever ran.
+
+    Scope: post-trade, append-only, non-blocking. The try/except is the
+    mechanism that makes "reports, never refuses" literally true -- a
+    disk-full or permissions error is logged and swallowed here, and the
+    node's real output still returns to the graph untouched. This never
+    raises into, blocks, or alters the execution path.
+    """
+    async def _wrapped(state):
+        output = await node_fn(state)
+        if isinstance(output, dict) and output.get("audit_trail"):
+            for entry in output["audit_trail"]:
+                try:
+                    audit_chain.append_entry(
+                        session_id=state.get("session_id", "unknown"),
+                        node=node_name,
+                        entry=entry,
+                    )
+                except Exception:
+                    logger.warning(
+                        "audit_chain append failed for %s (non-fatal)", node_name, exc_info=True
+                    )
+        return output
+    return _wrapped
+
+
 def should_execute_route(state: TradingState) -> str:
     """Conditional router after Human Gate."""
     proposals = state.get("proposals", [])
@@ -94,15 +136,18 @@ async def build_trading_graph(checkpointer: bool = True, persistent: bool = True
     """
     workflow = StateGraph(TradingState)
 
-    # 1. Add all nodes
-    workflow.add_node("regime_node", regime_node)
-    workflow.add_node("scanner_node", scanner_node)
-    workflow.add_node("analyst_node", analyst_node)
-    workflow.add_node("playbooks_node", playbooks_node)
-    workflow.add_node("risk_gate_node", risk_gate_node)
-    workflow.add_node("human_gate_node", human_gate_node)
-    workflow.add_node("executor_node", executor_node)
-    workflow.add_node("reflection_node", reflection_node)
+    # 1. Add all nodes, each wrapped so its audit_trail entries are
+    # committed to the hash-chained ledger the instant they're produced
+    # (see _with_audit_chain's docstring for why this is per-node wiring
+    # rather than a session-end hook).
+    workflow.add_node("regime_node", _with_audit_chain("regime_node", regime_node))
+    workflow.add_node("scanner_node", _with_audit_chain("scanner_node", scanner_node))
+    workflow.add_node("analyst_node", _with_audit_chain("analyst_node", analyst_node))
+    workflow.add_node("playbooks_node", _with_audit_chain("playbooks_node", playbooks_node))
+    workflow.add_node("risk_gate_node", _with_audit_chain("risk_gate_node", risk_gate_node))
+    workflow.add_node("human_gate_node", _with_audit_chain("human_gate_node", human_gate_node))
+    workflow.add_node("executor_node", _with_audit_chain("executor_node", executor_node))
+    workflow.add_node("reflection_node", _with_audit_chain("reflection_node", reflection_node))
 
     # 2. Add sequential edges
     workflow.add_edge(START, "regime_node")

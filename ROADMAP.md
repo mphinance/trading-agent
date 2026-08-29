@@ -490,6 +490,77 @@ Tests: `tests/test_card_builder.py` (new), enrichment additions to
 
 ---
 
+### ✅ Module 9 — Hash-Chained Tamper-Evident Audit Ledger (done)
+Landed the "Hash-chained audit ledger" backlog item below. New
+`vesper/audit_chain.py` (mirrors `halt.py`'s module shape: hardcoded
+`_DATA_DIR`/path constants, redirected by `tests/conftest.py`'s
+`_isolated_vesper_state` fixture) appends every `audit_trail` entry any
+node produces to `data/audit_chain.jsonl` as it's produced, each record
+carrying `prev_hash` (the previous record's own `hash`, or
+`GENESIS_HASH = "0" * 64` for the first) and its own SHA-256 `hash` over
+everything else. `verify_chain()` walks the file in order and returns
+either `{"valid": True, "entry_count": n}` or a localized break --
+`break_index`/`break_node`/`break_session`/`break_reason` naming which
+kind of tamper it found (content edited after the fact, a middle entry
+deleted, the true first entry deleted, or a corrupt line).
+
+The write site is `vesper/graph.py`'s node registration
+(`_with_audit_chain`), not a `run_agent_session` end-of-session hook --
+deliberately, because `runner.py`'s own `final_state` only ever holds the
+LAST node's own delta (`app.astream()` yields per-node deltas, not merged
+state), so a session-end hook would have silently chained only
+`reflection_node`'s entry and lost every earlier one. Per-node persistence
+also survives `human_gate_node`'s `interrupt()` pausing a thread across a
+process restart -- a session may never reach a clean end within one
+process's lifetime, and this still leaves a gapless chain up to whatever
+ran. The wrapper's `try/except` around the append call is the actual
+mechanism behind "reports, never refuses": a chain-write failure (disk
+full, permissions) is logged and swallowed, the node's real return value
+reaches the graph untouched, and nothing here ever gates or blocks
+execution -- this is strictly post-trade and append-only.
+
+`append_entry` uses append-mode (`"a+b"`) plus an exclusive `fcntl.flock`
+rather than `halt.py`/`paper_ledger.py`'s tmp-file+`os.replace` pattern --
+deliberately, since that pattern exists to make a small mutable JSON
+*object* safe to fully overwrite on every call, which would be pure
+O(n)-in-ledger-size waste here (nothing before the last line ever
+changes). flock closes the one real gap plain append-mode alone would
+leave: `vesper loop`'s long-running daemon and a one-shot `vesper scan`
+CLI invocation can open this file concurrently.
+
+New CLI: `vesper audit` (`--verify` registered but currently a no-op flag,
+reserved for a future `--export`/`--tail`) prints entry count and, on a
+broken chain, the break location and reason, exiting 1.
+
+**Explicitly NOT done:** `_digest` is a deliberate 2-line duplicate of
+`execution_guard._digest`'s formula rather than an import -- that name is
+private and `execution_guard.py` is off-limits to routine edits. No new
+gate anywhere in the execution path; a broken chain is reported, not
+enforced. No retroactive backfill of `audit_trail` entries written before
+this module existed.
+
+Tests: `tests/test_audit_chain.py` (new) -- genesis/chaining, a passing
+N-entry chain, an edited-entry detection, a deleted-middle-entry detection
+(and that its `break_reason` names the broken `prev_hash` link rather than
+a raw position mismatch), missing/empty-file handling, the wrapper's
+non-propagation of an append failure, and a real multi-node LangGraph
+`StateGraph` run (mirroring `tests/test_graph.py`'s mini-graph pattern)
+whose `verify_chain()` entry count is checked against the graph's actual
+output rather than any single node's return value -- the same class of
+bug a naive session-end hook would have hidden.
+
+**Also found, unrelated, not touched (report-don't-fix):** `vesper.py`'s
+`halt` command references `args.reason` but `--reason` is never registered
+via `add_argument` anywhere in the parser -- `vesper halt` raises
+`AttributeError` before it ever calls `halt.py`'s `halt()`. And
+`runner.py:111`'s `final_state = output` inside the `astream()` loop only
+ever holds the last node's own delta, not merged state, so anything
+reading `run_agent_session(...)["audit_trail"]` today silently gets only
+`reflection_node`'s single entry -- exactly why this module hooks the
+graph/node layer instead.
+
+---
+
 ## 💡 Ideas Backlog (speculative — not committed, no phase number)
 
 ### ⭐ Do first: gaps against Michael's own documented strategy
@@ -1029,16 +1100,13 @@ rule that an LLM may narrate, reject, or shrink — never originate a position
 or increase size. Noting them here so a future session doesn't rediscover
 them as "obvious wins" and quietly erode that property.
 
-- **Hash-chained audit ledger** (from Vibe-Trading). `audit_trail` is
-  currently an appended list of per-node dicts with no tamper-evidence: any
-  entry can be edited or dropped after the fact with nothing to detect it.
-  A post-trade hash chain (each entry carrying a SHA-256 over its own content
-  plus the previous entry's hash) makes silent modification detectable, and
-  is a small, well-scoped extension of infrastructure that already exists —
-  `execution_guard` already computes payload digests, and `halt.py` /
-  `paper_ledger.py` already establish the atomic-write persistence pattern.
-  Deliberately post-trade/append-only: this is for after-the-fact integrity,
-  NOT a new gate in the execution path.
+- **Hash-chained audit ledger** (from Vibe-Trading) — now landed as Module 9
+  above. `audit_trail` was an appended list of per-node dicts with no
+  tamper-evidence; each entry now also commits to a SHA-256 hash chain
+  (`vesper/audit_chain.py`) the instant it's produced, wired in at
+  `vesper/graph.py`'s node registration rather than session end -- see
+  Module 9's note for why a session-end hook would have silently dropped
+  everything but the last node's entries.
 - **Before/after portfolio diff on the approval card** (from claude-ads) —
   now landed as Module 8 above. Turned out the underlying locals were
   computed one node earlier but never returned to state, AND were mutated

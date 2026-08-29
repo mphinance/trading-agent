@@ -37,7 +37,7 @@ Examples:
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen", "loop", "alerts"],
+        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen", "loop", "alerts", "audit"],
         help="Action command",
     )
     parser.add_argument("ticker", nargs="?", default=None, help="Target symbol for analysis")
@@ -61,6 +61,7 @@ Examples:
     )
     parser.add_argument("--disarm", default=None, metavar="ID", help="alerts: remove an alert by id")
     parser.add_argument("--note", default=None, help="alerts: optional note attached to an armed alert")
+    parser.add_argument("--verify", action="store_true", help="audit: verify the hash chain's integrity")
 
     args = parser.parse_args()
 
@@ -178,6 +179,26 @@ Examples:
             )
         print("=" * 60)
         sys.exit(0)
+
+    if args.command == "audit":
+        # --verify is accepted but currently a no-op flag since `audit` only
+        # has one mode today; keeping it registered leaves room for a future
+        # `vesper audit --export`/`--tail` without a breaking CLI change,
+        # matching this file's existing habit of pre-registering flags
+        # per-command (--arm/--disarm above).
+        from vesper.audit_chain import verify_chain
+        result = verify_chain()
+        print("\n" + "=" * 60)
+        print("🔗 VESPER AUDIT CHAIN INTEGRITY")
+        print("=" * 60)
+        print(f"Entries: {result.get('entry_count', result.get('break_index', '?'))}")
+        if result["valid"]:
+            print("✅ Chain intact -- no tampering detected.")
+        else:
+            print(f"🛑 BROKEN at entry #{result['break_index']} (node={result.get('break_node')}, session={result.get('break_session')})")
+            print(f"   Reason: {result['break_reason']}")
+        print("=" * 60)
+        sys.exit(0 if result["valid"] else 1)
 
     if args.command == "morning":
         from vesper.morning import generate_morning_plan

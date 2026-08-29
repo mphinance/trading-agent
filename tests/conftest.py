@@ -116,6 +116,13 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", vesper_data_dir)
     monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", vesper_data_dir / "paper_ledger.json")
 
+    # vesper/audit_chain.py's hash-chained ledger -- same reasoning as the
+    # three above: a hardcoded module-level _DATA_DIR that would otherwise
+    # read/write the developer's real vesper/data/audit_chain.jsonl and
+    # contaminate cross-test state.
+    monkeypatch.setattr("vesper.audit_chain._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("vesper.audit_chain._CHAIN_PATH", vesper_data_dir / "audit_chain.jsonl")
+
     # ApprovalRegistry (vesper/bot/inbound.py) became disk-backed the same
     # way -- same reasoning, same fix.
     monkeypatch.setattr("vesper.bot.inbound._DATA_DIR", vesper_data_dir)
