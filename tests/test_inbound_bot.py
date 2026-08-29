@@ -173,6 +173,42 @@ async def test_telegram_halt_allows_authorized_user(clean_registry, monkeypatch)
     resume(source="test-cleanup")
 
 
+# ── Per-user authorization for Discord legacy webhook interactions ──────────
+
+@pytest.mark.asyncio
+async def test_discord_callback_rejects_unauthorized_user(clean_registry, monkeypatch):
+    import vesper.bot.inbound as inbound
+    monkeypatch.setattr(inbound, "_AUTHORIZED_DISCORD_USER_IDS", {"55555"})
+
+    clean_registry.register_pending("prop-dc-unauth", "session-dc")
+    payload = {
+        "type": 3,
+        "data": {"custom_id": "approve:prop-dc-unauth"},
+        "member": {"user": {"username": "stranger", "id": "99999"}},
+    }
+
+    res = await clean_registry.handle_callback_payload(payload)
+    assert res["status"] == "UNAUTHORIZED"
+    assert clean_registry.get_decision("prop-dc-unauth") is None
+
+
+@pytest.mark.asyncio
+async def test_discord_callback_allows_authorized_user(clean_registry, monkeypatch):
+    import vesper.bot.inbound as inbound
+    monkeypatch.setattr(inbound, "_AUTHORIZED_DISCORD_USER_IDS", {"55555"})
+
+    clean_registry.register_pending("prop-dc-auth-ok", "session-dc")
+    payload = {
+        "type": 3,
+        "data": {"custom_id": "reject:prop-dc-auth-ok"},
+        "member": {"user": {"username": "quant_lead", "id": "55555"}},
+    }
+
+    res = await clean_registry.handle_callback_payload(payload)
+    assert res["status"] == "RESOLVED"
+    assert clean_registry.get_decision("prop-dc-auth-ok")["decision"] == "REJECT"
+
+
 @pytest.mark.asyncio
 async def test_human_gate_node_consumes_pre_resolved_inbound_decision(clean_registry):
     """Verify human_gate_node applies inbound decision without requiring manual interrupt."""

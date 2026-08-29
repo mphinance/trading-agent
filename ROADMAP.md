@@ -211,12 +211,11 @@ that actually needs careful design saved for last so it doesn't get rushed:
   same "unset -> allow with a one-time warning" default as the Discord fix
   (not fail-closed — a single-operator deployment shouldn't be locked out by
   a missing env var). Discord's legacy webhook-route interaction parser in
-  `handle_callback_payload` (item 3, currently unreachable dead code since
-  nothing starts that aiohttp server) and the generic REST webhook path
-  (item 4/5) were left as-is: the latter is already gated by
-  `VESPER_WEBHOOK_SECRET` + bearer at the HTTP layer, a shared-secret API
-  credential rather than a public chat surface, so it isn't the same
-  vulnerability class. 6 new tests in `tests/test_inbound_bot.py`.
+  `handle_callback_payload` (item 3) is now likewise guarded by `DISCORD_AUTHORIZED_USER_IDS`
+  (extracting `payload["member"]["user"]["id"]` and rejecting unauthorized interactions
+  with status `UNAUTHORIZED`). The generic REST webhook path (item 4/5) remains
+  gated by `VESPER_WEBHOOK_SECRET` + bearer at the HTTP layer. 8 tests in
+  `tests/test_inbound_bot.py`.
 
 ---
 

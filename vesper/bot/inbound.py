@@ -45,6 +45,28 @@ def _is_telegram_user_authorized(user_id: Any) -> bool:
     return str(user_id) in _AUTHORIZED_TELEGRAM_USER_IDS
 
 
+# Per-user authorization for Discord webhook interactions -- reuses DISCORD_AUTHORIZED_USER_IDS
+# defined in vesper/bot/discord_gateway.py.
+_AUTHORIZED_DISCORD_USER_IDS = {
+    s.strip() for s in os.getenv("DISCORD_AUTHORIZED_USER_IDS", "").split(",") if s.strip()
+}
+_warned_discord_unrestricted = False
+
+
+def _is_discord_user_authorized(user_id: Any) -> bool:
+    global _warned_discord_unrestricted
+    if not _AUTHORIZED_DISCORD_USER_IDS:
+        if not _warned_discord_unrestricted:
+            logger.warning(
+                "DISCORD_AUTHORIZED_USER_IDS is not set — any Discord user who can "
+                "trigger interactions can approve/reject proposals. "
+                "Set it to a comma-separated list of Discord user IDs to restrict this."
+            )
+            _warned_discord_unrestricted = True
+        return True
+    return str(user_id) in _AUTHORIZED_DISCORD_USER_IDS
+
+
 class ApprovalRegistry:
     """Thread-safe registry for pending order proposals awaiting human resolution."""
 
@@ -194,6 +216,13 @@ class ApprovalRegistry:
         if payload.get("type") == 3 and "data" in payload:  # Message Component Interaction
             custom_id = str(payload["data"].get("custom_id", ""))
             user = payload.get("member", {}).get("user", {}).get("username", "discord_user")
+            user_id = payload.get("member", {}).get("user", {}).get("id")
+            if not _is_discord_user_authorized(user_id):
+                logger.warning(f"Rejected Discord interaction from unauthorized user {user} (id={user_id})")
+                return {
+                    "status": "UNAUTHORIZED",
+                    "message": f"User {user} is not authorized to resolve proposals.",
+                }
             if ":" in custom_id:
                 action, prop_id = custom_id.split(":", 1)
                 decision = "APPROVE" if action.lower() == "approve" else "REJECT"
