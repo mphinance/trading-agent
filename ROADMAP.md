@@ -556,6 +556,15 @@ transcript as a visible message before acting on it (nyx's own
 thread before submitting it) — worth copying that pattern rather than
 inventing a separate one.
 
+**Decided: the wake word is "Vesper."** (2026-08-28) Two syllables, unisex,
+and — per nyx's own `STT_VOCAB` lesson (its "Nyx" → "Nix" mishearing without
+an explicit bias hint) — worth seeding Vesper's own STT vocab hint with
+"Vesper" from day one rather than discovering the same mishearing the hard
+way. Note this holds even if the product itself ends up branded "Vespryx"
+(see `docs/TIERS_AND_FUNNEL.md` / the nyx `thelist.md` business notes) —
+the spoken wake word and the product name don't have to match, the same way
+a product can be called one thing and answer to a shorter spoken name.
+
 **Not decided yet, deliberately**: whether voice-in comes from a Discord
 voice message, a Telegram voice note, or something else; whether TTS output
 posts as a voice-note reply or stays text-only with voice reserved for
