@@ -96,6 +96,28 @@ class Webull:
         self.region = region
         client = ApiClient(key, secret, region)
         client.add_endpoint(region, PROD_HOST)
+
+        # Stop the SDK installing its own loggers. TradeClient._init_logger and
+        # DataClient's equivalent auto-attach a stdout stream logger AND a file
+        # logger (webull_trade_sdk.log / webull_data_sdk.log) unless one of
+        # these flags is already set -- and on any request error they log the
+        # ENTIRE request, headers included, which means `x-app-key` (the live
+        # Webull app key) is printed to stdout and written to disk in
+        # plaintext. Observed 2026-08-29: one rejected order-preview call put
+        # the key on screen. That is a credential on camera under rule 5, and
+        # a plaintext credential at rest.
+        #
+        # Their guard reads `if not _stream_logger_set and not _file_logger_set`
+        # -- an AND -- so setting either flag suppresses BOTH loggers. Both are
+        # set here anyway, to be explicit about intent rather than relying on
+        # the shape of someone else's condition.
+        #
+        # Errors are NOT swallowed: the SDK still raises, and the exception
+        # message (status, code, Msg, RequestID) is intact and is what callers
+        # already log. Only the header-dumping sink goes away.
+        client._stream_logger_set = True
+        client._file_logger_set = True
+
         self._api = client
         self._trade = TradeClient(client)
         self._data = DataClient(client)
