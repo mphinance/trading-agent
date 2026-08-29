@@ -68,3 +68,8 @@ yfinance       # market data in mcp_server/data.py (tests/test_backtest.py) and
 # transitive gap like this -- both failed collection outright without them.
 tradingview_screener  # mcp_server/screener.py, via vesper.nodes.regime -> mcp_server.market_top
 fastmcp               # tickertrace_mcp.py, via vesper.nodes.scanner
+
+# Black-Scholes delta for 0DTE Flow strike selection (tests/test_0dte_playbook.py
+# exercises the real math, not a mocked delta) — see
+# vesper/nodes/playbooks.py's _select_0dte_delta_strike.
+py_vollib

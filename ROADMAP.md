@@ -650,6 +650,51 @@ research pass done on this repo:
     either. Left as backlog, not approximated.
   - Tested in `tests/test_0dte_playbook.py` (wall selection, IV gate, spread
     rejection, and the updated end-to-end drafting/skip paths).
+- **True ~0.30-delta 0DTE strike selection (landed, 2026-08-30)**: the gap the
+  entry above flagged as NOT implemented is closed. `py_vollib` is now an
+  actual runtime dependency (`requirements.txt`/`requirements-dev.txt`,
+  installs cleanly, pulls numpy/scipy/pandas transitively). New
+  `_select_0dte_delta_strike(ticker, spot, is_bullish, iv_pct)` in
+  `vesper/nodes/playbooks.py` scans the full same-day option chain
+  (`md.Market.option_chain` with no strike bounds) and picks the contract
+  whose Black-Scholes delta (`py_vollib.black_scholes.greeks.analytical.delta`)
+  is closest to `TARGET_DELTA_0DTE` (0.30), comparing `abs(delta)` so puts
+  (negative delta) are handled correctly. `sigma` is the same single
+  audit-level IV that already gates 0DTE entry elsewhere in this playbook —
+  Webull's chain carries no per-contract IV, so this reuses the one real
+  number available rather than fabricating a per-strike vol surface (see
+  Known Gaps below). Time-to-expiry comes from a new
+  `_time_to_close_years()` anchored to the real 4:00 PM ET close (not
+  `RiskEnforcer.HARD_EXIT_TIME_0DTE`'s "15:00", which is this strategy's own
+  early exit rule, not actual expiry), floored at 5 minutes
+  (`MIN_0DTE_TTE_YEARS`) so Black-Scholes never sees `t == 0` in the closing
+  minutes. `r` is a fixed `RISK_FREE_RATE_0DTE = 0.045` modeling constant
+  (documented as such — 0DTE delta is insensitive to `r`, see rule 1 in
+  CLAUDE.md).
+  - **Selection order changed**: `_select_0dte_delta_strike` is now tried
+    FIRST; `_select_0dte_wall_strike` (major OI wall) is the fallback when
+    delta selection is unavailable (py_vollib import fails, Webull
+    unconfigured, empty chain, no today expiry, or every contract's delta
+    computation fails) — never silently swapped, the audit note says which
+    method actually fired (`"0.30-delta (Black-Scholes)"` vs `"major OI wall
+    (delta selection unavailable)"`). If both fail, the draft is skipped with
+    an explicit "no delta-based or wall-based strike available" note, same
+    skip-not-approximate contract as before.
+  - **Known limitation, not fixed here**: no per-contract IV surface — every
+    strike in the chain is scored against the same single audit-level IV
+    number, not a real strike-by-strike implied vol curve. This is a real
+    simplification (flagged, not fabricated data) and would need a source
+    that returns per-contract IV, which Webull's chain snapshot here doesn't.
+  - **Known limitation, not fixed here**: `_time_to_close_years()` has no
+    early-close/holiday calendar awareness — on a half day (1:00 PM ET
+    close), it still anchors `t` to 4:00 PM, so delta (and therefore strike
+    selection) would be computed against a stale, too-late expiry time on
+    those days. Not special-cased; out of scope for this task.
+  - Tested in `tests/test_0dte_playbook.py`: real Black-Scholes math across a
+    verified strike ladder for both calls and puts (not a mocked delta),
+    `t`-floor near close, missing/zero spot or IV, py_vollib import failure,
+    no-today-expiry, unconfigured Webull, delta-preferred-over-wall,
+    fall-back-to-wall-on-None, and skip-when-both-fail.
 - **Portfolio-level circuit breaker & capital allocation buckets (landed)**:
   `vesper/circuit_breaker.py` tracks a persisted high-water-mark NLV
   (separate state file from `halt.py`'s, same atomic-write pattern) and trips

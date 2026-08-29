@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 import pytest
 
-from vesper.nodes.playbooks import _fetch_0dte_option_quote, playbooks_node
+from vesper.nodes.playbooks import (
+    _fetch_0dte_option_quote,
+    _select_0dte_delta_strike,
+    _time_to_close_years,
+    playbooks_node,
+)
 from vesper.state import MarketRegime, OptionAudit, OrderProposal, TechnicalAudit, TradingState
 
 
@@ -173,16 +178,18 @@ async def test_0dte_playbook_skips_when_iv_unavailable():
 
 @pytest.mark.asyncio
 async def test_0dte_playbook_skips_when_no_wall_strike_available():
-    """No fabricated fallback to spot+/-1 when no real wall exists to anchor to."""
+    """No fabricated fallback to spot+/-1 when neither delta nor wall selection
+    has a real strike to anchor to."""
     state = _make_0dte_state(ticker="SPY", spot=560.0, flip=550.0, iv=0.85)
 
-    with patch("vesper.nodes.playbooks._select_0dte_wall_strike", return_value=None):
-        res = await playbooks_node(state)
+    with patch("vesper.nodes.playbooks._select_0dte_delta_strike", return_value=None):
+        with patch("vesper.nodes.playbooks._select_0dte_wall_strike", return_value=None):
+            res = await playbooks_node(state)
 
     assert len(res["proposals"]) == 0
     notes = res["audit_trail"][0]["notes"]
     assert any(
-        "Skipped 0DTE SPY CALL: no major OI call wall available to anchor a strike to" in n
+        "Skipped 0DTE SPY CALL: no delta-based or wall-based strike available to anchor a strike to" in n
         for n in notes
     )
 
@@ -303,3 +310,185 @@ def test_fetch_0dte_option_quote_accepts_tight_spread():
 
             price = _fetch_0dte_option_quote("SPY", 561.0, "CALL")
             assert price == 2.35
+
+
+# ── Delta-based (0.30-delta) strike selection ───────────────────────────────
+
+def _mock_today_chain(strikes: list[float], option_type: str) -> list[dict]:
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return [
+        {
+            "symbol": f"SPY_{option_type}_{int(k)}",
+            "strike_price": k,
+            "expire_date": today_str,
+        }
+        for k in strikes
+    ]
+
+
+def test_select_0dte_delta_strike_picks_closest_to_030():
+    """Real Black-Scholes math, not a mocked delta: S=560, sigma=0.85 (this
+    repo's own test IV fixture), t=2h-to-close. Verified offline that strike
+    564 (delta=0.2922) is closest to 0.30, distinct from the next-nearest
+    strike 563 (delta=0.3414)."""
+    strikes = [561.0, 562.0, 563.0, 564.0, 565.0, 566.0, 567.0, 568.0]
+
+    with patch("vesper.nodes.playbooks._time_to_close_years", return_value=2 / 24 / 365):
+        with patch("wb.Webull") as mock_wb_cls:
+            mock_wb = MagicMock(configured=True)
+            mock_wb_cls.return_value = mock_wb
+
+            with patch("md.Market") as mock_mkt_cls:
+                mock_mkt = MagicMock()
+                mock_mkt.option_chain.return_value = _mock_today_chain(strikes, "CALL")
+                mock_mkt_cls.return_value = mock_mkt
+
+                strike = _select_0dte_delta_strike("SPY", spot=560.0, is_bullish=True, iv_pct=85.0)
+
+    assert strike == 564.0
+
+
+def test_select_0dte_delta_strike_put_side_uses_negative_delta():
+    """Puts carry negative delta -- the selector must compare abs(delta),
+    not delta itself. Verified offline: strike 556 (delta=-0.2859) is
+    closest to 0.30, distinct from 557 (delta=-0.3353)."""
+    strikes = [552.0, 553.0, 554.0, 555.0, 556.0, 557.0, 558.0, 559.0]
+
+    with patch("vesper.nodes.playbooks._time_to_close_years", return_value=2 / 24 / 365):
+        with patch("wb.Webull") as mock_wb_cls:
+            mock_wb = MagicMock(configured=True)
+            mock_wb_cls.return_value = mock_wb
+
+            with patch("md.Market") as mock_mkt_cls:
+                mock_mkt = MagicMock()
+                mock_mkt.option_chain.return_value = _mock_today_chain(strikes, "PUT")
+                mock_mkt_cls.return_value = mock_mkt
+
+                strike = _select_0dte_delta_strike("SPY", spot=560.0, is_bullish=False, iv_pct=85.0)
+
+    assert strike == 556.0
+
+
+def test_select_0dte_delta_strike_returns_none_when_no_today_expiry():
+    with patch("wb.Webull") as mock_wb_cls:
+        mock_wb = MagicMock(configured=True)
+        mock_wb_cls.return_value = mock_wb
+
+        with patch("md.Market") as mock_mkt_cls:
+            mock_mkt = MagicMock()
+            mock_mkt.option_chain.return_value = [
+                {"symbol": "SPY_FUTURE_CALL", "strike_price": 565.0, "expire_date": "2029-12-31"},
+            ]
+            mock_mkt_cls.return_value = mock_mkt
+
+            strike = _select_0dte_delta_strike("SPY", spot=560.0, is_bullish=True, iv_pct=85.0)
+
+    assert strike is None
+
+
+def test_select_0dte_delta_strike_returns_none_when_wb_unconfigured():
+    with patch("wb.Webull") as mock_wb_cls:
+        mock_wb_cls.return_value = MagicMock(configured=False)
+        strike = _select_0dte_delta_strike("SPY", spot=560.0, is_bullish=True, iv_pct=85.0)
+
+    assert strike is None
+
+
+def test_select_0dte_delta_strike_returns_none_when_missing_spot_or_iv():
+    """Never compute Black-Scholes off missing/zero inputs."""
+    assert _select_0dte_delta_strike("SPY", spot=0.0, is_bullish=True, iv_pct=85.0) is None
+    assert _select_0dte_delta_strike("SPY", spot=560.0, is_bullish=True, iv_pct=0.0) is None
+    assert _select_0dte_delta_strike("SPY", spot=560.0, is_bullish=True, iv_pct=None) is None
+
+
+def test_select_0dte_delta_strike_returns_none_when_pyvollib_import_fails():
+    """Proves the fallback path is reachable even if py_vollib itself breaks
+    (library missing or broken -- a graceful skip, never a crash)."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "py_vollib.black_scholes.greeks.analytical":
+            raise ImportError("simulated py_vollib absence")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        strike = _select_0dte_delta_strike("SPY", spot=560.0, is_bullish=True, iv_pct=85.0)
+
+    assert strike is None
+
+
+def test_time_to_close_years_floors_near_market_close():
+    """In the last minutes before 4pm ET, t must never hit (or go below) zero."""
+    from datetime import datetime as dt, timezone as tz
+    from zoneinfo import ZoneInfo
+
+    ET = ZoneInfo("America/New_York")
+    almost_close = dt(2026, 8, 28, 15, 59, 58, tzinfo=ET).astimezone(tz.utc)
+    years = _time_to_close_years(almost_close)
+    assert years > 0
+    from vesper.nodes.playbooks import MIN_0DTE_TTE_YEARS
+
+    assert years == MIN_0DTE_TTE_YEARS
+
+
+@pytest.mark.asyncio
+async def test_0dte_playbook_prefers_delta_over_wall_when_both_available():
+    """Delta-based selection is tried first; when it succeeds, it wins over
+    the wall-based fallback even though both are available."""
+    state = _make_0dte_state(ticker="SPY", spot=560.0, flip=550.0, iv=0.85)
+
+    with patch("vesper.nodes.playbooks._select_0dte_delta_strike", return_value=564.0):
+        with patch("vesper.nodes.playbooks._select_0dte_wall_strike", return_value=563.0):
+            with patch("vesper.nodes.playbooks._fetch_0dte_option_quote", return_value=2.45):
+                res = await playbooks_node(state)
+
+    props = res["proposals"]
+    assert len(props) == 1
+    assert props[0].strike == 564.0  # delta pick, not the wall's 563.0
+
+    notes = res["audit_trail"][0]["notes"]
+    assert any("Strike 564.0" in n and "0.30-delta" in n for n in notes)
+
+
+@pytest.mark.asyncio
+async def test_0dte_playbook_falls_back_to_wall_when_delta_selection_returns_none():
+    """When delta selection can't produce a strike, the wall-based fallback
+    still drafts -- this is the pre-existing end-to-end path, still exercised
+    with an explicit patch here (real _select_0dte_delta_strike also returns
+    None in this test env since wb.Webull().configured is False, but the
+    explicit patch keeps the test's intent obvious and independent of that)."""
+    state = _make_0dte_state(ticker="SPY", spot=560.0, flip=550.0, iv=0.85)
+
+    with patch("vesper.nodes.playbooks._select_0dte_delta_strike", return_value=None):
+        with patch("vesper.nodes.playbooks._select_0dte_wall_strike", return_value=563.0):
+            with patch("vesper.nodes.playbooks._fetch_0dte_option_quote", return_value=2.45):
+                res = await playbooks_node(state)
+
+    props = res["proposals"]
+    assert len(props) == 1
+    assert props[0].strike == 563.0
+
+    notes = res["audit_trail"][0]["notes"]
+    assert any(
+        "Strike 563.0" in n and "delta selection unavailable" in n for n in notes
+    )
+
+
+@pytest.mark.asyncio
+async def test_0dte_playbook_skips_when_both_selectors_fail():
+    """Preserves the 'skip the draft' behavior when neither delta nor wall
+    selection can anchor a strike."""
+    state = _make_0dte_state(ticker="SPY", spot=560.0, flip=550.0, iv=0.85)
+
+    with patch("vesper.nodes.playbooks._select_0dte_delta_strike", return_value=None):
+        with patch("vesper.nodes.playbooks._select_0dte_wall_strike", return_value=None):
+            res = await playbooks_node(state)
+
+    assert len(res["proposals"]) == 0
+    notes = res["audit_trail"][0]["notes"]
+    assert any(
+        "Skipped 0DTE SPY CALL: no delta-based or wall-based strike available to anchor a strike to" in n
+        for n in notes
+    )

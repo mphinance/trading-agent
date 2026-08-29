@@ -151,6 +151,133 @@ def _select_0dte_wall_strike(ticker: str, is_bullish: bool) -> Optional[float]:
 
 MAX_0DTE_SPREAD_PCT = 0.15
 
+# MODELING CONSTANT (not a live quote) — see rule 1 in CLAUDE.md and
+# RiskEnforcer.TARGET_ANNUAL_VOLATILITY for the same category of constant.
+# Approx risk-free proxy for Black-Scholes r. 0DTE delta is very insensitive
+# to r (hours of time value), so this does not need to track daily.
+RISK_FREE_RATE_0DTE = 0.045
+
+# Floor on time-to-expiry fed into Black-Scholes, in years (5 minutes).
+# Prevents t -> 0 (division by zero / NaN in d1/d2) in the last minutes
+# before close.
+MIN_0DTE_TTE_YEARS = 5.0 / (60.0 * 24.0 * 365.0)
+
+TARGET_DELTA_0DTE = 0.30
+
+
+def _time_to_close_years(now: Optional[datetime] = None) -> float:
+    """Years remaining until real options expiry (4:00 PM ET), floored at
+    MIN_0DTE_TTE_YEARS so Black-Scholes never sees t == 0 in the closing
+    minutes.
+
+    Deliberately the actual 4pm ET market close, NOT RiskEnforcer's
+    HARD_EXIT_TIME_0DTE ("15:00") -- that's this strategy's own early exit
+    rule, not when the contract actually expires.
+
+    Takes an optional `now` so tests can pin a deterministic time-to-close
+    instead of depending on wall-clock time at test-run time.
+    """
+    from zoneinfo import ZoneInfo
+
+    ET = ZoneInfo("America/New_York")
+    now_et = (now or datetime.now(timezone.utc)).astimezone(ET)
+    close_et = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    years = max((close_et - now_et).total_seconds(), 0.0) / (365.0 * 24.0 * 3600.0)
+    return max(years, MIN_0DTE_TTE_YEARS)
+
+
+def _select_0dte_delta_strike(
+    ticker: str, spot: float, is_bullish: bool, iv_pct: float
+) -> Optional[float]:
+    """Pick the same-day contract whose Black-Scholes delta is closest to
+    TARGET_DELTA_0DTE (0.30), scanning the full 0DTE chain.
+
+    Tried FIRST; `_select_0dte_wall_strike` is the fallback when this
+    returns None (py_vollib unavailable, no chain, no today expiry, or no
+    contract computable).
+
+    `sigma` is the SAME single audit-level IV already gating entry
+    elsewhere in this playbook (Webull's chain here carries no per-contract
+    IV, so this is not fabricating a fake per-strike vol surface -- it's
+    reusing the one real number available). A real per-strike IV surface is
+    a known limitation, not something faked here.
+
+    Blocking (chain fetch) — wrap in asyncio.to_thread.
+    Returns None (never a fabricated strike) if py_vollib import fails,
+    Webull is unconfigured, the chain is empty, nothing expires today, or
+    delta can't be computed for any contract.
+    """
+    try:
+        from py_vollib.black_scholes.greeks.analytical import delta as bs_delta
+    except Exception as e:
+        logger.debug(f"py_vollib unavailable, skipping delta-based 0DTE strike selection: {e}")
+        return None
+
+    if not spot or spot <= 0 or not iv_pct or iv_pct <= 0:
+        return None
+
+    try:
+        from wb import Webull
+        from md import Market
+
+        wb = Webull()
+        if not wb.configured:
+            return None
+
+        mkt = Market(wb)
+        option_type = "CALL" if is_bullish else "PUT"
+        chain_res = mkt.option_chain(underlying=ticker, option_type=option_type)
+
+        contracts = []
+        if isinstance(chain_res, list):
+            contracts = chain_res
+        elif isinstance(chain_res, dict):
+            contracts = chain_res.get("data") or chain_res.get("contracts") or chain_res.get("list") or []
+
+        if not contracts:
+            return None
+
+        today = datetime.now(timezone.utc).date()
+        today_contracts = []
+        for c in contracts:
+            exp_str = c.get("expire_date") or c.get("expiration_date") or c.get("expiry") or c.get("start_date")
+            if not exp_str:
+                continue
+            try:
+                exp_date = datetime.strptime(str(exp_str)[:10], "%Y-%m-%d").date()
+                if exp_date == today:
+                    today_contracts.append(c)
+            except Exception:
+                continue
+
+        if not today_contracts:
+            return None
+
+        t = _time_to_close_years()
+        sigma = iv_pct / 100.0
+        r = RISK_FREE_RATE_0DTE
+        flag = "c" if is_bullish else "p"
+
+        best_strike = None
+        best_diff = None
+        for c in today_contracts:
+            try:
+                K = float(c.get("strike_price") or c.get("strikePrice") or c.get("strike") or 0.0)
+                if K <= 0:
+                    continue
+                d = bs_delta(flag, spot, K, t, r, sigma)
+                diff = abs(abs(d) - TARGET_DELTA_0DTE)
+            except Exception:
+                continue
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_strike = K
+
+        return best_strike
+    except Exception as e:
+        logger.debug(f"Could not select 0DTE delta strike for {ticker}: {e}")
+        return None
+
 
 def _fetch_0dte_option_quote(
     underlying: str,
@@ -583,12 +710,15 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
         
         # ── 1. 0DTE FLOW PLAYBOOK (SPY / QQQ) ──────────────────────────────────
         # Tightened (2026-08-29): requires IV >= 70% (same threshold used
-        # elsewhere in this file), a strike selected from a real major OI
-        # put/call wall (td.levels()) rather than a fixed spot+/-1 offset, and
-        # rejects a quote whose bid/ask spread is too wide for reliable
-        # execution (_fetch_0dte_option_quote's own MAX_0DTE_SPREAD_PCT
-        # check). Any one of these being unavailable skips the draft rather
-        # than falling back to the old, looser behavior.
+        # elsewhere in this file), and rejects a quote whose bid/ask spread is
+        # too wide for reliable execution (_fetch_0dte_option_quote's own
+        # MAX_0DTE_SPREAD_PCT check). Strike selection (2026-08-30) tries a
+        # true ~0.30-delta Black-Scholes pick across the full same-day chain
+        # first (_select_0dte_delta_strike, via py_vollib), falling back to a
+        # real major OI put/call wall (td.levels()) when delta selection is
+        # unavailable -- never a fixed spot+/-1 offset. Any one of these being
+        # unavailable skips the draft rather than falling back to the old,
+        # looser behavior.
         if ticker in ("SPY", "QQQ") and regime and regime.spy_spot and regime.spy_gamma_flip:
             spot = regime.spy_spot
             flip = regime.spy_gamma_flip
@@ -604,11 +734,17 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                 )
                 continue
 
-            strike = await asyncio.to_thread(_select_0dte_wall_strike, ticker, is_bullish)
+            strike = await asyncio.to_thread(
+                _select_0dte_delta_strike, ticker, spot, is_bullish, iv_pct
+            )
+            selection_method = "0.30-delta (Black-Scholes)"
+            if strike is None:
+                strike = await asyncio.to_thread(_select_0dte_wall_strike, ticker, is_bullish)
+                selection_method = "major OI wall (delta selection unavailable)"
             if strike is None:
                 audit_notes.append(
-                    f"Skipped 0DTE {ticker} {side_type.upper()}: no major OI "
-                    f"{'call' if is_bullish else 'put'} wall available to anchor a strike to"
+                    f"Skipped 0DTE {ticker} {side_type.upper()}: no delta-based or wall-based "
+                    "strike available to anchor a strike to"
                 )
                 continue
 
@@ -645,7 +781,7 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
             proposals.append(prop)
             audit_notes.append(
                 f"Drafted 0DTE {ticker} {side_type.upper()} Strike {strike} @ ${est_premium:.2f} "
-                f"(Spot={spot} vs Flip={flip}, IV={iv_pct:.1f}%, strike from major OI wall)"
+                f"(Spot={spot} vs Flip={flip}, IV={iv_pct:.1f}%, strike from {selection_method})"
             )
             continue
 

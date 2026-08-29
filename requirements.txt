@@ -71,3 +71,7 @@ discord.py
 # requirements-dev.txt's own yfinance line, which test_backtest.py also uses).
 yfinance
 
+# Black-Scholes delta for 0DTE Flow strike selection — see
+# vesper/nodes/playbooks.py's _select_0dte_delta_strike.
+py_vollib
+
