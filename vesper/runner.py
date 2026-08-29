@@ -42,7 +42,7 @@ async def run_agent_session(
             else:
                 print(f"⚠️ Whop License Warning: {val_res.get('reason')}")
 
-    app = build_trading_graph(checkpointer=True)
+    app = await build_trading_graph(checkpointer=True)
 
     # Register this compiled graph with the ApprovalRegistry so an inbound
     # Telegram/Discord/webhook decision (see vesper/bot/inbound.py) can

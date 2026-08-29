@@ -146,13 +146,13 @@ Examples:
         from vesper.bot.telegram_polling import run_telegram_polling_loop
         from vesper.bot.discord_gateway import run_discord_gateway_bot
 
-        app = build_trading_graph(checkpointer=True)
-        approval_registry.set_graph_app(app)
         print("\n" + "=" * 60)
         print("📡 VESPER INBOUND APPROVAL LISTENER (Telegram & Discord)")
         print("=" * 60)
 
         async def _run_listeners() -> None:
+            app = await build_trading_graph(checkpointer=True)
+            approval_registry.set_graph_app(app)
             await asyncio.gather(
                 run_telegram_polling_loop(),
                 run_discord_gateway_bot(),

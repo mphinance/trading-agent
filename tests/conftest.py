@@ -115,6 +115,21 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     monkeypatch.setattr("vesper.circuit_breaker._STATE_PATH", vesper_data_dir / "circuit_breaker_state.json")
     monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", vesper_data_dir)
     monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", vesper_data_dir / "paper_ledger.json")
+
+    # ApprovalRegistry (vesper/bot/inbound.py) became disk-backed the same
+    # way -- same reasoning, same fix.
+    monkeypatch.setattr("vesper.bot.inbound._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("vesper.bot.inbound._APPROVAL_STATE_PATH", vesper_data_dir / "approval_registry_state.json")
+
+    # vesper/graph.py's persistent checkpointer -- redirect the sqlite path
+    # AND reset the process-lifetime connection/saver singletons, since a
+    # real connection opened by an earlier test would otherwise point at a
+    # tmp_path from a PREVIOUS test that no longer exists.
+    import vesper.graph as _graph_module
+    monkeypatch.setattr(_graph_module, "_DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr(_graph_module, "_CHECKPOINT_DB_PATH", vesper_data_dir / "checkpoints.sqlite")
+    monkeypatch.setattr(_graph_module, "_sqlite_conn", None)
+    monkeypatch.setattr(_graph_module, "_sqlite_saver", None)
     yield
 
 

@@ -36,6 +36,12 @@ python-dotenv>=1.0
 typing_extensions>=4.0
 chromadb>=0.5
 
+# vesper/graph.py's persistent checkpointer (tests/test_graph.py exercises it
+# for real against a tmp_path sqlite file, isolated the same way as every
+# other Vesper state file -- see conftest.py's _isolated_vesper_state)
+langgraph-checkpoint-sqlite
+aiosqlite
+
 # Inbound webhook server & cryptographic authentication
 aiohttp        # vesper/bot/inbound.py's webhook server (tests/test_inbound_bot.py)
 cryptography   # Discord Ed25519 signature verification (tests/test_inbound_bot.py)

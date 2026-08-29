@@ -49,6 +49,14 @@ python-dotenv>=1.0
 typing_extensions>=4.0
 chromadb>=0.5
 
+# vesper/graph.py: persistent (disk-backed) checkpointer for human-approval
+# threads. MemorySaver (langgraph's built-in default) loses every paused
+# thread on a process restart -- fine for a single watched `vesper scan` run,
+# a real gap now that `vesper loop` is a long-lived daemon that can crash or
+# restart mid-approval-wait.
+langgraph-checkpoint-sqlite
+aiosqlite
+
 # vesper/bot/inbound.py: the aiohttp webhook server and Discord Ed25519
 # signature verification (cryptography's Ed25519PublicKey).
 aiohttp

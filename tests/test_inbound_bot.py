@@ -362,3 +362,56 @@ async def test_inbound_aiohttp_server_endpoints(clean_registry, monkeypatch):
         rest_data = await resp_rest.json()
         assert rest_data["decision"] == "REJECT"
 
+
+
+# ── Disk-backed persistence (survives a fresh ApprovalRegistry instance) ────
+# The property this exists for: vesper loop is a long-lived daemon now, and
+# a proposal can genuinely be sitting in a Telegram chat awaiting a tap when
+# the process crashes or redeploys. An in-memory-only registry would
+# silently strand it. These tests use TWO separate ApprovalRegistry()
+# instances (not the same object with a different reference) to prove the
+# state lives on disk, not in the Python object -- pytest's autouse
+# _isolated_vesper_state fixture (conftest.py) points both instances at the
+# SAME isolated tmp_path, exactly like two processes sharing one real
+# vesper/data/ directory would.
+
+def test_pending_proposal_survives_a_fresh_registry_instance():
+    registry1 = ApprovalRegistry()
+    registry1.register_pending("prop-persist-1", "sess-1", details={"ticker": "NVDA"})
+
+    registry2 = ApprovalRegistry()  # simulates a fresh process
+    pending = registry2.get_pending("prop-persist-1")
+    assert pending is not None
+    assert pending["session_id"] == "sess-1"
+    assert pending["details"]["ticker"] == "NVDA"
+    assert len(registry2.list_pending()) == 1
+
+
+@pytest.mark.asyncio
+async def test_decision_survives_a_fresh_registry_instance():
+    registry1 = ApprovalRegistry()
+    registry1.register_pending("prop-persist-2", "sess-2")
+    await registry1.submit_decision("prop-persist-2", "APPROVE", source="telegram", user_id="michael")
+
+    registry2 = ApprovalRegistry()
+    decision = registry2.get_decision("prop-persist-2")
+    assert decision is not None
+    assert decision["decision"] == "APPROVE"
+    assert decision["user_id"] == "michael"
+    # Resolved proposals drop out of list_pending on ANY instance, since
+    # status lives on disk, not on whichever object made the change.
+    assert len(registry2.list_pending()) == 0
+
+
+@pytest.mark.asyncio
+async def test_graph_app_is_not_persisted_across_instances():
+    """set_graph_app is deliberately per-instance, not disk-backed -- a
+    freshly started process must call it again with its own newly-built
+    graph object (see vesper/graph.py's persistent checkpointer for why
+    that's still safe: the checkpoint state itself survives on disk even
+    though this Python reference doesn't)."""
+    registry1 = ApprovalRegistry()
+    registry1.set_graph_app(object())
+
+    registry2 = ApprovalRegistry()
+    assert registry2._graph_app is None

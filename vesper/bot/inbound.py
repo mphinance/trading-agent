@@ -11,9 +11,35 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_APPROVAL_STATE_PATH = _DATA_DIR / "approval_registry_state.json"
+
+
+def _load_approval_state() -> Dict[str, Any]:
+    if not _APPROVAL_STATE_PATH.exists():
+        return {"pending": {}, "decisions": {}}
+    try:
+        with open(_APPROVAL_STATE_PATH) as f:
+            state = json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to read approval registry state file: {e}")
+        return {"pending": {}, "decisions": {}}
+    state.setdefault("pending", {})
+    state.setdefault("decisions", {})
+    return state
+
+
+def _save_approval_state(state: Dict[str, Any]) -> None:
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = _APPROVAL_STATE_PATH.with_suffix(".tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp_path, _APPROVAL_STATE_PATH)
 
 # Per-user authorization for Telegram callbacks -- separate from (and in
 # addition to) the aiohttp webhook route's HMAC/secret-token checks below.
@@ -68,15 +94,33 @@ def _is_discord_user_authorized(user_id: Any) -> bool:
 
 
 class ApprovalRegistry:
-    """Thread-safe registry for pending order proposals awaiting human resolution."""
+    """Registry for pending order proposals awaiting human resolution.
+
+    Disk-backed (JSON, atomic write -- same pattern as vesper/halt.py),
+    not an in-memory dict. A pending proposal and the decision that resolves
+    it both need to survive a process restart: `vesper loop` is a long-lived
+    daemon now, and a proposal drafted from a scheduled scan can genuinely
+    be sitting in a Telegram/Discord chat waiting for a tap when the process
+    crashes or gets redeployed. An in-memory-only registry would silently
+    strand that proposal -- the tap would arrive and find nothing to
+    resolve. See vesper/graph.py's persistent checkpointer for the other
+    half of this: the pending record alone isn't enough without the
+    LangGraph thread it points at also surviving a restart.
+    """
 
     def __init__(self) -> None:
-        self._pending: Dict[str, Dict[str, Any]] = {}
-        self._decisions: Dict[str, Dict[str, Any]] = {}
         self._graph_app: Optional[Any] = None
 
     def set_graph_app(self, app: Any) -> None:
-        """Register compiled LangGraph StateGraph instance for resume invocations."""
+        """Register compiled LangGraph StateGraph instance for resume invocations.
+
+        Not persisted (and can't be -- it's a live compiled graph object,
+        rebuilt fresh by whatever process starts next). As long as the fresh
+        graph is built against the same persistent checkpointer file
+        (vesper/graph.py's default), resuming a thread_id from a PRIOR
+        process's paused run still works: the checkpointer, not this
+        Python object, is what actually remembers the paused state.
+        """
         self._graph_app = app
 
     def register_pending(
@@ -87,7 +131,8 @@ class ApprovalRegistry:
         details: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Register an order proposal awaiting human approval."""
-        self._pending[proposal_id] = {
+        state = _load_approval_state()
+        state["pending"][proposal_id] = {
             "proposal_id": proposal_id,
             "session_id": session_id,
             "thread_id": thread_id or session_id,
@@ -95,16 +140,17 @@ class ApprovalRegistry:
             "status": "PENDING",
             "registered_at": datetime.now(timezone.utc).isoformat(),
         }
+        _save_approval_state(state)
         logger.info(f"📋 Registered pending approval for proposal {proposal_id} (Session: {session_id})")
 
     def get_pending(self, proposal_id: str) -> Optional[Dict[str, Any]]:
-        return self._pending.get(proposal_id)
+        return _load_approval_state()["pending"].get(proposal_id)
 
     def get_decision(self, proposal_id: str) -> Optional[Dict[str, Any]]:
-        return self._decisions.get(proposal_id)
+        return _load_approval_state()["decisions"].get(proposal_id)
 
     def list_pending(self) -> list[Dict[str, Any]]:
-        return [v for v in self._pending.values() if v.get("status") == "PENDING"]
+        return [v for v in _load_approval_state()["pending"].values() if v.get("status") == "PENDING"]
 
     async def submit_decision(
         self,
@@ -128,7 +174,8 @@ class ApprovalRegistry:
                 "message": halt_res["message"],
             }
 
-        item = self._pending.get(proposal_id)
+        state = _load_approval_state()
+        item = state["pending"].get(proposal_id)
         record = {
             "proposal_id": proposal_id,
             "decision": decision_clean,
@@ -144,7 +191,8 @@ class ApprovalRegistry:
             item["resolved_at"] = now
             item["decision"] = decision_clean
 
-        self._decisions[proposal_id] = record
+        state["decisions"][proposal_id] = record
+        _save_approval_state(state)
 
         # Resume LangGraph thread if active graph and thread_id exist
         resumed = False

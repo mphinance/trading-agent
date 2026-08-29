@@ -61,6 +61,45 @@ existing long instead of opening a new short (`monitor.py` already sets
 this). Guard raises `GuardError` rather than silently under-counting if
 neither is present. 4 new tests in `tests/test_execution_guard.py`.
 
+**Fixed, 2026-08-29 — the LangGraph checkpointer and the approval registry
+were both RAM-only, and would lose a paused human-approval thread on
+restart.** `vesper/graph.py` used `MemorySaver()` — fine for a single
+watched `vesper scan` run someone kept the terminal open for, a real gap now
+that `vesper loop` is a long-lived daemon that can crash or get redeployed
+mid-approval-wait, and `vesper/bot/inbound.py`'s `ApprovalRegistry` tracked
+pending proposals and resolved decisions in plain Python dicts on the
+instance. Together: a proposal drafted by a scheduled scan, sitting in a
+Telegram chat waiting for an "Approve" tap, would be silently unrecoverable
+if the process restarted before the tap arrived — the tap would land and find
+nothing to resolve.
+- `build_trading_graph()` is now `async` and defaults to a disk-backed
+  `AsyncSqliteSaver` (`langgraph-checkpoint-sqlite`, new dependency), reusing
+  one process-lifetime connection (`vesper/graph.py`'s `_get_sqlite_checkpointer`)
+  rather than reopening per call — `build_trading_graph()` gets called once
+  per scan, potentially many times over a `vesper loop` process's life.
+  `persistent=False` keeps the old `MemorySaver` as an explicit escape hatch
+  for a throwaway graph (nothing currently needs it, but it's the honest
+  equivalent of the old always-in-memory default rather than removing the
+  option). Both call sites (`vesper/runner.py`'s `run_agent_session`,
+  `vesper.py`'s `listen` command) updated to `await` it.
+- `ApprovalRegistry` is now disk-backed (JSON, atomic write — same pattern as
+  `vesper/halt.py`), not an in-memory dict. `set_graph_app()` is deliberately
+  **not** persisted — it can't be, it's a live compiled graph object — but
+  that's fine as long as whatever process starts next builds a fresh graph
+  against the *same* persistent checkpointer file and calls `set_graph_app()`
+  again: the checkpointer, not the Python reference, is what actually
+  remembers a paused thread.
+- Tested in `tests/test_graph.py` (the load-bearing one: a fresh graph object
+  built against a **genuinely reopened** sqlite connection — not the cached
+  in-process singleton — can resume a thread an earlier graph object paused,
+  which an in-memory checkpointer would NOT survive) and `tests/test_inbound_bot.py`
+  (pending proposals and resolved decisions both survive a fresh
+  `ApprovalRegistry()` instance).
+- Also added a global autouse fixture in `tests/conftest.py` isolating both
+  new state paths (and resetting `vesper/graph.py`'s connection singletons)
+  for every test, extending the same fix from the circuit-breaker work above
+  rather than requiring each test file to remember to opt in individually.
+
 **Start here, in this order** — cheapest/lowest-risk first, the one thing
 that actually needs careful design saved for last so it doesn't get rushed:
 
