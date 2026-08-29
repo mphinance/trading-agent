@@ -146,11 +146,40 @@ async def test_end_to_end_single_leg_live_execution_submitted(mock_wb, monkeypat
 
     # Broker place_order was genuinely called
     mock_wb.trade.order_v2.place_order.assert_called_once()
-    called_payload = mock_wb.trade.order_v2.place_order.call_args[0][0]
-    assert called_payload["symbol"] == "AAPL"
-    assert called_payload["side"] == "BUY"
-    assert called_payload["quantity"] == 10
-    assert called_payload["limit_price"] == 150.0
+    # Wire shape verified live against preview_order 2026-08-29
+    # (docs/WEBULL_ORDER_PAYLOADS.md). account_id is its own positional and the
+    # orders are a LIST -- the old assertion here indexed call_args[0][0] as a
+    # dict, which is exactly the bug: one positional dict is not the real
+    # signature and Webull rejects it.
+    call_args = mock_wb.trade.order_v2.place_order.call_args
+    account_id, new_orders = call_args[0][0], call_args[0][1]
+    assert account_id == "ACC-TEST-12345"
+    assert isinstance(new_orders, list) and len(new_orders) == 1
+
+    leg = new_orders[0]
+    assert leg["symbol"] == "AAPL"
+    assert leg["side"] == "BUY"
+    assert leg["instrument_type"] == "EQUITY", "Webull's field is instrument_type, not asset_type"
+    assert leg["quantity"] == "10", "quantities go over the wire as strings"
+    assert leg["limit_price"] == "150.00"
+    # Fields Webull rejects the request without.
+    for required in ("client_order_id", "combo_type", "market", "entrust_type", "support_trading_session"):
+        assert required in leg, f"Webull requires {required}"
+
+
+@pytest.mark.asyncio
+async def test_client_order_id_is_stable_per_proposal(mock_wb, monkeypatch):
+    """Webull dedupes on client_order_id. Deriving it deterministically from the
+    proposal id (rather than a fresh uuid4 per attempt) means a retry of the
+    SAME proposal cannot become a second live order."""
+    from vesper.nodes.executor import _client_order_id
+
+    a = _client_order_id("prop-abc-123")
+    b = _client_order_id("prop-abc-123")
+    c = _client_order_id("prop-different")
+    assert a == b, "same proposal must produce the same client_order_id"
+    assert a != c
+    assert len(a) == 32 and all(ch in "0123456789abcdef" for ch in a)
 
 
 @pytest.mark.asyncio

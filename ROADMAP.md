@@ -726,14 +726,27 @@ research pass done on this repo:
     `add_custom_headers_from_order` reads `leg["instrument_type"]`/`leg["market"]` for
     a request header, implying a richer shape than what's sent here) has not been
     confirmed against a real combo order.
-  - **Also found, not fixed**: the pre-existing single-leg `_execute_webull` calls
-    `wb.trade.order_v2.place_order(payload)` with one positional dict argument, but the
-    SDK's real signature is `place_order(self, account_id, new_orders,
-    client_combo_order_id=None)` — two required positional args. This looks like a
-    live-breaking bug, but it's inside the already-documented "not exercised against
-    live" order path (see Status section), so it's flagged here rather than fixed
-    blind — needs a real sandbox/paper-broker call to nail down the correct call shape
-    before touching it.
+  - ~~**Also found, not fixed**: the single-leg `_execute_webull` calls
+    `place_order(payload)` with one positional dict~~ — **fixed 2026-08-29**, along
+    with two further errors the same investigation exposed (`asset_type` should be
+    `instrument_type`; five required fields were missing entirely). The prediction
+    that this "needs a real sandbox/paper-broker call" was right, and the call
+    turned out to be available without risk: `preview_order` validates a payload
+    and places nothing. Both shapes are now verified live —
+    see `docs/WEBULL_ORDER_PAYLOADS.md`.
+  - **The multi-leg leg format was also wrong**, and only surfaced because the
+    official `samples/order/order_option_client.py` (shipped in the SDK's GitHub
+    source, *not* in the PyPI package) contradicted it: a leg is identified by
+    **underlying + strike_price + option_expire_date + option_type**, never by a
+    contract symbol, and `side` is required at both order and leg level.
+  - **Now refused rather than guessed:** combos beyond one option leg.
+    `option_strategy` has only `SINGLE` confirmed accepted, so SYNTHETIC_LONG's
+    enum is unknown, and whether `place_option` takes THEGA's equity leg is
+    unverified. Both raise a `GuardError` naming what would make them verifiable.
+    **Consequence: `_execute_webull_multileg` has no reachable success path in
+    production today** — every legged strategy currently drafted is refused at the
+    executor. That is the honest state, not a regression; the alternative was
+    sending a guessed payload to a live order endpoint.
   - Tested in `tests/test_execution_guard.py` (multi-leg guard section),
     `tests/test_adx_iv_router.py` (drafting + shared-expiry quote fetch), and
     `tests/test_multileg_execution.py` (paper-ledger leg-level fills, live executor

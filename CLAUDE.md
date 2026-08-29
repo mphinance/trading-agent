@@ -349,12 +349,27 @@ returning live prices), TDPro's earnings calendar and unusual-activity feed.
 **NOT exercised against the live account: the order path.** It is tested end
 to end against a stub broker — payload shapes, guards, ticket lifecycle,
 multi-leg combos — which proves the wiring, not the broker's acceptance of it.
-Webull's field-level validation, fractional-share and extended-hours rules, and
-option-strategy handling are unproven here. **First live order should be one
-share of something cheap, placed with Webull Desktop open so you can watch it
-land.** There is also a known signature mismatch in the single-leg live path
-(`place_order(payload)` vs the SDK's `place_order(account_id, new_orders, …)`)
-that is flagged in ROADMAP and deliberately not fixed blind.
+Webull's fractional-share and extended-hours rules are unproven here.
+**First live order should be one share of something cheap, placed with Webull
+Desktop open so you can watch it land.**
+
+**The payload shapes themselves are now verified** (2026-08-29) by sending real
+`preview_order` / `preview_option` calls — preview is non-committal, so this
+was established without placing an order. See
+[`docs/WEBULL_ORDER_PAYLOADS.md`](docs/WEBULL_ORDER_PAYLOADS.md) for both
+shapes and the option-chain filtering gotchas. That fixed three real errors in
+the single-leg path (wrong signature, `asset_type` instead of
+`instrument_type`, five missing required fields) and the multi-leg path's leg
+identification (a leg is keyed by **underlying + strike + expiry + option_type**,
+not a contract symbol; `side` is required at both order and leg level).
+
+**Combos beyond a single option leg are refused at the executor**, deliberately:
+`option_strategy` only has `SINGLE` confirmed, so SYNTHETIC_LONG's correct enum
+is unknown, and whether `place_option` accepts THEGA's equity leg at all is
+unverified. Both raise a `GuardError` naming what would make them verifiable
+rather than sending a guessed payload to a live order endpoint. Consequence
+worth knowing: `_execute_webull_multileg` currently has **no reachable success
+path in production** — every legged strategy that exists today is refused.
 
 **Live-position metadata is a known gap.** Webull's position API carries no
 strategy tag and no link back to the order that created it, so three features
