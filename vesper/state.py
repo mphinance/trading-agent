@@ -71,6 +71,19 @@ class OptionAudit(BaseModel):
     recommendation: str = ""
 
 
+class OrderLeg(BaseModel):
+    """One leg of a multi-leg option order. Only meaningful inside
+    OrderProposal.legs -- see the note there for why this exists as a
+    separate, explicit structure rather than a list of OrderProposal."""
+    side: str            # BUY or SELL
+    option_type: str     # call or put
+    strike: float
+    expiry: str
+    quantity: int = 1
+    limit_price: float   # this leg's own premium
+    contract_symbol: Optional[str] = None
+
+
 class OrderProposal(BaseModel):
     """Drafted order awaiting risk validation & human approval."""
     id: str
@@ -92,6 +105,16 @@ class OrderProposal(BaseModel):
     account_id: Optional[str] = None
     approved: bool = False
     rejection_reason: Optional[str] = None
+    # Multi-leg orders (synthetic long, spreads, etc). When legs is set, this
+    # is a combo order: strategy_type names a formula execution_guard knows
+    # how to risk-assess (see execution_guard._MULTI_LEG_RISK_FORMULAS), and
+    # the top-level side/limit_price/strike/option_type above describe the
+    # net position for display only -- they are not sent to the broker.
+    # estimated_cost/max_risk are still the authoritative net figures used
+    # for approval-card display and audit trail; execution_guard recomputes
+    # its own from the legs rather than trusting these at guard time.
+    strategy_type: Optional[str] = None
+    legs: Optional[List[OrderLeg]] = None
 
     @property
     def target_price(self) -> Optional[float]:

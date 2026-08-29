@@ -177,3 +177,125 @@ def test_sell_to_close_option_uses_premium_not_strike(monkeypatch, guard):
         "limit_price": 2.50, "asset_type": "OPTION", "is_closing": True,
     }
     guard.preview("p1", payload)  # should not raise -- no strike needed to close
+
+
+# ── Multi-leg (combo) orders: SYNTHETIC_LONG ────────────────────────────────
+# Only a small whitelist of strategy_type values has a registered risk
+# formula (execution_guard._MULTI_LEG_RISK_FORMULAS). Anything else must be
+# refused outright rather than guessed at -- the same "refuse rather than
+# under-count" principle as the single-leg strike-vs-premium fix above.
+
+def _synth_legs(strike=190.0, expiry="2025-06-20", call_premium=8.0, put_premium=6.0, qty=1):
+    return [
+        {"side": "BUY", "option_type": "call", "strike": strike, "expiry": expiry,
+         "quantity": qty, "limit_price": call_premium},
+        {"side": "SELL", "option_type": "put", "strike": strike, "expiry": expiry,
+         "quantity": qty, "limit_price": put_premium},
+    ]
+
+
+def test_synthetic_long_notional_uses_strike_like_short_put(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "25000")
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "SYNTHETIC_LONG",
+        "legs": _synth_legs(strike=190.0),
+    }
+    guard.preview("p1", payload)  # $190 * 100 * 1 = $19,000 -- within cap, should not raise
+
+
+def test_synthetic_long_exceeds_notional_cap_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "5000")
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "SYNTHETIC_LONG",
+        "legs": _synth_legs(strike=190.0),
+    }
+    with pytest.raises(GuardError, match="max risk"):
+        guard.preview("p1", payload)
+
+
+def test_unregistered_multileg_strategy_type_refused(monkeypatch, guard):
+    """A strategy_type with no registered risk formula (e.g. the still-unspecced
+    "Thega") must be refused, not silently approximated."""
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "THEGA",
+        "legs": _synth_legs(),
+    }
+    with pytest.raises(GuardError, match="no registered risk formula"):
+        guard.preview("p1", payload)
+
+
+def test_synthetic_long_wrong_leg_count_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "SYNTHETIC_LONG",
+        "legs": _synth_legs()[:1],
+    }
+    with pytest.raises(GuardError, match="exactly 2 legs"):
+        guard.preview("p1", payload)
+
+
+def test_synthetic_long_mismatched_strike_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    legs = _synth_legs(strike=190.0)
+    legs[1]["strike"] = 195.0  # put leg strike drifted from call leg
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "SYNTHETIC_LONG",
+        "legs": legs,
+    }
+    with pytest.raises(GuardError, match="same strike"):
+        guard.preview("p1", payload)
+
+
+def test_synthetic_long_mismatched_expiry_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    legs = _synth_legs()
+    legs[1]["expiry"] = "2025-09-19"  # put leg expiry drifted from call leg
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "SYNTHETIC_LONG",
+        "legs": legs,
+    }
+    with pytest.raises(GuardError, match="same expiry"):
+        guard.preview("p1", payload)
+
+
+def test_synthetic_long_wrong_sides_rejected(monkeypatch, guard):
+    """Buying the put and selling the call is not a synthetic long -- it's the
+    inverse position (synthetic short) and must not slip through with the
+    long's risk formula."""
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    legs = _synth_legs()
+    legs[0]["side"], legs[1]["side"] = "SELL", "BUY"
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "SYNTHETIC_LONG",
+        "legs": legs,
+    }
+    with pytest.raises(GuardError, match="CALL leg to be BUY"):
+        guard.preview("p1", payload)
+
+
+def test_synthetic_long_kill_switch_still_applies(guard):
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "SYNTHETIC_LONG",
+        "legs": _synth_legs(),
+    }
+    with pytest.raises(TradingDisabled):
+        guard.preview("p1", payload)
+
+
+def test_synthetic_long_ticket_place_round_trip(monkeypatch, guard):
+    """The ticket handshake (preview -> place, digest match, single-use)
+    works identically for a multi-leg payload as for a single-leg one."""
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "25000")
+    payload = {
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "SYNTHETIC_LONG",
+        "legs": _synth_legs(),
+    }
+    ticket = guard.preview("p1", payload)
+    result = guard.place(ticket.id, payload, lambda: {"status": "filled"})
+    assert result == {"status": "filled"}
+    with pytest.raises(GuardError, match="already used"):
+        guard.place(ticket.id, payload, lambda: {"status": "filled"})

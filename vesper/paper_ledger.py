@@ -71,6 +71,75 @@ def _save_ledger(data: Dict[str, Any]) -> None:
     os.replace(tmp_path, _LEDGER_PATH)
 
 
+def _record_multileg_paper_fill(
+    proposal: Any,
+    result: Any,
+    session_id: Optional[str],
+    ledger: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Record each leg of a multi-leg (combo) proposal as its own fill.
+
+    The top-level proposal.limit_price/quantity/side describe only the
+    "primary" leg for display purposes (see OrderLeg's docstring in
+    state.py) -- using them here would book a synthetic long as if it were
+    a single call purchase and silently drop the short put's credit and its
+    own market-value-based P&L on close.
+    """
+    account = ledger.setdefault("account", {})
+    fills = ledger.setdefault("fills", [])
+    legs = getattr(proposal, "legs", [])
+    ticker = getattr(proposal, "ticker", "")
+    order_id = getattr(result, "order_proposal_id", getattr(proposal, "id", ""))
+    strategy_type = getattr(proposal, "strategy_type", None)
+    now = datetime.now(timezone.utc).isoformat()
+    current_cash = float(account.get("cash", DEFAULT_STARTING_CASH))
+    leg_summaries = []
+
+    for i, leg in enumerate(legs):
+        side = str(getattr(leg, "side", "BUY")).upper()
+        quantity = int(getattr(leg, "quantity", 1))
+        filled_price = float(getattr(leg, "limit_price", 0.0))
+        multiplier = 100.0  # every leg of a combo proposal is an option
+        total_cost = round(filled_price * quantity * multiplier, 2)
+
+        fill_id = f"fill-{ticker}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        fills.append({
+            "id": fill_id,
+            "order_proposal_id": order_id,
+            "leg_index": i,
+            "session_id": session_id or "N/A",
+            "ticker": ticker,
+            "asset_type": "OPTION",
+            "side": side,
+            "quantity": quantity,
+            "filled_price": filled_price,
+            "multiplier": multiplier,
+            "total_cost": total_cost,
+            "strike": getattr(leg, "strike", None),
+            "option_type": getattr(leg, "option_type", None),
+            "expiry": getattr(leg, "expiry", None),
+            "strategy_type": strategy_type,
+            "timestamp": now,
+            "status": "OPEN",
+            "current_price": filled_price,
+            "unrealized_pnl": 0.0,
+            "unrealized_pnl_pct": 0.0,
+        })
+
+        if side in ("BUY", "LONG"):
+            current_cash = round(current_cash - total_cost, 2)
+        elif side in ("SELL", "SHORT"):
+            current_cash = round(current_cash + total_cost, 2)
+        leg_summaries.append(
+            f"{side} {quantity}x {getattr(leg, 'option_type', '?')} ${getattr(leg, 'strike', '?')} @ ${filled_price:.2f}"
+        )
+
+    account["cash"] = current_cash
+    _save_ledger(ledger)
+    logger.info(f"📝 [PAPER FILL - MULTI-LEG] {strategy_type} {ticker}: " + " | ".join(leg_summaries))
+    return {"status": "recorded", "legs": len(legs), "cash": current_cash}
+
+
 def record_paper_fill(
     proposal: Any,
     result: Any,
@@ -80,6 +149,9 @@ def record_paper_fill(
     ledger = _load_ledger()
     account = ledger.setdefault("account", {})
     fills = ledger.setdefault("fills", [])
+
+    if getattr(proposal, "legs", None):
+        return _record_multileg_paper_fill(proposal, result, session_id, ledger)
 
     ticker = getattr(result, "ticker", getattr(proposal, "ticker", ""))
     order_id = getattr(result, "order_proposal_id", getattr(proposal, "id", ""))

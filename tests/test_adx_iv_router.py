@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock, patch
 
-from vesper.nodes.playbooks import playbooks_node, _fetch_leaps_option_quote
+from vesper.nodes.playbooks import playbooks_node, _fetch_leaps_option_quote, _fetch_synthetic_long_quotes
 from vesper.state import TradingState, TechnicalAudit, OptionAudit, OrderProposal
 
 
@@ -124,20 +124,71 @@ async def test_adx_iv_router_branch3_leaps_call():
 
 
 @pytest.mark.asyncio
-async def test_adx_iv_router_branch4_synthetic_long_explicitly_skipped():
-    """Branch 4: ADX >= 20 + IV >= 70% -> Synthetic Long (MUST BE SKIPPED, zero proposals drafted)."""
+async def test_adx_iv_router_branch4_synthetic_long_drafts_multileg_combo():
+    """Branch 4: ADX >= 20 + IV >= 70% -> Synthetic Long (BUY call + SELL put,
+    same strike/expiry). Now landed via OrderProposal.legs + execution_guard's
+    SYNTHETIC_LONG risk formula -- see docs/... multi-leg design note."""
     state = _make_state(ticker="NVDA", close=120.0, adx_14=32.0, iv=0.88)
 
     with patch("vesper.nodes.playbooks.fetch_live_equity", return_value=50000.0):
-        res = await playbooks_node(state)
+        with patch(
+            "vesper.nodes.playbooks._fetch_synthetic_long_quotes",
+            return_value=(8.50, 6.20, "2025-09-19", "NVDA250919C00120000", "NVDA250919P00120000"),
+        ):
+            res = await playbooks_node(state)
 
-    # Must NOT draft any proposal
+    props = res["proposals"]
+    assert len(props) == 1
+    p: OrderProposal = props[0]
+    assert p.ticker == "NVDA"
+    assert p.strategy_type == "SYNTHETIC_LONG"
+    assert p.strike == 120.0
+    assert p.expiry == "2025-09-19"
+    assert res["needs_human_approval"] is True
+
+    assert p.legs is not None
+    assert len(p.legs) == 2
+    call_leg = next(l for l in p.legs if l.option_type == "call")
+    put_leg = next(l for l in p.legs if l.option_type == "put")
+    assert call_leg.side == "BUY"
+    assert call_leg.limit_price == 8.50
+    assert put_leg.side == "SELL"
+    assert put_leg.limit_price == 6.20
+    assert call_leg.strike == put_leg.strike == 120.0
+    assert call_leg.expiry == put_leg.expiry == "2025-09-19"
+    assert call_leg.contract_symbol == "NVDA250919C00120000"
+    assert put_leg.contract_symbol == "NVDA250919P00120000"
+
+    # Assignment capital commitment = strike * 100 * 1 = $12,000 (the short
+    # put leg is the capital-at-risk driver, same reasoning as the Wheel CSP)
+    assert p.estimated_cost == 12000.0
+    assert p.max_risk == 12000.0
+
+    notes = res["audit_trail"][0]["notes"]
+    assert any(
+        "[Synthetic Long] for NVDA" in n and "Assignment Notional: $12,000.00" in n
+        for n in notes
+    )
+
+
+@pytest.mark.asyncio
+async def test_adx_iv_router_branch4_skips_when_no_shared_expiry_quote():
+    """If call and put can't be quoted against the same expiry, skip rather
+    than approximate with mismatched legs (execution_guard would reject a
+    mismatched-expiry payload anyway, but playbooks shouldn't draft one)."""
+    state = _make_state(ticker="NVDA", close=120.0, adx_14=32.0, iv=0.88)
+
+    with patch("vesper.nodes.playbooks.fetch_live_equity", return_value=50000.0):
+        with patch("vesper.nodes.playbooks._fetch_synthetic_long_quotes", return_value=None):
+            res = await playbooks_node(state)
+
     assert len(res["proposals"]) == 0
     assert res["needs_human_approval"] is False
-
-    # Must log an explicit skip note explaining multi-leg deferral
     notes = res["audit_trail"][0]["notes"]
-    assert any("Skipped ADX/IV Router [Synthetic Long] for NVDA" in n and "multi-leg execution pipeline deferred" in n for n in notes)
+    assert any(
+        "Skipped ADX/IV Router [Synthetic Long] for NVDA" in n and "no shared-expiry" in n
+        for n in notes
+    )
 
 
 @pytest.mark.asyncio
@@ -184,3 +235,69 @@ def test_fetch_leaps_option_quote_mock_chain():
             price, exp = res
             assert price == 31.0
             assert exp == "2027-06-20"
+
+
+def test_fetch_synthetic_long_quotes_picks_shared_expiry_only():
+    """Verify it only returns an expiry that has BOTH a call and a put quoted
+    at the strike -- a call-only or put-only expiry must be ignored even if
+    it's the nearest-dated one for that single leg."""
+    with patch("wb.Webull") as mock_wb_cls:
+        mock_wb = MagicMock()
+        mock_wb.configured = True
+        mock_wb_cls.return_value = mock_wb
+
+        with patch("md.Market") as mock_mkt_cls:
+            mock_mkt = MagicMock()
+
+            def option_chain(underlying, option_type, strike_gte, strike_lte):
+                if option_type == "CALL":
+                    return [
+                        # Nearer expiry, but no matching put below -- must be skipped.
+                        {"symbol": "SPY_C_0901", "strike_price": 550.0, "expire_date": "2025-09-01"},
+                        {"symbol": "SPY_C_0919", "strike_price": 550.0, "expire_date": "2025-09-19"},
+                    ]
+                return [
+                    {"symbol": "SPY_P_0919", "strike_price": 550.0, "expire_date": "2025-09-19"},
+                ]
+
+            def option_snapshot(symbols):
+                sym = symbols[0]
+                prices = {
+                    "SPY_C_0919": {"last": 12.0},
+                    "SPY_P_0919": {"last": 9.0},
+                }
+                return {sym: prices[sym]}
+
+            mock_mkt.option_chain.side_effect = option_chain
+            mock_mkt.option_snapshot.side_effect = option_snapshot
+            mock_mkt_cls.return_value = mock_mkt
+
+            res = _fetch_synthetic_long_quotes("SPY", 550.0)
+            assert res is not None
+            call_premium, put_premium, expiry, call_sym, put_sym = res
+            assert expiry == "2025-09-19"
+            assert call_premium == 12.0
+            assert put_premium == 9.0
+            assert call_sym == "SPY_C_0919"
+            assert put_sym == "SPY_P_0919"
+
+
+def test_fetch_synthetic_long_quotes_none_when_no_shared_expiry():
+    with patch("wb.Webull") as mock_wb_cls:
+        mock_wb = MagicMock()
+        mock_wb.configured = True
+        mock_wb_cls.return_value = mock_wb
+
+        with patch("md.Market") as mock_mkt_cls:
+            mock_mkt = MagicMock()
+
+            def option_chain(underlying, option_type, strike_gte, strike_lte):
+                if option_type == "CALL":
+                    return [{"symbol": "SPY_C_0901", "strike_price": 550.0, "expire_date": "2025-09-01"}]
+                return [{"symbol": "SPY_P_0919", "strike_price": 550.0, "expire_date": "2025-09-19"}]
+
+            mock_mkt.option_chain.side_effect = option_chain
+            mock_mkt_cls.return_value = mock_mkt
+
+            res = _fetch_synthetic_long_quotes("SPY", 550.0)
+            assert res is None

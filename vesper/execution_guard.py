@@ -76,6 +76,53 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _synthetic_long_max_risk(legs: list) -> float:
+    """Long call + short put, same strike/expiry, 1:1 ratio: the combined
+    payoff tracks the underlying almost exactly (a "synthetic long"), and the
+    short put is what carries the capital commitment -- same reasoning as the
+    single-leg SELL-to-open branch above. Deliberately does NOT net out the
+    credit received for the same reason that branch doesn't: refusing to
+    under-count risk beats a tighter but fragile number.
+    """
+    if len(legs) != 2:
+        raise GuardError("SYNTHETIC_LONG requires exactly 2 legs (long call + short put)")
+
+    call_leg = next((l for l in legs if str(l.get("option_type", "")).lower() == "call"), None)
+    put_leg = next((l for l in legs if str(l.get("option_type", "")).lower() == "put"), None)
+    if call_leg is None or put_leg is None:
+        raise GuardError("SYNTHETIC_LONG requires one CALL leg and one PUT leg")
+    if str(call_leg.get("side", "")).upper() != "BUY":
+        raise GuardError("SYNTHETIC_LONG requires the CALL leg to be BUY")
+    if str(put_leg.get("side", "")).upper() != "SELL":
+        raise GuardError("SYNTHETIC_LONG requires the PUT leg to be SELL")
+    if call_leg.get("strike") != put_leg.get("strike"):
+        raise GuardError("SYNTHETIC_LONG legs must share the same strike")
+    if call_leg.get("expiry") != put_leg.get("expiry"):
+        raise GuardError("SYNTHETIC_LONG legs must share the same expiry")
+    if call_leg.get("quantity") != put_leg.get("quantity"):
+        raise GuardError("SYNTHETIC_LONG legs must have a matching 1:1 quantity")
+
+    strike = put_leg.get("strike")
+    qty = float(put_leg.get("quantity") or 0)
+    if strike is None:
+        raise GuardError("SYNTHETIC_LONG legs are missing a strike")
+    if qty <= 0:
+        raise GuardError("every leg quantity must be > 0")
+
+    return float(strike) * 100.0 * qty
+
+
+# Registered multi-leg strategies, each mapped to a function that computes a
+# defined worst-case notional from the raw leg list. A strategy_type not in
+# this dict is refused outright in _validate_multileg -- see the reasoning
+# there. Add to this dict only with a formula that has been reasoned through
+# for that specific strategy's payoff shape; do not add a generic "sum of
+# legs" fallback, it is wrong for most multi-leg strategies.
+_MULTI_LEG_RISK_FORMULAS: dict = {
+    "SYNTHETIC_LONG": _synthetic_long_max_risk,
+}
+
+
 class Ticket:
     __slots__ = ("id", "proposal_id", "digest", "created_at", "used")
 
@@ -189,6 +236,80 @@ class ExecutionGuard:
                     f"{config['max_bp_fraction']:.0%} of ${bp:,.2f} buying power"
                 )
 
+    def _validate_multileg(
+        self,
+        payload: dict,
+        config: dict,
+        live_buying_power: Optional[float],
+    ) -> None:
+        """Guard path for combo/multi-leg orders (payload["legs"] is set).
+        Deliberately separate from _validate rather than a branch inside it:
+        a single-leg notional formula has nothing meaningful to say about a
+        combo's risk, and keeping them apart means a bug in one can't
+        silently change behavior in the other."""
+        from vesper.halt import is_halted
+        halted, halt_info = is_halted()
+        if halted and halt_info:
+            raise TradingDisabled(
+                f"Vesper is HALTED via emergency switch: '{halt_info.get('reason')}' "
+                f"(triggered by {halt_info.get('halted_by')} at {halt_info.get('halted_at')})"
+            )
+
+        if not config["trading_enabled"]:
+            raise TradingDisabled(
+                "Vesper live trading is disabled (VESPER_TRADING is not set to 1). "
+                "This is the intended default until Module 0 has been exercised "
+                "against a live account — see docs/CODE_SWEEP_2026-08-28.md."
+            )
+
+        symbol = str(payload.get("symbol", "")).upper()
+        allowlist = config["symbol_allowlist"]
+        if allowlist and symbol not in allowlist:
+            raise GuardError(f"{symbol} is not in VESPER_SYMBOL_ALLOWLIST")
+
+        strategy_type = str(payload.get("strategy_type", "")).upper()
+        formula = _MULTI_LEG_RISK_FORMULAS.get(strategy_type)
+        if formula is None:
+            # Fail closed: an unregistered strategy_type means nobody has
+            # reasoned through its payoff shape yet (this is exactly the gap
+            # "Thega" and any other future multi-leg idea sits in). Refusing
+            # is the whole point -- see the strike-vs-premium fix above for
+            # the same principle applied to a single leg.
+            raise GuardError(
+                f"cannot assess risk of multi-leg strategy_type={strategy_type!r} — "
+                "no registered risk formula for it. Refusing rather than guessing "
+                "at a defined-risk assumption that may not hold for this strategy."
+            )
+
+        legs = payload.get("legs") or []
+        if not legs:
+            raise GuardError("multi-leg order payload has no legs")
+
+        for leg in legs:
+            qty = float(leg.get("quantity") or 0)
+            if qty <= 0:
+                raise GuardError("every leg quantity must be > 0")
+            if qty > config["max_quantity"]:
+                raise GuardError(
+                    f"leg quantity {qty:g} exceeds VESPER_MAX_QUANTITY ({config['max_quantity']:g})"
+                )
+
+        notional = formula(legs)
+
+        if notional and notional > config["max_notional"]:
+            raise GuardError(
+                f"multi-leg order max risk ~${notional:,.2f} exceeds VESPER_MAX_NOTIONAL "
+                f"(${config['max_notional']:,.2f}). Raise the cap deliberately if you mean it."
+            )
+
+        if config["max_bp_fraction"] < 1.0 and notional:
+            bp = live_buying_power or 0.0
+            if bp and notional > bp * config["max_bp_fraction"]:
+                raise GuardError(
+                    f"multi-leg order max risk ~${notional:,.2f} exceeds "
+                    f"{config['max_bp_fraction']:.0%} of ${bp:,.2f} buying power"
+                )
+
     def preview(
         self,
         proposal_id: str,
@@ -200,7 +321,10 @@ class ExecutionGuard:
         with self._lock:
             self._reap()
             config = _load_guard_config()
-            self._validate(payload, config, live_buying_power)
+            if payload.get("legs"):
+                self._validate_multileg(payload, config, live_buying_power)
+            else:
+                self._validate(payload, config, live_buying_power)
             ticket = Ticket(proposal_id, payload)
             self._tickets[ticket.id] = ticket
             return ticket

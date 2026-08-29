@@ -136,6 +136,9 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
 
 
 async def _execute_webull(prop: OrderProposal) -> ExecutionResult:
+    if prop.legs:
+        return await _execute_webull_multileg(prop)
+
     from wb import Webull
 
     def _fetch_account_and_place(payload: Optional[dict] = None):
@@ -191,6 +194,104 @@ async def _execute_webull(prop: OrderProposal) -> ExecutionResult:
         status="SUBMITTED",
         client_order_id=f"wb-{prop.id}",
         message=f"Order placed on Webull: {place_res.get('data', place_res) if isinstance(place_res, dict) else place_res}",
+        timestamp=_now(),
+    )
+
+
+async def _execute_webull_multileg(prop: OrderProposal) -> ExecutionResult:
+    """Places a multi-leg combo order (e.g. SYNTHETIC_LONG) via Webull's
+    place_option(account_id, new_orders, client_combo_order_id=...), where
+    new_orders[0]["legs"] carries each leg.
+
+    UNVERIFIED against a live account, same as the rest of the order path —
+    see the Status section of CLAUDE.md. The exact leg wire-schema Webull
+    expects (order_operation_v2.PlaceOptionRequest.add_custom_headers_from_order
+    reads leg["instrument_type"]/leg["market"] for a header, implying more
+    fields than shown here) has not been confirmed against a real combo
+    order. Every leg must carry a live contract_symbol -- refuses rather than
+    guessing one, matching the "never fabricate, skip instead" rule.
+    """
+    from wb import Webull
+
+    for leg in prop.legs:
+        if not leg.contract_symbol:
+            raise GuardError(
+                f"multi-leg order for {prop.ticker} has a leg with no contract_symbol "
+                f"(strike={leg.strike}, expiry={leg.expiry}) -- refusing to place a "
+                "combo order without a confirmed live contract to route it to"
+            )
+
+    def _fetch_account_and_place(payload: Optional[dict] = None):
+        wb = Webull()
+        if not wb.configured:
+            raise RuntimeError("Webull client not configured in .env")
+
+        accounts = wb.trade.account_v2.get_account_list().get("data", [])
+        account_id = next(
+            (a.get("account_id") for a in accounts if a.get("account_class") == "INDIVIDUAL_CASH"),
+            None,
+        )
+        if not account_id and accounts:
+            account_id = accounts[0].get("account_id")
+
+        try:
+            buying_power = wb.portfolio()["totals"]["buying_power"]
+        except Exception:
+            buying_power = None
+
+        return wb, account_id, buying_power
+
+    wb, account_id, buying_power = await asyncio.to_thread(_fetch_account_and_place)
+
+    guard_payload = {
+        "account_id": account_id,
+        "symbol": prop.ticker,
+        "asset_type": "OPTION",
+        "strategy_type": prop.strategy_type,
+        "legs": [
+            {
+                "side": leg.side,
+                "option_type": leg.option_type,
+                "strike": leg.strike,
+                "expiry": leg.expiry,
+                "quantity": leg.quantity,
+                "limit_price": leg.limit_price,
+                "contract_symbol": leg.contract_symbol,
+            }
+            for leg in prop.legs
+        ],
+    }
+
+    ticket = guard.preview(prop.id, guard_payload, live_buying_power=buying_power)
+
+    def _place():
+        new_orders = [{
+            "combo_type": prop.strategy_type,
+            "legs": [
+                {
+                    "instrument_type": "OPTION",
+                    "symbol": leg.contract_symbol,
+                    "side": leg.side,
+                    "order_type": prop.order_type,
+                    "quantity": leg.quantity,
+                    "limit_price": leg.limit_price,
+                    "time_in_force": "DAY",
+                }
+                for leg in prop.legs
+            ],
+        }]
+        return wb.trade.order_v2.place_option(
+            account_id, new_orders, client_combo_order_id=f"vesper-{prop.id}"
+        )
+
+    place_res = await asyncio.to_thread(guard.place, ticket.id, guard_payload, _place)
+
+    return ExecutionResult(
+        order_proposal_id=prop.id,
+        ticker=prop.ticker,
+        status="SUBMITTED",
+        client_order_id=f"wb-combo-{prop.id}",
+        message=f"Combo order placed on Webull: {place_res.get('data', place_res) if isinstance(place_res, dict) else place_res}",
         timestamp=_now(),
     )
 

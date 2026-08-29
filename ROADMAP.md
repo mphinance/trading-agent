@@ -386,8 +386,66 @@ research pass done on this repo:
   - `ADX < 20` + `IV < 70%` -> "Training Wheels": buy shares outright with volatility-targeted sizing.
   - `ADX < 20` + `IV >= 70%` -> "Wheel": sell Cash-Secured Put at near-the-money strike with full assignment notional (`strike * 100 * qty`).
   - `ADX >= 20` + `IV < 70%` -> "LEAPS": buy far-dated call (6-12 months out, ~180-400 DTE) with premium-based notional (`premium * 100 * qty`).
-  - `ADX >= 20` + `IV >= 70%` -> "Synthetic Long": **explicitly NOT done** (skipped with audit note; multi-leg pipeline deferred to dedicated multi-leg order execution milestone).
+  - `ADX >= 20` + `IV >= 70%` -> "Synthetic Long": **landed** (BUY call + SELL put, same
+    strike/expiry, 1:1 ratio) via the multi-leg extension below.
   Tested in `tests/test_adx_iv_router.py`.
+
+- **Multi-leg (combo) order support — landed for Synthetic Long, general design set**:
+  `OrderProposal` gained `strategy_type: Optional[str]` + `legs: Optional[List[OrderLeg]]`
+  (`vesper/state.py`). `execution_guard._validate_multileg` dispatches to a **whitelist**
+  of risk formulas keyed by `strategy_type`
+  (`execution_guard._MULTI_LEG_RISK_FORMULAS`) — an unregistered `strategy_type` is
+  refused outright (`GuardError: no registered risk formula`), same "refuse rather than
+  under-count/guess" principle as the single-leg strike-vs-premium fix. This is the
+  general shape any future multi-leg strategy plugs into: write a `legs -> float`
+  worst-case-notional function, reason it through for that specific payoff shape, add
+  it to the dict. Do **not** add a generic "sum of legs" fallback — it's wrong for
+  most combos (a credit spread's max loss isn't the sum of both legs' premiums, a
+  straddle's isn't either).
+  - `SYNTHETIC_LONG` (only registered formula so far): treats the SELL put leg as the
+    capital-at-risk driver (`strike * 100 * qty`), same reasoning as a standalone CSP —
+    the long call adds unlimited upside but doesn't need its own separate cap check.
+    Requires BUY-call/SELL-put, matching strike, matching expiry, matching 1:1 quantity;
+    rejects anything else (a mismatched pair is a different strategy, e.g. a risk
+    reversal at different strikes, that hasn't been reasoned through).
+  - `vesper/nodes/playbooks.py`'s ADX/IV router Branch 4 drafts it via
+    `_fetch_synthetic_long_quotes(ticker, strike)`, which fetches the option chain for
+    both CALL and PUT and picks the **nearest expiry present in both** — deliberately
+    not two independent `_fetch_live_option_quote` calls, which could each silently
+    settle on a different nearest-dated contract and hand the guard a
+    same-strike-different-expiry pair (which it would then correctly reject, but only
+    after wasting an approval round-trip).
+  - `vesper/paper_ledger.py`'s `record_paper_fill` now branches on `proposal.legs`:
+    a combo books each leg as its own fill with its own cash impact (BUY debits, SELL
+    credits), instead of the top-level `proposal.limit_price`/`side` fields — which
+    only describe the primary leg — silently booking a synthetic long as if it were a
+    single call purchase and dropping the short put's credit entirely.
+  - `vesper/nodes/executor.py`'s `_execute_webull_multileg` calls
+    `wb.trade.order_v2.place_option(account_id, new_orders, client_combo_order_id=...)`
+    with each leg's live-confirmed `contract_symbol` — refuses the whole combo if any
+    leg lacks one rather than guessing a contract. **UNVERIFIED against a live
+    account**, same caveat as the rest of the order path: the exact leg wire-schema
+    Webull expects beyond `symbol`/`side`/`quantity`/`limit_price` (its SDK's
+    `add_custom_headers_from_order` reads `leg["instrument_type"]`/`leg["market"]` for
+    a request header, implying a richer shape than what's sent here) has not been
+    confirmed against a real combo order.
+  - **Also found, not fixed**: the pre-existing single-leg `_execute_webull` calls
+    `wb.trade.order_v2.place_order(payload)` with one positional dict argument, but the
+    SDK's real signature is `place_order(self, account_id, new_orders,
+    client_combo_order_id=None)` — two required positional args. This looks like a
+    live-breaking bug, but it's inside the already-documented "not exercised against
+    live" order path (see Status section), so it's flagged here rather than fixed
+    blind — needs a real sandbox/paper-broker call to nail down the correct call shape
+    before touching it.
+  - Tested in `tests/test_execution_guard.py` (multi-leg guard section),
+    `tests/test_adx_iv_router.py` (drafting + shared-expiry quote fetch), and
+    `tests/test_multileg_execution.py` (paper-ledger leg-level fills, live executor
+    payload shape).
+  - **Thega (delta-neutral volatility harvest) remains deferred.** No concrete leg
+    structure has been specified for it yet (unlike Synthetic Long, which has an
+    unambiguous 2-leg definition) — per the design principle above, it stays refused
+    by the guard until someone writes down its actual legs and a real risk formula for
+    them. Do not add a placeholder/approximate formula just to unblock drafting.
 - **Premium-recycling "free share" engine (landed — paper ledger)**:
   Sweeps cumulative options-selling realized P&L from paper ledger into accumulating
   100-share blocks of a stabilizing asset (`VESPER_PREMIUM_RECYCLE_TICKER`, default `$SGOV`),

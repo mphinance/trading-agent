@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 from vesper.account import fetch_live_equity
-from vesper.state import TradingState, OrderProposal
+from vesper.state import TradingState, OrderProposal, OrderLeg
 from vesper.risk import RiskEnforcer
 
 logger = logging.getLogger(__name__)
@@ -205,6 +205,98 @@ def _fetch_leaps_option_quote(
         return None
     except Exception as e:
         logger.debug(f"Could not fetch LEAPS option quote for {underlying} {strike}: {e}")
+        return None
+
+
+def _fetch_synthetic_long_quotes(
+    underlying: str,
+    strike: float,
+) -> Optional[tuple[float, float, str, str, str]]:
+    """Fetch live CALL and PUT premiums for a synthetic-long combo (long call
+    + short put, same strike/expiry). Unlike _fetch_live_option_quote, this
+    fetches both legs against the SAME expiry deliberately -- two independent
+    calls could each silently pick a different nearest-dated contract at the
+    strike, and execution_guard's SYNTHETIC_LONG formula requires the legs to
+    match expiry. Picks the nearest expiry that actually has both a call and
+    a put quoted at the strike; returns None (never fabricates) if none does.
+
+    Blocking — wrap in asyncio.to_thread.
+    Returns (call_premium, put_premium, expiry_str, call_contract_symbol,
+    put_contract_symbol) or None.
+    """
+    try:
+        from wb import Webull
+        from md import Market
+
+        wb = Webull()
+        if not wb.configured:
+            return None
+
+        mkt = Market(wb)
+
+        def _contracts_by_expiry(option_type: str) -> Dict[str, Dict[str, Any]]:
+            chain_res = mkt.option_chain(
+                underlying=underlying,
+                option_type=option_type,
+                strike_gte=strike - 0.01,
+                strike_lte=strike + 0.01,
+            )
+            contracts = []
+            if isinstance(chain_res, list):
+                contracts = chain_res
+            elif isinstance(chain_res, dict):
+                contracts = chain_res.get("data") or chain_res.get("contracts") or chain_res.get("list") or []
+
+            by_expiry: Dict[str, Dict[str, Any]] = {}
+            for c in contracts:
+                c_strike = float(c.get("strike_price") or c.get("strikePrice") or c.get("strike") or 0.0)
+                if abs(c_strike - strike) > 0.05:
+                    continue
+                exp_str = c.get("expire_date") or c.get("expiration_date") or c.get("expiry") or c.get("start_date")
+                if not exp_str:
+                    continue
+                by_expiry[str(exp_str)[:10]] = c
+            return by_expiry
+
+        calls_by_expiry = _contracts_by_expiry("CALL")
+        puts_by_expiry = _contracts_by_expiry("PUT")
+        shared_expiries = sorted(set(calls_by_expiry) & set(puts_by_expiry))
+        if not shared_expiries:
+            return None
+        target_expiry = shared_expiries[0]
+
+        call_sym = calls_by_expiry[target_expiry].get("symbol") or calls_by_expiry[target_expiry].get("ticker")
+        put_sym = puts_by_expiry[target_expiry].get("symbol") or puts_by_expiry[target_expiry].get("ticker")
+        if not call_sym or not put_sym:
+            return None
+
+        def _price_from_snapshot(snap_res: Any, sym: str) -> Optional[float]:
+            snap_data = (snap_res.get(sym) or snap_res) if isinstance(snap_res, dict) else None
+            if not snap_data:
+                return None
+            last = snap_data.get("last") or snap_data.get("close")
+            if last and float(last) > 0:
+                return float(last)
+            bid = float(snap_data.get("bid") or snap_data.get("bid_price") or 0)
+            ask = float(snap_data.get("ask") or snap_data.get("ask_price") or 0)
+            if bid > 0 and ask > 0:
+                return round((bid + ask) / 2.0, 2)
+            if bid > 0:
+                return bid
+            if ask > 0:
+                return ask
+            return None
+
+        call_snap = mkt.option_snapshot([call_sym])
+        put_snap = mkt.option_snapshot([put_sym])
+        call_premium = _price_from_snapshot(call_snap, call_sym)
+        put_premium = _price_from_snapshot(put_snap, put_sym)
+        if call_premium is None or put_premium is None:
+            return None
+
+        return call_premium, put_premium, target_expiry, call_sym, put_sym
+    except Exception as e:
+        logger.debug(f"Could not fetch synthetic-long quotes for {underlying} {strike}: {e}")
         return None
 
 
@@ -691,15 +783,64 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                 )
 
             # Branch 4: ADX >= 20 + IV >= 70% -> "Synthetic Long" (simultaneous BUY call + SELL put)
-            # SKIP THIS BRANCH ENTIRELY: Synthetic long is a genuine multi-leg strategy
-            # (simultaneous long call and short put) that OrderProposal and execution_guard
-            # do not yet support (single proposal = single leg order pipeline).
-            # Deliberately deferred to a separate multi-leg execution milestone rather than
-            # approximating with an unsafe single-leg substitute.
+            # Multi-leg combo: OrderProposal.legs + execution_guard's SYNTHETIC_LONG
+            # risk formula (strike-based, same reasoning as the Wheel CSP above —
+            # the short put is the capital-at-risk driver). Both legs are fetched
+            # against the same live-confirmed expiry by _fetch_synthetic_long_quotes
+            # so the guard's expiry-match check can't fail on a data artifact.
             elif is_trending and is_high_iv:
+                strike = round(entry_price, 0)
+                synth_res = await asyncio.to_thread(_fetch_synthetic_long_quotes, ticker, strike)
+                if synth_res is None:
+                    audit_notes.append(
+                        f"Skipped ADX/IV Router [Synthetic Long] for {ticker} strike ${strike:.2f}: "
+                        "no shared-expiry call+put quote available"
+                    )
+                    continue
+
+                call_premium, put_premium, expiry_str, call_sym, put_sym = synth_res
+                qty = 1
+                net_premium = round((call_premium - put_premium) * 100 * qty, 2)  # debit if +, credit if -
+                assignment_notional = round(strike * 100 * qty, 2)
+                prop = OrderProposal(
+                    id=f"prop-adxiv-synth-{uuid.uuid4().hex[:6]}",
+                    ticker=ticker,
+                    asset_type="OPTION",
+                    side="BUY",  # net position is long-equivalent; legs carry the real sides
+                    order_type="LIMIT",
+                    quantity=qty,
+                    limit_price=call_premium,
+                    strike=strike,
+                    expiry=expiry_str,
+                    option_type="call",
+                    strategy_type="SYNTHETIC_LONG",
+                    legs=[
+                        OrderLeg(
+                            side="BUY", option_type="call", strike=strike,
+                            expiry=expiry_str, quantity=qty, limit_price=call_premium,
+                            contract_symbol=call_sym,
+                        ),
+                        OrderLeg(
+                            side="SELL", option_type="put", strike=strike,
+                            expiry=expiry_str, quantity=qty, limit_price=put_premium,
+                            contract_symbol=put_sym,
+                        ),
+                    ],
+                    stop_loss=None,
+                    profit_target=None,
+                    # Same capital-at-risk figure execution_guard will independently
+                    # recompute from the legs -- this is for the approval card /
+                    # audit trail, not trusted at guard time.
+                    estimated_cost=assignment_notional,
+                    max_risk=assignment_notional,
+                    risk_reward_ratio=0.0,
+                )
+                proposals.append(prop)
                 audit_notes.append(
-                    f"Skipped ADX/IV Router [Synthetic Long] for {ticker} (ADX={tech.adx_14:.1f} >= 20, IV={iv_pct:.1f}% >= 70%): "
-                    "multi-leg execution pipeline deferred"
+                    f"Drafted ADX/IV Router [Synthetic Long] for {ticker}: BUY 1x Call + SELL 1x Put, "
+                    f"Strike ${strike:.2f} Exp {expiry_str}, net {'debit' if net_premium >= 0 else 'credit'} "
+                    f"${abs(net_premium):,.2f} (ADX={tech.adx_14:.1f} >= 20, IV={iv_pct:.1f}% >= 70%, "
+                    f"Assignment Notional: ${assignment_notional:,.2f})"
                 )
 
     # ── 5. PREMIUM-RECYCLING "FREE SHARE" ENGINE ───────────────────────────
