@@ -388,35 +388,48 @@ pattern in "AI agent architecture" below is the more rigorous version of
 that question, and better thought through before an LLM gets any real
 influence over a proposal's numbers, if that's ever wanted.
 
-**Voice: not built at all.** Nothing below changed.
+**Voice: not built yet, but the decision is made — standalone, own voice
+stack, DeepSeek stays the brain.** (2026-08-28) Considered wiring Vesper's
+voice interface into `nyx` (`mphinance/nyx` on host `coolify`, née a fork of
+`six-ddc/disclaw`) instead of building Vesper's own — nyx already has a full,
+running voice pipeline (Discord voice channel, wake-word, Whisper STT +
+Kokoro TTS both via OpenRouter, hub routing into a Claude Agent SDK brain)
+that would have been a small integration (one more key in its
+`createMcpServers` factory). **Decision: keep Vesper standalone.** Reasons
+that mattered most:
+- **Blast radius mismatch.** nyx also runs the TD Pro agent launcher, Sleeper
+  fantasy cards, and other business-facing automation — a live trading
+  assistant's uptime/security would depend on a system that also runs
+  fantasy football.
+- **Shared, budgeted Claude runner.** nyx's agent-run poller caps concurrency
+  and daily runs specifically because it's shared across every other nyx
+  thread — a trading voice query would queue behind unrelated business-agent
+  runs.
+- **Widens the exact surface this whole roadmap has been careful about.**
+  Putting Vesper's tools behind a general-purpose assistant that also
+  handles business ops means a stray utterance in the wrong channel is
+  adjacent to trading tools instead of isolated from them — same class of
+  risk as the inbound-approval-auth gap already tracked above, just
+  relocated rather than solved.
+- Not merged to `main` on the nyx side either — building on it would stack
+  two moving targets.
 
-**Voice + channel architecture — reuse Module 2, don't adopt an external
-framework.** Explored `princezuda/safestclaw` and `moltis-org/moltis` (from
-the `machinae/awesome-claws` list) as potential ready-made assistants to
-adopt wholesale. Neither is the right call: both would stand up a *second*
-system that then needs its own bridge into the same MCP servers
-(webull/traderdaddy/tickertrace/momentum) Vesper already talks to — a
-parallel stack, not a shortcut, since `vesper/bot/` already has the channel
-infrastructure (`ChannelManager`, Discord/Telegram/webhook adapters,
-`vesper/bot/inbound.py`'s `approval_registry`). What's worth stealing from
-each as a pattern, not a dependency:
-- **SafestClaw's voice pipeline**: local Whisper STT + Piper TTS, fully
-  offline, no cloud round-trip or per-request voice API cost. The reference
-  shape for a voice-message-in/voice-note-out flow bolted onto the existing
-  Discord adapter: transcribe inbound audio locally, route the text through
-  the same chat/decision surface as a typed message, synthesize the reply
-  locally instead of returning text-only.
-- **Moltis's "MCP client + multi-provider + multi-channel" shape**: confirms
-  the overall architecture (one process, MCP client to existing tool servers,
-  swappable model provider, several chat channels) is a proven, common
-  pattern — validates building this directly into `vesper/bot/` rather than
-  it being a novel design.
+**What's still worth reusing from nyx as validated reference, not as a
+dependency**: the exact model pair — STT `openai/whisper-large-v3-turbo`,
+TTS `hexgrad/kokoro-82m`, both callable via OpenRouter, both already proven
+in production for trading-adjacent speech — and the vocabulary-biasing
+trick (`voice/config.ts`'s `STT_VOCAB`): feeding Whisper an initial-prompt
+hint of tickers/options jargon (their example: without it, "Nyx" transcribed
+as "Nix" — the same class of mistake CLAUDE.md's old sidecar notes already
+warned about for NVDA→"in video"). Same fix, cheaper than a bigger model,
+worth carrying into Vesper's own STT config verbatim.
 
-Neither project confirmed explicit OpenRouter support by name (both use
-generic "custom endpoint" multi-provider config) — since OpenRouter is
-OpenAI-API-compatible, this is very likely a non-issue, but wasn't verified
-directly against either project's provider config and shouldn't be assumed
-working without a quick check if either is ever actually touched.
+Also still relevant from the earlier `princezuda/safestclaw` /
+`moltis-org/moltis` research: both validate the same overall shape (one
+process, MCP client to existing tool servers, swappable model provider,
+multi-channel) that `vesper/bot/` should be built as an extension of, not
+adopted wholesale as external frameworks — same reasoning as the nyx
+decision above, one level down.
 
 **Not decided yet, deliberately**: whether voice-in comes from a Discord
 voice message, a Telegram voice note, or something else; whether TTS output
