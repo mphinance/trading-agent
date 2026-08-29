@@ -185,12 +185,17 @@ Macro/market-health check, SPY/QQQ dealer-gamma levels, TickerTrace whale-flow
 briefing, 0DTE bias, top candidates with 2x leveraged-ETF proxies. See Known
 Gaps above for the stale-fallback issue.
 
-### 🟡 Module 2 — Channel-Agnostic Alert Bot (outbound done, inbound half-built)
+### 🟡 Module 2 — Channel-Agnostic Alert Bot (Telegram round-trip done, Discord inbound still open)
 `ApprovalChannel` interface with Telegram/Discord/webhook adapters, broadcast
-from `human_gate_node`/`executor_node` — this half is done. `vesper/bot/inbound.py`
-has the resolve/resume *logic* (`ApprovalRegistry`, correct `Command(resume=...)`
-usage) but nothing calls it yet — no HTTP route, no Telegram/Discord listener.
-See Known Gaps above for the auth requirement once that ingestion layer gets built.
+from `human_gate_node`/`executor_node` — done. Inbound resolve/resume
+(`ApprovalRegistry`, correct `Command(resume=...)` usage in
+`vesper/bot/inbound.py`) — done and, as of `vesper/bot/telegram_polling.py`
+(`vesper.py listen`), actually **wired to real Telegram taps** via
+long-polling (not a webhook — deliberately, see Known Gaps item 5 above).
+Tapping Approve/Reject on a Telegram card now genuinely resolves the paused
+graph. Discord's inbound half is still open — its better path mirrors
+`discord.py`'s gateway + `DynamicItem` pattern (see the nyx/TraderDiscord-v2
+findings below), not the aiohttp webhook route that exists but nothing starts.
 
 ### ✅ Module 3 — Position Monitor & Exit Cascade (done)
 `vesper monitor [--interval 15] [--live] [--once]`: take-profit +50%,
