@@ -231,7 +231,10 @@ that actually needs careful design saved for last so it doesn't get rushed:
 - `risk_gate_node` reads live NLV via `vesper/account.py` instead of a
   hardcoded equity constant (same fix applied in `playbooks_node`'s sizing,
   which had an independent copy of the same bug).
-- 11 tests in `tests/test_execution_guard.py`.
+- 11 tests in `tests/test_execution_guard.py` and 6 node-level integration tests
+  in `tests/test_execution_integration.py` (wiring `risk_gate_node` -> `executor_node`
+  end-to-end for live broker submission, kill-switch / notional blocks, dry-run paper
+  fills, and multi-leg synthetic combo fills).
 
 ### ✅ Module 1 — Pre-Market Battle-Plan Runner (`vesper morning`) (done)
 Macro/market-health check, SPY/QQQ dealer-gamma levels, TickerTrace whale-flow
