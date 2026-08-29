@@ -583,9 +583,12 @@ kind of system.
   and size clustered at gamma flip (|dist| <= 0.75%) with low/moderate IV or ATM put overlay
   as `HEDGE`. Tested in `tests/test_flow_classifier.py`. (Integration into candidate generation
   pipeline remains future backlog).
-- **Vanna/Charm exposure (VEX/CHEX)**: same conceptual family as the dealer
-  gamma (GEX) already tracked, just 2nd/3rd-order. Check whether TraderDaddy
-  already exposes these before building anything new.
+- **Vanna/Charm exposure (VEX/CHEX)**: Checked 2026-08-28. Confirmed TraderDaddy Pro
+  does NOT expose Vanna or Charm exposure (checked all 30 TDPro tool schemas and live
+  response payloads for `get_gex_ticker`, `get_gex_overview`, `get_edge_xray`, and
+  `get_hedge_analysis`). If required in the future, VEX/CHEX would need in-process
+  Greek computation (e.g. via `scipy` / `py_vollib`) over Webull option chains rather
+  than an upstream TDPro endpoint.
 - Tooling worth knowing about: `vectorbt` (Module 4 candidate), `quantstats`
   (Sharpe/Sortino/drawdown tearsheets + Monte Carlo bust-probability sim for
   the approval card), `py_vollib` (fast Black-Scholes IV/Greeks if options
