@@ -39,6 +39,8 @@ chromadb>=0.5
 # Inbound webhook server & cryptographic authentication
 aiohttp        # vesper/bot/inbound.py's webhook server (tests/test_inbound_bot.py)
 cryptography   # Discord Ed25519 signature verification (tests/test_inbound_bot.py)
+discord.py     # Discord gateway client with dynamic interactive approval buttons
+
 
 # Quantitative analysis, charts, backtesting & technical indicators
 pandas

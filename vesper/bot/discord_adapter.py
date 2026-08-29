@@ -14,15 +14,17 @@ logger = logging.getLogger(__name__)
 
 
 class DiscordAdapter(ApprovalChannel):
-    """Discord Webhook / Bot channel adapter."""
+    """Discord Webhook / Gateway Bot channel adapter."""
 
     def __init__(
         self,
         webhook_url: Optional[str] = None,
         bot_token: Optional[str] = None,
+        channel_id: Optional[str] = None,
     ):
         self.webhook_url = webhook_url or os.getenv("DISCORD_WEBHOOK_URL", "")
         self.bot_token = bot_token or os.getenv("DISCORD_BOT_TOKEN", "")
+        self.channel_id = channel_id or os.getenv("DISCORD_CHANNEL_ID", "")
         self._client = httpx.AsyncClient(timeout=10.0)
 
     @property
@@ -30,8 +32,16 @@ class DiscordAdapter(ApprovalChannel):
         return "discord"
 
     @property
-    def configured(self) -> bool:
+    def gateway_configured(self) -> bool:
+        return bool(self.bot_token and self.channel_id and not self.bot_token.startswith("your_"))
+
+    @property
+    def webhook_configured(self) -> bool:
         return bool(self.webhook_url and not self.webhook_url.startswith("your_"))
+
+    @property
+    def configured(self) -> bool:
+        return self.gateway_configured or self.webhook_configured
 
     async def send_proposal_card(self, card: ProposalCard) -> Optional[str]:
         """Send proposal embed to Discord channel."""
@@ -77,37 +87,90 @@ class DiscordAdapter(ApprovalChannel):
                 logger.debug("5m chart generation for %s unavailable: %s", card.ticker, e)
                 chart_bytes = None
 
-        # 2. If chart available, send as Discord multipart attachment
-        if chart_bytes:
-            embed["image"] = {"url": f"attachment://{card.ticker}_5m.png"}
+        # 2. If Gateway Bot is actively connected in process, use its channel.send()
+        if self.gateway_configured:
+            from vesper.bot.discord_gateway import get_active_gateway_bot
+            active_bot = get_active_gateway_bot()
+            if active_bot:
+                try:
+                    msg_id = await active_bot.send_proposal_card(
+                        channel_id=self.channel_id,
+                        card=card,
+                        chart_bytes=chart_bytes,
+                    )
+                    if msg_id:
+                        return msg_id
+                except Exception as e:
+                    logger.warning(f"Gateway bot send_proposal_card failed: {e}. Falling back to REST/webhook.")
+
+            # 3. Direct Discord Bot REST API with dynamic item components
             try:
                 import json
+                from vesper.bot.discord_gateway import get_approval_components
+                components = get_approval_components(card.proposal_id)
+                headers = {
+                    "Authorization": f"Bot {self.bot_token}",
+                }
+                api_url = f"https://discord.com/api/v10/channels/{self.channel_id}/messages"
+
+                if chart_bytes:
+                    embed["image"] = {"url": f"attachment://{card.ticker}_5m.png"}
+                    resp = await self._client.post(
+                        api_url,
+                        headers=headers,
+                        data={"payload_json": json.dumps({"embeds": [embed], "components": components})},
+                        files={"file": (f"{card.ticker}_5m.png", chart_bytes, "image/png")},
+                    )
+                else:
+                    resp = await self._client.post(
+                        api_url,
+                        headers=headers,
+                        json={"embeds": [embed], "components": components},
+                    )
+
+                if resp.status_code in [200, 201]:
+                    data = resp.json()
+                    msg_id = str(data["id"])
+                    logger.info(f"Sent Discord interactive proposal card for {card.proposal_id} (Msg ID: {msg_id})")
+                    return msg_id
+                else:
+                    logger.warning(f"Discord Bot REST message failed ({resp.status_code}): {resp.text}. Falling back to webhook.")
+            except Exception as e:
+                logger.warning(f"Discord Bot REST error: {e}. Falling back to webhook.")
+
+        # 4. Fallback to Webhook URL if configured
+        if self.webhook_configured:
+            if chart_bytes:
+                embed["image"] = {"url": f"attachment://{card.ticker}_5m.png"}
+                try:
+                    import json
+                    resp = await self._client.post(
+                        self.webhook_url,
+                        data={"payload_json": json.dumps({"username": "Vesper Quant Bot", "embeds": [embed]})},
+                        files={"file": (f"{card.ticker}_5m.png", chart_bytes, "image/png")},
+                    )
+                    if resp.status_code in [200, 204]:
+                        logger.info(f"Sent Discord proposal card with chart for {card.proposal_id}")
+                        return card.proposal_id
+                    logger.warning(f"Discord multipart upload failed with {resp.status_code}. Falling back to standard embed.")
+                except Exception as e:
+                    logger.warning(f"Discord multipart error: {e}. Falling back to standard embed.")
+
+            try:
                 resp = await self._client.post(
                     self.webhook_url,
-                    data={"payload_json": json.dumps({"username": "Vesper Quant Bot", "embeds": [embed]})},
-                    files={"file": (f"{card.ticker}_5m.png", chart_bytes, "image/png")},
+                    json={"username": "Vesper Quant Bot", "embeds": [embed]},
                 )
                 if resp.status_code in [200, 204]:
-                    logger.info(f"Sent Discord proposal card with chart for {card.proposal_id}")
+                    logger.info(f"Sent Discord proposal card for {card.proposal_id}")
                     return card.proposal_id
-                logger.warning(f"Discord multipart upload failed with {resp.status_code}. Falling back to standard embed.")
+                logger.error(f"Discord webhook failed with code {resp.status_code}: {resp.text}")
+                return None
             except Exception as e:
-                logger.warning(f"Discord multipart error: {e}. Falling back to standard embed.")
+                logger.error(f"Discord send_proposal_card error: {e}")
+                return None
 
-        # 3. Fallback to standard JSON embed
-        try:
-            resp = await self._client.post(
-                self.webhook_url,
-                json={"username": "Vesper Quant Bot", "embeds": [embed]},
-            )
-            if resp.status_code in [200, 204]:
-                logger.info(f"Sent Discord proposal card for {card.proposal_id}")
-                return card.proposal_id
-            logger.error(f"Discord webhook failed with code {resp.status_code}: {resp.text}")
-            return None
-        except Exception as e:
-            logger.error(f"Discord send_proposal_card error: {e}")
-            return None
+        return None
 
     async def send_execution_result(self, result: ExecutionResult) -> bool:
         if not self.configured:

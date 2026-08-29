@@ -129,21 +129,29 @@ Examples:
         sys.exit(0)
 
     if args.command == "listen":
-        # Starts the Telegram long-polling loop (getUpdates) that feeds
-        # ApprovalRegistry.handle_callback_payload() real Approve/Reject
-        # button taps and /halt /resume commands. Long-polling, not a
-        # webhook -- see vesper/bot/telegram_polling.py for why.
+        # Starts the Telegram long-polling loop and Discord gateway client concurrently
+        # to feed ApprovalRegistry real Approve/Reject taps and /halt /resume commands.
+        # Outbound-only -- no public ports opened.
         from vesper.graph import build_trading_graph
         from vesper.bot.inbound import approval_registry
         from vesper.bot.telegram_polling import run_telegram_polling_loop
+        from vesper.bot.discord_gateway import run_discord_gateway_bot
 
         app = build_trading_graph(checkpointer=True)
         approval_registry.set_graph_app(app)
         print("\n" + "=" * 60)
-        print("📡 VESPER TELEGRAM APPROVAL LISTENER")
+        print("📡 VESPER INBOUND APPROVAL LISTENER (Telegram & Discord)")
         print("=" * 60)
+
+        async def _run_listeners() -> None:
+            await asyncio.gather(
+                run_telegram_polling_loop(),
+                run_discord_gateway_bot(),
+                return_exceptions=True,
+            )
+
         try:
-            asyncio.run(run_telegram_polling_loop())
+            asyncio.run(_run_listeners())
         except KeyboardInterrupt:
             print("\n[!] Vesper listener interrupted by user.")
         sys.exit(0)

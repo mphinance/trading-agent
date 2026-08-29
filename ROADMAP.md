@@ -203,24 +203,24 @@ Macro/market-health check, SPY/QQQ dealer-gamma levels, TickerTrace whale-flow
 briefing, 0DTE bias, top candidates with 2x leveraged-ETF proxies. See Known
 Gaps above for the stale-fallback issue.
 
-### 🟡 Module 2 — Channel-Agnostic Alert Bot (Telegram round-trip done, Discord inbound still open)
+### ✅ Module 2 — Channel-Agnostic Alert Bot & Inbound Human Gates (done)
 `ApprovalChannel` interface with Telegram/Discord/webhook adapters, broadcast
 from `human_gate_node`/`executor_node` — done. Inbound resolve/resume
 (`ApprovalRegistry`, correct `Command(resume=...)` usage in
-`vesper/bot/inbound.py`) — done and, as of `vesper/bot/telegram_polling.py`
-(`vesper.py listen`), actually **wired to real Telegram taps** via
-long-polling (not a webhook — deliberately, see Known Gaps item 5 above).
-Tapping Approve/Reject on a Telegram card now genuinely resolves the paused
-graph.
-- **5m chart attachment on proposal cards (landed)**: `TelegramAdapter` calls
-  `mcp_server.charts.generate_chart(ticker, period="1d", interval="5m", show_emas=True)`
-  to render candlestick + EMA 8/21/34/55/89 overlay charts, sending via Telegram's
-  `sendPhoto` multipart API with inline buttons and caption, with seamless fallback
-  to text-only `sendMessage` if chart generation fails. `DiscordAdapter` supports
-  the same multipart file upload attachment. Tested in `tests/test_bot_channel.py`.
-Discord's inbound half is still open — its better path mirrors
-`discord.py`'s gateway + `DynamicItem` pattern (see the nyx/TraderDiscord-v2
-findings below), not the aiohttp webhook route that exists but nothing starts.
+`vesper/bot/inbound.py`) — done for both primary bot platforms:
+- **Telegram Round-Trip**: Long-polling (`vesper/bot/telegram_polling.py`) routes
+  `callback_query` button taps and `/halt`/`/resume` commands into `ApprovalRegistry`
+  and clears button spinners. Outbound-only, no public port required.
+- **Discord Round-Trip**: Persistent gateway client (`vesper/bot/discord_gateway.py`)
+  using `discord.py` and stateless `discord.ui.DynamicItem` (`ApprovalButton`) with
+  regex template `r"vesper\|(?P<action>approve|reject)\|(?P<proposal_id>.+)"`. Survives
+  bot restarts and view timeouts with zero in-memory state. Outbound-only WebSocket gateway.
+- **Concurrent Listener**: `vesper.py listen` starts both Telegram polling and
+  Discord gateway clients concurrently under `asyncio.gather()`.
+- **5m chart attachment on proposal cards**: `TelegramAdapter` and `DiscordAdapter`
+  call `mcp_server.charts.generate_chart(ticker, period="1d", interval="5m", show_emas=True)`
+  to attach candlestick + EMA 8/21/34/55/89 charts to cards with graceful text/embed fallback.
+Tested in `tests/test_bot_channel.py`, `tests/test_telegram_polling.py`, and `tests/test_discord_gateway.py`.
 
 ### ✅ Module 3 — Position Monitor & Exit Cascade (done)
 `vesper monitor [--interval 15] [--live] [--once]`: take-profit +50%,

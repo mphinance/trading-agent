@@ -53,3 +53,7 @@ chromadb>=0.5
 # signature verification (cryptography's Ed25519PublicKey).
 aiohttp
 cryptography
+
+# Discord gateway client with dynamic interactive approval buttons
+discord.py
+
