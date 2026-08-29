@@ -319,6 +319,64 @@ research pass done on this repo:
   relationship questions ("what's correlated with what") similarity search
   can't answer. Not now.
 
+### OpenRouter agent-building cookbook — mapped against Vesper (2026-08-28)
+Read all 6 of OpenRouter's [`building-agents`](https://openrouter.ai/docs/cookbook/building-agents)
+cookbook pages and checked each against what's actually here, rather than
+assuming any of them apply. One real, concrete gap; the rest are either
+already covered by something that predates the cookbook or don't fit this
+kind of system.
+
+- **Advisor server tool — real gap, and it's a direct upgrade to something
+  that already exists.** The pattern: a cheap executor conditionally
+  escalates *uncertain* decisions to a stronger model, budget-gated, with a
+  compact prompt instead of the full transcript. `risk_gate_node`'s
+  `audit_proposal_risk()` call (Known Gaps item 6, above) uses the same
+  model — `deepseek/deepseek-v4-flash` — for every single proposal today,
+  uniformly. The cookbook's version: only escalate to `deepseek/deepseek-v4-pro`
+  or `-r1` (already in `docs/OPENROUTER_PRICING_GUIDE.md`'s tier table) when
+  something actually warrants it — large notional, an unusual regime, a thin
+  thesis confidence score — and use Flash for everything else. Cheap to add
+  (a threshold check before the existing call, a second model constant),
+  meaningful upgrade (spend the expensive model's judgment where it's
+  actually needed instead of on every proposal equally).
+- **Long-horizon agents — partially already covered, one real pattern left
+  unused.** The "resume after a crash" half is what LangGraph's own
+  checkpointing (the same `Command(resume=...)` mechanism `human_gate_node`
+  and `vesper/bot/inbound.py` already use) already does — no gap. But the
+  cookbook's **self-ask/adversarial review loop** (append a review turn,
+  check for a completion marker, repeat until satisfied) is genuinely
+  unused, and is almost exactly the shape `audit_proposal_risk()` should
+  grow into if the advisor-escalation idea above isn't enough on its own:
+  critique-then-revise a proposal before it reaches `human_gate_node`,
+  not a single one-shot verdict.
+- **HITL tools — already have it, and better.** The cookbook's HITL pattern
+  (a tool call returns `null` to pause, a human supplies the result value)
+  is TypeScript-SDK-specific and solves a narrower problem than what's
+  already here. `human_gate_node`'s LangGraph `interrupt()` +
+  `Command(resume=...)` — verified correct in `vesper/bot/inbound.py` — is
+  the framework-native version of the same idea. Nothing to add.
+- **Create headless agent — already have it.** `vesper.py`'s CLI
+  (`scan`/`morning`/`monitor`/`halt`/`paper`, cron-invokable) already is this
+  pattern in Python instead of the TypeScript SDK the cookbook targets. One
+  portable idea worth an explicit test rather than assuming it's covered:
+  the doc's rule that retries must only happen *before* a tool's mutating
+  side effect fires, never after. `execution_guard.py`'s single-use ticket
+  (`used=True` on redeem) almost certainly already prevents a double-fire on
+  retry — worth a test that pins this rather than trusting it by
+  inspection, the same way `test_execution_guard.py` already pins the rest
+  of the ticket handshake.
+- **Subagent server tool — not yet applicable.** Delegating routine subtasks
+  to a cheaper worker model only makes sense from inside multi-step
+  orchestration with parallelizable subtasks. `playbooks_node`'s one LLM
+  call is single-shot, not a loop. Would become relevant if per-ticker
+  thesis generation, or Module 1's morning briefing, ever grows to fan
+  research out across multiple tickers or sources — not now.
+- **Create agent harness (TUI) — not applicable.** This is a codegen
+  scaffold for building a brand-new TypeScript CLI product from scratch;
+  the page itself says "if you're already using Claude Code... you probably
+  don't need this." Vesper already has a CLI and bot channels in Python —
+  wrong stack for an already-existing product, not a gap to fill.
+
 ### Trading-specific
 - **Vol-targeting position sizing — best effort:impact ratio here, do this
   one first.** `RiskEnforcer.calculate_equity_size` already computes ATR;
