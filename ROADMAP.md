@@ -431,6 +431,21 @@ multi-channel) that `vesper/bot/` should be built as an extension of, not
 adopted wholesale as external frameworks — same reasoning as the nyx
 decision above, one level down.
 
+**Decided: both sides get logged as text, always.** Whatever channel voice
+ends up on, the transcribed input *and* the spoken-reply text both get
+written to a durable text record — not just spoken and gone. This isn't
+optional/configurable: audio is ephemeral and unauditable, and a system that
+can act on spoken trading commands needs the same auditability as everything
+else here (the `audit_trail` entries every node already writes, the
+conviction journal, `execution_guard`'s ticket digests). Natural home is
+alongside those — e.g. an entry in the existing audit trail or a dedicated
+voice-transcript log, not a new parallel logging scheme. Whatever posts the
+Discord/Telegram message already *is* that text log if voice-in posts its
+transcript as a visible message before acting on it (nyx's own
+`onVoiceUtterance` does exactly this — posts `🎙️ <@user>: {text}` to the
+thread before submitting it) — worth copying that pattern rather than
+inventing a separate one.
+
 **Not decided yet, deliberately**: whether voice-in comes from a Discord
 voice message, a Telegram voice note, or something else; whether TTS output
 posts as a voice-note reply or stays text-only with voice reserved for
