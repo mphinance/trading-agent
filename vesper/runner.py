@@ -43,6 +43,15 @@ async def run_agent_session(
                 print(f"⚠️ Whop License Warning: {val_res.get('reason')}")
 
     app = build_trading_graph(checkpointer=True)
+
+    # Register this compiled graph with the ApprovalRegistry so an inbound
+    # Telegram/Discord/webhook decision (see vesper/bot/inbound.py) can
+    # resume it via Command(resume=...) while this session is paused at
+    # human_gate_node. Harmless to call repeatedly -- it just overwrites the
+    # registry's single graph_app pointer with the currently-running one.
+    from vesper.bot.inbound import approval_registry
+    approval_registry.set_graph_app(app)
+
     config = {"configurable": {"thread_id": session_id}}
 
     initial_state: TradingState = {

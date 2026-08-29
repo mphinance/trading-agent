@@ -60,14 +60,15 @@ that actually needs careful design saved for last so it doesn't get rushed:
    `RSI(2)` dip trigger, and true Keltner Channel math (`ta.kc` length 14, 2x ATR)
    in `mcp_server/technicals.py`, `vesper/state.py`, `vesper/nodes/analyst.py`,
    and `vesper/nodes/playbooks.py`.
-5. **Module 2's inbound ingestion layer + auth — code real, two bugs found and
-   fixed, still not started by anything.** `create_inbound_app()` (aiohttp)
-   with Telegram secret-token verification, real Discord Ed25519 crypto
-   verification, and REST Bearer auth is genuinely there and correctly wired
-   to `approval_registry`. Found and fixed on review: **all three auth guards
-   failed OPEN when their secret env var was unset** — `verify_*` returned
-   `True` ("authorized") with no secret configured at all, meaning a deploy
-   that forgot to set `TELEGRAM_WEBHOOK_SECRET`/`DISCORD_PUBLIC_KEY`/
+5. **Module 2's inbound ingestion layer + auth — Telegram side now done and
+   started; Discord and the webhook/aiohttp option remain open.**
+   `create_inbound_app()` (aiohttp) with Telegram secret-token verification,
+   real Discord Ed25519 crypto verification, and REST Bearer auth is
+   genuinely there and correctly wired to `approval_registry`. Found and
+   fixed on an earlier review: **all three auth guards failed OPEN when
+   their secret env var was unset** — `verify_*` returned `True`
+   ("authorized") with no secret configured at all, meaning a deploy that
+   forgot to set `TELEGRAM_WEBHOOK_SECRET`/`DISCORD_PUBLIC_KEY`/
    `VESPER_WEBHOOK_SECRET` would silently accept unauthenticated approve/
    reject/halt commands from anyone who reached the port. Now fails closed
    (rejects everything until configured), matches `deploy/install.sh`'s own
@@ -78,9 +79,32 @@ that actually needs careful design saved for last so it doesn't get rushed:
    unauthenticated minimal `/health` and a bearer-guarded `/approvals`.
    Added a regression test (`test_auth_guards_fail_closed_when_unconfigured`)
    and declared `aiohttp`/`cryptography` in `requirements.txt` (neither was
-   listed despite being imported). **Still not actually running**: nothing
-   calls `create_inbound_app()` from `vesper.py` or anywhere else — the
-   server exists but no CLI command starts it. That's the remaining piece.
+   listed despite being imported).
+   **What's new**: `vesper/bot/telegram_polling.py` now actually feeds
+   `approval_registry.handle_callback_payload()` real events, via Telegram
+   `getUpdates` **long-polling** rather than the aiohttp webhook route above —
+   deliberately, since a webhook needs a public HTTPS endpoint and CLAUDE.md
+   rule 1 forbids binding this unauthenticated, trade-capable process to
+   anything but loopback/Tailscale. `TelegramPoller` tracks the `offset`
+   across calls (advancing it even for updates it doesn't act on, per
+   Telegram's redelivery semantics), routes `callback_query` button taps and
+   `/halt`/`/resume` text commands to `handle_callback_payload()` unchanged,
+   answers the callback query to clear the button spinner, and catches
+   network errors with a short backoff so one bad `getUpdates` call can't
+   kill the loop. `vesper.py listen` builds the compiled graph, calls
+   `approval_registry.set_graph_app()` on it (also now done at graph-build
+   time in `vesper/runner.py`), and starts the loop. Tested in
+   `tests/test_telegram_polling.py`: offset advancement (including past
+   irrelevant updates), callback-query routing with the exact Telegram
+   payload shape, missing-token no-op, and a network error that backs off
+   instead of propagating. **Still open**: Discord's approval path (the
+   Ed25519-verified webhook route exists in `create_inbound_app()` but
+   nothing starts an aiohttp server or exposes it — that needs the bigger
+   Discord rewrite noted elsewhere in this doc, out of scope for the
+   Telegram work) and the generic REST webhook/`create_inbound_app()` option
+   in general, which would still need a publicly reachable endpoint (or a
+   tunnel) to ever receive anything — nobody currently calls it from
+   `vesper.py`.
 6. **LLM Reasoning & Risk Red-Teaming (done, verified safe)**: `audit_proposal_risk()`
    wired into `risk_gate_node`, but only after a proposal already passes the
    deterministic check — it can REJECT or halve `quantity` (never increase it
@@ -100,22 +124,27 @@ that actually needs careful design saved for last so it doesn't get rushed:
   (model-tier escalation, not uniform Flash for every proposal).
   `analyst_node`/`regime_node`/`scanner_node` remain pure deterministic
   Python. See "LLM layer + voice" below.
-- **Callback receiver: registry + resume logic exists, but nothing feeds it
-  real events yet.** `vesper/bot/inbound.py`'s `ApprovalRegistry` correctly
-  uses LangGraph's `Command(resume=decision)` (the right mechanism — verified
-  it doesn't call `executor_node`/a broker directly), and `human_gate_node`
-  polls `approval_registry.get_decision(p.id)` as a fallback path. **But
-  `handle_callback_payload()` and `set_graph_app()` are never called from
-  anywhere in the codebase** — grepped to confirm. There's no HTTP server,
-  webhook route, or Telegram/Discord polling loop that would ever hand this
-  registry a real inbound tap. Tapping "Approve" on a sent card currently
-  does nothing. **When the ingestion layer gets built, it needs auth**:
-  `handle_callback_payload` currently trusts any payload shape it's handed —
-  no Telegram secret-token check, no Discord Ed25519 signature verification
-  (Discord's own Interactions API requires this to even register an
-  endpoint, which will force the issue there, but a generic REST webhook
-  path has no such forcing function and would let anyone who can reach the
-  endpoint approve a live trade or POST `{"command":"halt"}`).
+- **Callback receiver: Telegram now feeds it real events; Discord and the
+  generic webhook path still don't.** `vesper/bot/inbound.py`'s
+  `ApprovalRegistry` correctly uses LangGraph's `Command(resume=decision)`
+  (the right mechanism — verified it doesn't call `executor_node`/a broker
+  directly), and `human_gate_node` polls `approval_registry.get_decision(p.id)`
+  as a fallback path. `vesper/bot/telegram_polling.py` + `vesper.py listen`
+  now call both `handle_callback_payload()` (per Telegram update) and
+  `set_graph_app()` (once, at graph-build time, in both `vesper.py listen`
+  and `vesper/runner.py`) — see Known Gaps item 5 above for the details and
+  what's tested. Tapping "Approve" on a Telegram card now resolves the
+  proposal and resumes the paused graph thread. **Discord and the generic
+  REST webhook path are unchanged**: `create_inbound_app()`'s aiohttp routes
+  for both still exist and are still never started by anything, and Discord
+  needs its own, bigger rewrite (out of scope here). Their auth story is
+  also unchanged: `handle_callback_payload` itself still trusts whatever
+  payload shape it's handed — the Telegram secret-token/Discord Ed25519/
+  Bearer checks only apply on the aiohttp webhook routes, not on
+  `telegram_polling.py`'s direct calls, which is fine for Telegram because
+  the poller only relays Telegram's own `getUpdates` response (it never
+  accepts inbound network input itself), but would matter immediately if a
+  webhook route for Discord or a generic REST client is ever wired up.
 - **`PublicBrokerClient` has no live buying-power lookup.** `_execute_public`
   in `executor.py` passes `live_buying_power=None`, so `VESPER_MAX_BP_FRACTION`
   is a no-op on that branch — notional/quantity/allowlist/kill-switch still

@@ -27,6 +27,7 @@ Examples:
   python vesper.py 0dte                 # 0DTE SPY/QQQ Gamma Flip decision support
   python vesper.py --playbook squeeze   # Trigger Momentum Volatility Squeeze playbook
   python vesper.py analyze AAPL --live  # Live Webull order execution (with safety gate)
+  python vesper.py listen               # Long-poll Telegram for Approve/Reject/halt/resume taps
         """
     )
     
@@ -34,7 +35,7 @@ Examples:
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper"],
+        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen"],
         help="Action command",
     )
     parser.add_argument("ticker", nargs="?", default=None, help="Target symbol for analysis")
@@ -125,6 +126,26 @@ Examples:
     if args.command == "monitor":
         from vesper.monitor import run_monitor_loop
         asyncio.run(run_monitor_loop(interval_sec=args.interval, live=args.live, once=args.once))
+        sys.exit(0)
+
+    if args.command == "listen":
+        # Starts the Telegram long-polling loop (getUpdates) that feeds
+        # ApprovalRegistry.handle_callback_payload() real Approve/Reject
+        # button taps and /halt /resume commands. Long-polling, not a
+        # webhook -- see vesper/bot/telegram_polling.py for why.
+        from vesper.graph import build_trading_graph
+        from vesper.bot.inbound import approval_registry
+        from vesper.bot.telegram_polling import run_telegram_polling_loop
+
+        app = build_trading_graph(checkpointer=True)
+        approval_registry.set_graph_app(app)
+        print("\n" + "=" * 60)
+        print("📡 VESPER TELEGRAM APPROVAL LISTENER")
+        print("=" * 60)
+        try:
+            asyncio.run(run_telegram_polling_loop())
+        except KeyboardInterrupt:
+            print("\n[!] Vesper listener interrupted by user.")
         sys.exit(0)
 
     mode = "live" if args.live else "dry_run"
