@@ -387,29 +387,16 @@ assuming any of them apply. One real, concrete gap; the rest are either
 already covered by something that predates the cookbook or don't fit this
 kind of system.
 
-- **Advisor server tool — real gap, and it's a direct upgrade to something
-  that already exists.** The pattern: a cheap executor conditionally
-  escalates *uncertain* decisions to a stronger model, budget-gated, with a
-  compact prompt instead of the full transcript. `risk_gate_node`'s
-  `audit_proposal_risk()` call (Known Gaps item 6, above) uses the same
-  model — `deepseek/deepseek-v4-flash` — for every single proposal today,
-  uniformly. The cookbook's version: only escalate to `deepseek/deepseek-v4-pro`
-  or `-r1` (already in `docs/OPENROUTER_PRICING_GUIDE.md`'s tier table) when
-  something actually warrants it — large notional, an unusual regime, a thin
-  thesis confidence score — and use Flash for everything else. Cheap to add
-  (a threshold check before the existing call, a second model constant),
-  meaningful upgrade (spend the expensive model's judgment where it's
-  actually needed instead of on every proposal equally).
-- **Long-horizon agents — partially already covered, one real pattern left
-  unused.** The "resume after a crash" half is what LangGraph's own
-  checkpointing (the same `Command(resume=...)` mechanism `human_gate_node`
-  and `vesper/bot/inbound.py` already use) already does — no gap. But the
-  cookbook's **self-ask/adversarial review loop** (append a review turn,
-  check for a completion marker, repeat until satisfied) is genuinely
-  unused, and is almost exactly the shape `audit_proposal_risk()` should
-  grow into if the advisor-escalation idea above isn't enough on its own:
-  critique-then-revise a proposal before it reaches `human_gate_node`,
-  not a single one-shot verdict.
+- **Advisor server tool (landed)**: `select_audit_model()` conditionally
+  escalates to `PRO_MODEL` (`deepseek/deepseek-v4-pro`) for high-notional
+  proposals (>= $1,000), elevated max risk (>= $250), or volatile market regimes,
+  and uses `DEFAULT_MODEL` (`deepseek/deepseek-v4-flash`) for standard setups.
+  Tested in `tests/test_llm_openrouter.py`.
+- **Self-ask / adversarial review loop (landed)**: `audit_proposal_risk()`
+  implements a single-round self-critique loop when the initial verdict is
+  `REDUCE_SIZE`, `REJECT`, or flags `risk_score >= 7`, providing the model a
+  reconsideration turn with the proposal's full parameters and regime context
+  before finalizing the verdict (capped at 1 turn). Tested in `tests/test_llm_openrouter.py`.
 - **HITL tools — already have it, and better.** The cookbook's HITL pattern
   (a tool call returns `null` to pause, a human supplies the result value)
   is TypeScript-SDK-specific and solves a narrower problem than what's
