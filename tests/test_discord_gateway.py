@@ -240,9 +240,10 @@ async def test_discord_adapter_gateway_active_routing():
     mock_bot.send_proposal_card = AsyncMock(return_value="msg-gw-999")
 
     with patch("vesper.bot.discord_gateway.get_active_gateway_bot", return_value=mock_bot):
-        msg_id = await adapter.send_proposal_card(card)
-        assert msg_id == "msg-gw-999"
-        mock_bot.send_proposal_card.assert_called_once()
+        with patch("mcp_server.charts.generate_chart", side_effect=Exception("no chart")):
+            msg_id = await adapter.send_proposal_card(card)
+            assert msg_id == "msg-gw-999"
+            mock_bot.send_proposal_card.assert_called_once()
 
 
 @pytest.mark.asyncio
