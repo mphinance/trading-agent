@@ -84,6 +84,40 @@ def _isolated_state(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolated_vesper_state(tmp_path, monkeypatch):
+    """Point every Vesper state file (halt, circuit breaker, paper ledger) at
+    a temp dir for every test, globally.
+
+    These three modules each use their own hardcoded
+    `_DATA_DIR = .../vesper/data/...` (not an env var like alerts.py's
+    SIDECAR_STATE_DIR above), and before this fixture existed each test file
+    that cared had to remember to monkeypatch all of them itself. That's
+    exactly as fragile as it sounds: risk_gate_node started calling
+    circuit_breaker.check_portfolio_drawdown() (which calls halt.is_halted())
+    unconditionally, and every pre-existing test that invoked risk_gate_node
+    without knowing to patch these paths silently wrote real halt/breaker
+    state into the repo's actual vesper/data/ directory — which then
+    contaminated *other, unrelated* tests reading that same real file later
+    in the same run (test order-dependent failures, e.g. a kill-switch test
+    asserting "trading disabled" instead saw a leftover real "HALTED" state
+    from an earlier test). A single global autouse fixture closes this for
+    every current and future test, not just the ones that remember to opt in.
+    A test-specific fixture that does the same redirect (there are several)
+    is harmless on top of this — monkeypatch just reapplies the same value.
+    """
+    vesper_data_dir = tmp_path / "vesper_data"
+    vesper_data_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("vesper.halt._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("vesper.halt._HALT_STATE_PATH", vesper_data_dir / "halt_state.json")
+    monkeypatch.setattr("vesper.circuit_breaker._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("vesper.circuit_breaker._STATE_PATH", vesper_data_dir / "circuit_breaker_state.json")
+    monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", vesper_data_dir / "paper_ledger.json")
+    yield
+
+
 @pytest.fixture
 def levels():
     """A realistic td.levels() payload, shaped like a real SPY response."""

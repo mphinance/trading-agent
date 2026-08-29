@@ -114,3 +114,70 @@ class RiskEnforcer:
             return False, f"Estimated cost (${estimated_cost:,.2f}) exceeds account equity (${account_equity:,.2f})."
             
         return True, None
+
+    # Capital allocation bucket defaults. Distinct from a single-order
+    # notional/quantity cap (execution_guard's job) -- these look across ALL
+    # currently open positions, because a series of individually-compliant
+    # orders can still concentrate an account in one risk shape.
+    MAX_OPEN_LONG_OPTIONS = 1
+    MAX_WHEEL_STOCK_PCT = 0.20
+
+    @classmethod
+    def check_capital_allocation_buckets(
+        cls,
+        proposal: OrderProposal,
+        open_long_option_count: int,
+        wheel_stock_notional: float,
+        account_equity: float,
+        max_open_long_options: int = MAX_OPEN_LONG_OPTIONS,
+        max_wheel_stock_pct: float = MAX_WHEEL_STOCK_PCT,
+    ) -> Tuple[bool, Optional[str]]:
+        """Pure, deterministic bucket check -- does NOT fetch positions itself.
+
+        Callers (risk_gate_node) are responsible for counting
+        open_long_option_count and wheel_stock_notional from whatever
+        position source is authoritative for the current mode. This is
+        deliberately a caller-supplied-inputs function rather than one that
+        reaches into wb.py/paper_ledger.py itself, so the two very different
+        position sources (live broker positions vs. paper ledger fills) stay
+        the caller's problem, not this pure function's.
+
+        Two buckets:
+        - MAX_OPEN_LONG_OPTIONS: at most 1 open long option position at a
+          time (a BUY option that isn't closing an existing short). Counted
+          uniformly across live and paper positions since a manually-placed
+          Webull Desktop position should count too -- this is a real account
+          concentration limit, not a "Vesper's own trades" limit.
+        - MAX_WHEEL_STOCK_PCT: equity acquired via strategy_type=
+          "WHEEL_ASSIGNMENT" capped at 20% of account equity. Only
+          enforceable where that tag is actually tracked (currently: paper
+          ledger fills only -- see risk_gate_node for the live-mode gap this
+          leaves, and ROADMAP.md for why).
+        """
+        is_long_option = (
+            proposal.asset_type == "OPTION"
+            and proposal.side.upper() in ("BUY", "LONG")
+            and not getattr(proposal, "is_closing", False)
+        )
+        if is_long_option and open_long_option_count >= max_open_long_options:
+            return False, (
+                f"Capital allocation: already {open_long_option_count} open long option "
+                f"position(s), at the {max_open_long_options}-position cap for new long options."
+            )
+
+        is_wheel_stock_buy = (
+            proposal.asset_type == "EQUITY"
+            and proposal.side.upper() == "BUY"
+            and getattr(proposal, "strategy_type", None) == "WHEEL_ASSIGNMENT"
+        )
+        if is_wheel_stock_buy:
+            added_notional = proposal.estimated_cost or (proposal.limit_price * proposal.quantity)
+            projected = wheel_stock_notional + added_notional
+            cap = account_equity * max_wheel_stock_pct
+            if projected > cap:
+                return False, (
+                    f"Capital allocation: wheel-stock notional would reach ${projected:,.2f}, "
+                    f"exceeding the {max_wheel_stock_pct:.0%} cap (${cap:,.2f}) of account equity."
+                )
+
+        return True, None

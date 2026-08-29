@@ -485,13 +485,40 @@ research pass done on this repo:
 - **`0dte_flow` tightening (backlog)**: only run weeklies where IV>70%, sell puts at
   0.30 delta or at major OI put walls, reject wide-spread chains, harvest ATM
   CSP vega on earnings week and BTC the next day.
-- **Portfolio risk rules missing from `vesper/risk.py`**: a 15% trailing
-  peak-to-trough NLV stop that liquidates everything and pauses trading 24h;
-  swing-option stops keyed to the *underlying's* price level (200 SMA/34 EMA/
-  lower Keltner band) instead of a fixed % on the contract itself; capital
-  buckets (15% sector swings, 15% equity options with max one open long
-  position, 20% wheel-stock); route 25% of high-yield distributions to `$SGOV`
-  for taxes automatically.
+- **Portfolio-level circuit breaker & capital allocation buckets (landed)**:
+  `vesper/circuit_breaker.py` tracks a persisted high-water-mark NLV
+  (separate state file from `halt.py`'s, same atomic-write pattern) and trips
+  the existing `halt()` when current NLV falls `VESPER_CIRCUIT_BREAKER_PCT`
+  (default 15%) below peak. Never re-halts while already halted (no
+  halt-storm, doesn't stomp the original halt reason), and starts a **fresh**
+  peak the first check after a `/resume` — without that, resuming after a
+  drawdown halt would immediately see the same >=15% drawdown from the stale
+  peak and re-halt on the next check, making `/resume` useless for this
+  specific cause. `RiskEnforcer.check_capital_allocation_buckets` (pure,
+  caller supplies the position counts) enforces max 1 open long option
+  position and a 20% of equity cap on `strategy_type="WHEEL_ASSIGNMENT"`
+  equity holdings; both wired into `risk_gate_node`, which sources position
+  counts from `paper_ledger.get_paper_positions()` in dry-run and from
+  `wb.portfolio()` in live mode. **Known gap, not fabricated around**: live
+  mode has no way to identify which equity shares came from a wheel
+  assignment (Webull's position data carries no strategy tag), so the
+  wheel-stock bucket is enforced only in dry-run/paper mode; live mode logs
+  an explicit audit note that it isn't checked rather than silently
+  no-op'ing without saying so, or approximating with an assumption. Closing
+  this needs an actual assignment-tracking mechanism, not a guess. Also:
+  nothing in this codebase currently drafts a `WHEEL_ASSIGNMENT`-tagged
+  equity proposal yet (the ADX/IV router's Wheel branch only sells CSPs, it
+  doesn't simulate assignment), so the wheel-stock bucket is correctly wired
+  but has no real caller yet either — same shape as the strike-vs-premium
+  guard fix landing before collar-following needed it. Sector-swing buckets,
+  underlying-price-keyed swing-option stops, and the 25%-to-`$SGOV` tax sweep
+  remain backlog (see below). Tested in `tests/test_circuit_breaker.py` and
+  `tests/test_portfolio_governance.py`.
+- **Backlog, not yet built**: swing-option stops keyed to the *underlying's*
+  price level (200 SMA/34 EMA/lower Keltner band) instead of a fixed % on the
+  contract itself; a 15% sector-concentration bucket; route 25% of high-yield
+  distributions to `$SGOV` for taxes automatically (an extension of the
+  premium-recycling engine's sweep logic, not a new mechanism).
 
 ### AI agent architecture
 - **LLM-as-Bayesian-network-builder for explainable proposals.** An arXiv

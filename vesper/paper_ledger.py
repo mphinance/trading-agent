@@ -180,6 +180,7 @@ def record_paper_fill(
         "profit_target": getattr(proposal, "profit_target", None),
         "strike": getattr(proposal, "strike", None),
         "option_type": getattr(proposal, "option_type", None),
+        "strategy_type": getattr(proposal, "strategy_type", None),
         "timestamp": now,
         "status": "OPEN",
         "current_price": filled_price,
