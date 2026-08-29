@@ -320,3 +320,110 @@ async def test_risk_gate_missing_buying_power_is_none_not_fabricated(clean_paper
         res = await risk_gate_node(state)
 
     assert res["live_buying_power"] is None
+
+
+# ── LLM audit result handling (regressions found by the 2026-08-29 verify pass) ──
+
+def _llm_audit(recommendation, passed=True):
+    """audit_proposal_risk returns the model's parsed JSON as-is -- llm.py does
+    NOT normalise `recommendation` before returning it, so whatever the model
+    literally wrote arrives here."""
+    async def _fake(**kwargs):
+        return {"passed": passed, "recommendation": recommendation, "concerns": ["test"]}
+    return _fake
+
+
+@pytest.mark.parametrize("wording", ["REJECT", "reject", "Reject", "  REJECT  "])
+@pytest.mark.asyncio
+async def test_llm_reject_is_honoured_regardless_of_model_casing(clean_paper_ledger, wording):
+    """Fail-OPEN regression: this used to compare `== "REJECT"` case-sensitively
+    against un-normalised model output, so a model answering "reject" matched
+    nothing and the proposal sailed through at FULL SIZE."""
+    prop = _long_call("prop-llm-rej")
+    state: TradingState = {
+        "session_id": "s", "mode": "dry_run", "proposals": [prop], "audit_trail": [],
+    }
+    with patch("vesper.llm.is_llm_enabled", return_value=True), \
+         patch("vesper.llm.audit_proposal_risk", side_effect=_llm_audit(wording)):
+        res = await risk_gate_node(state)
+
+    assert len(res["proposals"]) == 0, f"model wording {wording!r} must still reject"
+    assert len(res["rejected_proposals"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_reduce_size_on_an_option_keeps_the_100x_contract_multiplier(clean_paper_ledger):
+    """estimated_cost feeds the human approval card. Recomputing it without the
+    contract multiplier understated an option's capital-at-risk by 100x."""
+    prop = OrderProposal(
+        id="prop-llm-reduce", ticker="NVDA", asset_type="OPTION", side="BUY",
+        limit_price=8.50, quantity=4, strike=120.0, option_type="call",
+        estimated_cost=3400.0, max_risk=3400.0,   # 8.50 * 4 * 100
+    )
+    state: TradingState = {
+        "session_id": "s", "mode": "dry_run", "proposals": [prop], "audit_trail": [],
+    }
+    with patch("vesper.nodes.risk_gate.fetch_live_equity", return_value=500_000.0), \
+         patch("vesper.llm.is_llm_enabled", return_value=True), \
+         patch("vesper.llm.audit_proposal_risk", side_effect=_llm_audit("REDUCE_SIZE")):
+        res = await risk_gate_node(state)
+
+    p = res["proposals"][0]
+    assert p.quantity == 2
+    assert p.estimated_cost == 1700.0, "8.50 * 2 * 100 -- not 17.00"
+    assert p.max_risk == 1700.0, "scaled by the real 4->2 change"
+
+
+@pytest.mark.asyncio
+async def test_reduce_size_scales_max_risk_by_actual_quantity_change(clean_paper_ledger):
+    """Integer division means 3 -> 1 is a third, not a half. A flat *0.5 was
+    wrong for every odd quantity."""
+    prop = OrderProposal(
+        id="prop-llm-odd", ticker="AAPL", asset_type="EQUITY", side="BUY",
+        limit_price=100.0, quantity=3, estimated_cost=300.0, max_risk=300.0,
+    )
+    state: TradingState = {
+        "session_id": "s", "mode": "dry_run", "proposals": [prop], "audit_trail": [],
+    }
+    with patch("vesper.llm.is_llm_enabled", return_value=True), \
+         patch("vesper.llm.audit_proposal_risk", side_effect=_llm_audit("REDUCE_SIZE")):
+        res = await risk_gate_node(state)
+
+    p = res["proposals"][0]
+    assert p.quantity == 1
+    assert p.estimated_cost == 100.0
+    assert p.max_risk == 100.0, "300 * (1/3), not 300 * 0.5"
+
+
+@pytest.mark.asyncio
+async def test_reduce_size_declines_to_resize_a_fixed_ratio_multileg(clean_paper_ledger):
+    """THEGA is a fixed 100:1:3 ratio enforced by execution_guard. Halving the
+    top-level quantity without scaling legs yields a proposal the guard refuses
+    -- fail-closed, but pointlessly. Leave it intact and say so."""
+    from vesper.state import OrderLeg
+
+    prop = OrderProposal(
+        id="prop-llm-thega", ticker="GME", asset_type="EQUITY", side="BUY",
+        limit_price=50.0, quantity=100, strategy_type="THEGA",
+        estimated_cost=20000.0, max_risk=20000.0,
+        legs=[
+            OrderLeg(side="BUY", asset_type="EQUITY", quantity=100, limit_price=50.0),
+            OrderLeg(side="SELL", asset_type="OPTION", option_type="call", strike=50.0,
+                     expiry="2026-12-18", quantity=1, limit_price=1.5),
+            OrderLeg(side="SELL", asset_type="OPTION", option_type="put", strike=50.0,
+                     expiry="2026-12-18", quantity=3, limit_price=1.2),
+        ],
+    )
+    state: TradingState = {
+        "session_id": "s", "mode": "dry_run", "proposals": [prop], "audit_trail": [],
+    }
+    with patch("vesper.nodes.risk_gate.fetch_live_equity", return_value=500_000.0), \
+         patch("vesper.llm.is_llm_enabled", return_value=True), \
+         patch("vesper.llm.audit_proposal_risk", side_effect=_llm_audit("REDUCE_SIZE")):
+        res = await risk_gate_node(state)
+
+    p = res["proposals"][0]
+    assert p.quantity == 100, "leg ratio must not be silently broken"
+    assert [l.quantity for l in p.legs] == [100, 1, 3]
+    notes = res["audit_trail"][0]["notes"]
+    assert any("fixed leg ratio" in n for n in notes)

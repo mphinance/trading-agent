@@ -263,18 +263,55 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
                         proposal_dict=prop.model_dump(),
                         regime_posture=regime_posture,
                     )
-                    if not audit_res.get("passed", True) or audit_res.get("recommendation") == "REJECT":
+                    # Normalise before comparing. audit_proposal_risk returns the
+                    # model's parsed JSON as-is -- llm.py only uppercases into a
+                    # local for its own escalation decision, so the value that
+                    # arrives here is whatever the model actually wrote. Comparing
+                    # it case-sensitively meant a model answering "reject" instead
+                    # of "REJECT" matched NOTHING and fell straight through to
+                    # valid_proposals at full size: a fail-OPEN in the risk gate,
+                    # triggered by nothing more than model wording drift.
+                    recommendation = str(audit_res.get("recommendation", "")).strip().upper()
+
+                    if not audit_res.get("passed", True) or recommendation == "REJECT":
                         err = f"LLM Risk Audit Rejection: {', '.join(audit_res.get('concerns', ['Unfavorable risk profile']))}"
                         logger.warning(f"REJECTED by LLM Risk Gate: {prop.id} - {err}")
                         prop.rejection_reason = err
                         rejected_proposals.append(prop)
                         audit_notes.append(f"LLM REJECTED {prop.id}: {err}")
                         continue
-                    elif audit_res.get("recommendation") == "REDUCE_SIZE" and prop.quantity > 1:
-                        prop.quantity = max(1, prop.quantity // 2)
-                        prop.estimated_cost = round(prop.quantity * prop.limit_price, 2)
-                        prop.max_risk = round(prop.max_risk * 0.5, 2)
-                        audit_notes.append(f"LLM Risk Gate halved position size for {prop.id} (new qty: {prop.quantity})")
+                    elif recommendation == "REDUCE_SIZE" and prop.quantity > 1:
+                        if prop.legs:
+                            # A multi-leg combo's quantity is not independently
+                            # scalable: THEGA is a fixed 100:1:3 ratio and
+                            # SYNTHETIC_LONG a fixed 1:1, both enforced by
+                            # execution_guard's per-strategy formula. Halving the
+                            # top-level quantity without scaling the legs produces
+                            # a proposal the guard will refuse outright. It would
+                            # fail closed, but pointlessly -- so decline to resize
+                            # and say so, leaving the proposal intact for the human.
+                            audit_notes.append(
+                                f"LLM Risk Gate suggested REDUCE_SIZE for {prop.id} but it is a "
+                                f"multi-leg {prop.strategy_type} with a fixed leg ratio — left unchanged"
+                            )
+                        else:
+                            old_qty = prop.quantity
+                            prop.quantity = max(1, prop.quantity // 2)
+                            # Options are priced per share and trade in 100-share
+                            # contracts. Recomputing without the multiplier (as this
+                            # did) understated an option's capital-at-risk by 100x
+                            # on the human approval card -- the one number a
+                            # reviewer most needs to be right.
+                            multiplier = 100 if prop.asset_type == "OPTION" else 1
+                            prop.estimated_cost = round(prop.quantity * prop.limit_price * multiplier, 2)
+                            # Scale max_risk by the ACTUAL quantity change, not a
+                            # flat 0.5 -- integer division means 3 -> 1 is a third,
+                            # not a half.
+                            prop.max_risk = round(prop.max_risk * (prop.quantity / old_qty), 2)
+                            audit_notes.append(
+                                f"LLM Risk Gate reduced {prop.id} from {old_qty} to {prop.quantity} "
+                                f"(est cost ${prop.estimated_cost:,.2f}, max risk ${prop.max_risk:,.2f})"
+                            )
                 except Exception as e:
                     logger.debug("LLM risk audit skipped: %s", e)
 

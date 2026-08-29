@@ -24,3 +24,14 @@ token.txt
 # knowledge sources; committing the binary DB/PNGs just bloats history.
 data/chromadb/
 charts/
+
+# Runtime state written by a live/paper run. Regenerable, changes every run,
+# and audit_chain.jsonl in particular records real trade activity (tickers,
+# quantities, prices) -- rule 5 says that does not get committed. The hash
+# chain is its own tamper evidence; it does not need git for that.
+data/audit_chain.jsonl
+data/paper_ledger.json
+data/halt_state.json
+data/circuit_breaker_state.json
+data/approval_registry_state.json
+data/checkpoints.sqlite*
