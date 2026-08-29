@@ -222,6 +222,22 @@ from `human_gate_node`/`executor_node` — done. Inbound resolve/resume
   to attach candlestick + EMA 8/21/34/55/89 charts to cards with graceful text/embed fallback.
 Tested in `tests/test_bot_channel.py`, `tests/test_telegram_polling.py`, and `tests/test_discord_gateway.py`.
 
+Found and fixed on review: **nothing checked *who* clicked Approve/Reject or
+sent `/halt`/`/resume` on Discord** — any user who could see the channel/server
+the gateway bot was in could approve a live trade proposal (still bounded by
+`execution_guard`'s caps, but real money) or freeze/unfreeze trading, since a
+Discord bot is commonly added to multi-member servers unlike a 1:1 Telegram
+bot. Added `DISCORD_AUTHORIZED_USER_IDS` (optional comma-separated allowlist,
+checked in `ApprovalButton.callback()` and `on_message`'s halt/resume
+handler) — unrestricted by default (matches this repo's other opt-in guard
+patterns) but now logs a loud warning once when unset, rather than silently
+accepting anyone. 4 new regression tests
+(`test_approval_button_rejects_unauthorized_user` and siblings). **Telegram's
+`/halt`/`/resume` handling has the same "no sender check" gap** — it wasn't
+touched here since it's a separate, pre-existing path (`vesper/bot/inbound.py`'s
+`handle_callback_payload`), but it's the same class of issue and worth the
+same fix.
+
 ### ✅ Module 3 — Position Monitor & Exit Cascade (done)
 `vesper monitor [--interval 15] [--live] [--once]`: take-profit +50%,
 stop-loss -40%, trailing breakeven +25%, 0DTE time-stop 3:00 PM ET,

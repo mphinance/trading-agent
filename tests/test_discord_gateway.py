@@ -94,6 +94,76 @@ async def test_approval_button_callback_resolves_registry(clean_registry):
     assert "APPROVED" in msg_sent
 
 
+@pytest.mark.asyncio
+async def test_approval_button_rejects_unauthorized_user(clean_registry, monkeypatch):
+    """When DISCORD_AUTHORIZED_USER_IDS is set, a user not on the list must
+    not be able to resolve a proposal -- regression test: an earlier version
+    let anyone who could see the channel approve/reject any proposal."""
+    import vesper.bot.discord_gateway as gw
+    monkeypatch.setattr(gw, "_AUTHORIZED_USER_IDS", {"111"})
+
+    clean_registry.register_pending("prop-unauth", "sess-dc")
+    btn = ApprovalButton("approve", "prop-unauth")
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.user.id = 999999  # not in the allowlist
+    mock_interaction.user.name = "stranger"
+    mock_interaction.response.is_done.return_value = False
+    mock_interaction.response.send_message = AsyncMock()
+
+    await btn.callback(mock_interaction)
+
+    assert clean_registry.get_decision("prop-unauth") is None
+    mock_interaction.response.send_message.assert_called_once()
+    msg_sent = mock_interaction.response.send_message.call_args[0][0]
+    assert "not authorized" in msg_sent.lower()
+
+
+@pytest.mark.asyncio
+async def test_approval_button_allows_authorized_user(clean_registry, monkeypatch):
+    """The same allowlist must let a listed user through normally."""
+    import vesper.bot.discord_gateway as gw
+    monkeypatch.setattr(gw, "_AUTHORIZED_USER_IDS", {"111"})
+
+    clean_registry.register_pending("prop-auth-ok", "sess-dc")
+    btn = ApprovalButton("approve", "prop-auth-ok")
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.user.id = 111
+    mock_interaction.user.name = "michael"
+    mock_interaction.response.is_done.return_value = False
+    mock_interaction.response.send_message = AsyncMock()
+
+    await btn.callback(mock_interaction)
+
+    decision = clean_registry.get_decision("prop-auth-ok")
+    assert decision is not None
+    assert decision["decision"] == "APPROVE"
+
+
+@pytest.mark.asyncio
+async def test_on_message_halt_rejects_unauthorized_user(clean_registry, monkeypatch):
+    """/halt from a user not on DISCORD_AUTHORIZED_USER_IDS must not halt."""
+    import vesper.bot.discord_gateway as gw
+    monkeypatch.setattr(gw, "_AUTHORIZED_USER_IDS", {"111"})
+
+    bot = VesperDiscordBot(bot_token="fake-token")
+    message = MagicMock()
+    message.author.bot = False
+    message.author.name = "stranger"
+    message.author.id = 999999
+    message.content = "/halt"
+    message.channel.send = AsyncMock()
+
+    await bot.on_message(message)
+
+    from vesper.halt import is_halted
+    halted, _ = is_halted()
+    assert halted is False
+    message.channel.send.assert_called_once()
+    assert "not authorized" in message.channel.send.call_args[0][0].lower()
+
+
 def test_create_approval_view_and_components():
     """Verify create_approval_view and get_approval_components builders."""
     view = create_approval_view("prop-view-1")

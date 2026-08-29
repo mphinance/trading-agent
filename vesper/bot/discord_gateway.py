@@ -23,6 +23,32 @@ logger = logging.getLogger(__name__)
 # Pattern: vesper|approve|<proposal_id> or vesper|reject|<proposal_id>
 APPROVAL_REGEX = r"vesper\|(?P<action>approve|reject)\|(?P<proposal_id>.+)"
 
+# Optional allowlist of Discord user (snowflake) IDs permitted to approve/
+# reject a proposal or trigger /halt /resume. Discord bots are commonly
+# added to multi-member servers -- without this, *anyone* who can see the
+# channel can approve a trade proposal (still bounded by execution_guard's
+# caps, but it's real money) or freeze/unfreeze trading. Empty means
+# unrestricted -- matches this repo's other opt-in guard patterns (e.g.
+# VESPER_SYMBOL_ALLOWLIST) -- but warns loudly rather than silently.
+_AUTHORIZED_USER_IDS = {
+    s.strip() for s in os.getenv("DISCORD_AUTHORIZED_USER_IDS", "").split(",") if s.strip()
+}
+_warned_unrestricted = False
+
+
+def _is_authorized(user_id: str) -> bool:
+    global _warned_unrestricted
+    if not _AUTHORIZED_USER_IDS:
+        if not _warned_unrestricted:
+            logger.warning(
+                "DISCORD_AUTHORIZED_USER_IDS is not set -- any user who can see this "
+                "channel/server can approve/reject proposals and trigger /halt /resume. "
+                "Set it to a comma-separated list of Discord user IDs to restrict this."
+            )
+            _warned_unrestricted = True
+        return True
+    return user_id in _AUTHORIZED_USER_IDS
+
 
 class ApprovalButton(
     discord.ui.DynamicItem[discord.ui.Button],
@@ -64,6 +90,16 @@ class ApprovalButton(
         decision = "APPROVE" if self.action == "approve" else "REJECT"
         user_name = str(getattr(interaction.user, "name", interaction.user))
         user_id = str(getattr(interaction.user, "id", user_name))
+
+        if not _is_authorized(user_id):
+            logger.warning(f"Unauthorized Discord approval attempt by {user_name} ({user_id}) on {self.proposal_id}")
+            try:
+                await interaction.response.send_message(
+                    "⛔ You're not authorized to approve/reject Vesper proposals.", ephemeral=True
+                )
+            except Exception:
+                pass
+            return
 
         # Submit decision into Vesper's shared approval registry
         from vesper.bot.inbound import approval_registry
@@ -152,6 +188,13 @@ class VesperDiscordBot(discord.Client):
         text = message.content.strip()
         user_name = str(message.author.name)
         user_id = str(message.author.id)
+
+        if not (text.startswith(("/halt", "!halt", "/resume", "!resume"))):
+            return
+        if not _is_authorized(user_id):
+            logger.warning(f"Unauthorized Discord halt/resume attempt by {user_name} ({user_id})")
+            await message.channel.send("⛔ You're not authorized to halt/resume Vesper trading.")
+            return
 
         if text.startswith("/halt") or text.startswith("!halt"):
             from vesper.halt import halt
