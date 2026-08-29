@@ -938,6 +938,75 @@ them as "obvious wins" and quietly erode that property.
   counts for the allocation buckets, so this is largely a matter of carrying
   those figures onto the card rather than new calculation.
 
+### From `docs/EXPANSION_AND_DISTRIBUTION_PLAN.md` (external, 2026-08-29)
+
+A friend contributed `docs/EXPANSION_AND_DISTRIBUTION_PLAN.md`. Its thesis —
+keep one broker-independent core, expose one canonical versioned tool
+contract, let every model/client reach it through thin adapters that hold no
+credentials and implement no risk checks — is a good articulation of what
+this codebase is already trying to be, and its security/distribution phase is
+sound and consistent with rule 1.
+
+**Accuracy caveat, verified against the tree 2026-08-29 (read this before
+costing any of it):** the doc's "what exists today" describes the
+*pre-migration* sidecar, not the current one — it appears written against
+`CLAUDE.md`, which is itself stale on this point. Confirmed missing from the
+repo (all deleted in `de60d51`): `orders.py` (the doc says the order path
+"must remain centralized in `orders.py`" — that role is now
+`vesper/execution_guard.py` alone), `server.py` + `static/` (no browser
+dashboard), `chat.py` (no browser-chat adapter), `alerts.py` (no alerts
+subsystem, so the contract's `list_alerts`/`arm_alert`/`cancel_alert` have
+nothing behind them), and `stream.py` (no SSE). There is **no served HTTP API
+at all** — the only HTTP server left is `vesper/bot/inbound.py`'s aiohttp
+webhook app, which nothing currently starts. The `/api/v1` hits in the tree
+are TickerTrace's *external* API being consumed, not one being served.
+Consequence: Phase 2's "keep HTTP as the universal escape hatch" and "maintain
+a clean `/api/v1` contract" are **net-new build**, not preservation of
+something working — a materially different cost than the doc implies. What
+the doc gets right about today: the ticket handshake + server-side caps,
+`vesper/llm.py`'s OpenRouter client, the Webull/Public broker abstraction,
+Telegram/Discord approvals, paper ledger, playbooks, monitoring, and a real
+MCP surface (`mcp_server/server.py`, FastMCP, stdio default).
+
+Vetted ideas worth taking, roughly by value-per-effort:
+
+- **Enrich the approval card** — highest value, lowest effort, and it
+  compounds with the claude-ads before/after diff above. The doc's proposed
+  card contents that Vesper doesn't currently show: worst-case notional,
+  buying-power impact, payload hash, ticket expiration time, and which model
+  produced the rationale. Every one of those already exists somewhere at
+  approval time (`execution_guard` computes the notional and the digest and
+  owns the 120s TTL; `risk_gate_node` has buying power) — this is surfacing
+  data, not computing it.
+- **Broker-neutral canonical order schema**, with unsupported features kept
+  **explicit rather than silently approximated**. That last clause is already
+  this codebase's rule (see the multi-leg `_MULTI_LEG_RISK_FORMULAS`
+  whitelist refusing unregistered strategies) — worth generalizing as the
+  Public.com/IBKR adapters mature.
+- **Health/observability metrics** — broker latency + rate-limit events,
+  quote freshness, model failure/fallback rate, tool-call rejection rate,
+  approval age/expiry, paper-vs-live outcomes. Vesper has effectively none of
+  this today. Doc's caveat is right and matches rule 5: hashes and redacted
+  summaries, never raw payloads.
+- **Replay/audit mode** — record sanitized inputs, tool calls, approvals and
+  broker responses; replay a session in paper mode. Natural companion to the
+  hash-chained ledger above; the two should be designed together.
+- **`ModelProvider` protocol** (`ClaudeProvider` / `OpenRouterProvider` /
+  `DeterministicProvider`). Lower urgency now that `chat.py` is gone and
+  `vesper/llm.py` is the only model path — but `DeterministicProvider` for
+  offline/test use has standalone value given the suite's hermetic contract.
+- **Idempotency keys on mutations.** Partly covered for orders already: the
+  single-use ticket makes a replayed `place()` fail closed. Not covered for
+  approvals — worth checking whether a redelivered Telegram/Discord callback
+  can double-submit a decision.
+
+**Deliberately not adopted:** the multi-tenant/SaaS path (Option C). The doc
+itself ranks it highest-risk and gates it behind auth + tenant isolation; on
+top of that, single-operator is a load-bearing assumption throughout this
+codebase, not an accident of packaging. LiteLLM is also correctly declined by
+the doc's own reasoning — a second gateway to solve a problem the existing
+direct client already solves.
+
 ### AI agent architecture
 - **LLM-as-Bayesian-network-builder for explainable proposals.** An arXiv
   paper on the options wheel strategy has the LLM build a causal DAG (Market
