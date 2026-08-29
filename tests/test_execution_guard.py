@@ -216,11 +216,11 @@ def test_synthetic_long_exceeds_notional_cap_rejected(monkeypatch, guard):
 
 
 def test_unregistered_multileg_strategy_type_refused(monkeypatch, guard):
-    """A strategy_type with no registered risk formula (e.g. the still-unspecced
-    "Thega") must be refused, not silently approximated."""
+    """A strategy_type with no registered risk formula must be refused, not
+    silently approximated."""
     monkeypatch.setenv("VESPER_TRADING", "1")
     payload = {
-        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "THEGA",
+        "symbol": "AAPL", "asset_type": "OPTION", "strategy_type": "UNKNOWN_STRATEGY",
         "legs": _synth_legs(),
     }
     with pytest.raises(GuardError, match="no registered risk formula"):
@@ -299,3 +299,101 @@ def test_synthetic_long_ticket_place_round_trip(monkeypatch, guard):
     assert result == {"status": "filled"}
     with pytest.raises(GuardError, match="already used"):
         guard.place(ticket.id, payload, lambda: {"status": "filled"})
+
+
+# ── Multi-leg (combo) orders: THEGA ─────────────────────────────────────────
+# 100 shares + 1 ATM covered call + 3 ATM CSPs, same strike/expiry. Worst-case
+# risk is the strike-based CSP assignment notional plus the equity notional
+# (shares as a total loss) -- never the premium collected.
+
+def _thega_legs(strike=50.0, expiry="2025-06-20", equity_price=50.0,
+                 call_premium=1.5, put_premium=1.2,
+                 equity_qty=100, call_qty=1, put_qty=3):
+    return [
+        {"side": "BUY", "asset_type": "EQUITY", "quantity": equity_qty, "limit_price": equity_price},
+        {"side": "SELL", "asset_type": "OPTION", "option_type": "call", "strike": strike,
+         "expiry": expiry, "quantity": call_qty, "limit_price": call_premium},
+        {"side": "SELL", "asset_type": "OPTION", "option_type": "put", "strike": strike,
+         "expiry": expiry, "quantity": put_qty, "limit_price": put_premium},
+    ]
+
+
+def test_thega_notional_is_equity_plus_put_assignment(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "25000")
+    monkeypatch.setenv("VESPER_MAX_QUANTITY", "100")
+    payload = {
+        "symbol": "AAPL", "asset_type": "EQUITY", "strategy_type": "THEGA",
+        "legs": _thega_legs(strike=50.0, equity_price=50.0),
+    }
+    # equity: 100*50=$5,000 + put assignment: 50*100*3=$15,000 = $20,000
+    guard.preview("p1", payload)  # should not raise -- within $25,000 cap
+
+
+def test_thega_exceeds_notional_cap_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "10000")
+    monkeypatch.setenv("VESPER_MAX_QUANTITY", "100")
+    payload = {
+        "symbol": "AAPL", "asset_type": "EQUITY", "strategy_type": "THEGA",
+        "legs": _thega_legs(strike=50.0, equity_price=50.0),
+    }
+    with pytest.raises(GuardError, match="max risk"):
+        guard.preview("p1", payload)
+
+
+def test_thega_wrong_leg_count_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_QUANTITY", "100")
+    payload = {
+        "symbol": "AAPL", "asset_type": "EQUITY", "strategy_type": "THEGA",
+        "legs": _thega_legs()[:2],
+    }
+    with pytest.raises(GuardError, match="exactly 3 legs"):
+        guard.preview("p1", payload)
+
+
+def test_thega_wrong_ratio_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_QUANTITY", "1000")
+    payload = {
+        "symbol": "AAPL", "asset_type": "EQUITY", "strategy_type": "THEGA",
+        "legs": _thega_legs(equity_qty=200, put_qty=3),  # 200 shares, not 100
+    }
+    with pytest.raises(GuardError, match="fixed-ratio strategy"):
+        guard.preview("p1", payload)
+
+
+def test_thega_mismatched_strike_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_QUANTITY", "100")
+    legs = _thega_legs(strike=50.0)
+    legs[2]["strike"] = 55.0  # put strike drifted from call strike
+    payload = {"symbol": "AAPL", "asset_type": "EQUITY", "strategy_type": "THEGA", "legs": legs}
+    with pytest.raises(GuardError, match="same .*ATM.* strike"):
+        guard.preview("p1", payload)
+
+
+def test_thega_wrong_sides_rejected(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_QUANTITY", "100")
+    legs = _thega_legs()
+    legs[0]["side"] = "SELL"  # shorting the shares instead of owning them
+    payload = {"symbol": "AAPL", "asset_type": "EQUITY", "strategy_type": "THEGA", "legs": legs}
+    with pytest.raises(GuardError, match="EQUITY leg to be BUY"):
+        guard.preview("p1", payload)
+
+
+def test_thega_missing_leg_type_rejected(monkeypatch, guard):
+    """Two option legs and no equity leg (or vice versa) must be refused, not
+    silently priced as if the missing leg didn't matter."""
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_QUANTITY", "100")
+    legs = _thega_legs()
+    legs[0]["asset_type"] = "OPTION"
+    legs[0]["option_type"] = "put"
+    legs[0]["strike"] = 50.0
+    legs[0]["expiry"] = "2025-06-20"
+    payload = {"symbol": "AAPL", "asset_type": "EQUITY", "strategy_type": "THEGA", "legs": legs}
+    with pytest.raises(GuardError, match="one EQUITY leg"):
+        guard.preview("p1", payload)

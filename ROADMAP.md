@@ -460,11 +460,48 @@ research pass done on this repo:
     `tests/test_adx_iv_router.py` (drafting + shared-expiry quote fetch), and
     `tests/test_multileg_execution.py` (paper-ledger leg-level fills, live executor
     payload shape).
-  - **Thega (delta-neutral volatility harvest) remains deferred.** No concrete leg
-    structure has been specified for it yet (unlike Synthetic Long, which has an
-    unambiguous 2-leg definition) — per the design principle above, it stays refused
-    by the guard until someone writes down its actual legs and a real risk formula for
-    them. Do not add a placeholder/approximate formula just to unblock drafting.
+  - **Thega (delta-neutral volatility harvest) — landed (2026-08-29).** 100 shares +
+    1 ATM covered call + 3 ATM CSPs, same strike/expiry, net delta ~0, high-IV
+    premium harvest. Required extending `OrderLeg` (`vesper/state.py`) beyond
+    options-only: `asset_type: "OPTION" | "EQUITY"`, with `option_type`/`strike`/
+    `expiry` now optional (None for the equity leg). Registered `THEGA` in
+    `execution_guard._MULTI_LEG_RISK_FORMULAS`: worst case is the underlying
+    going to zero — the 100 shares are a total loss, all 3 CSPs get assigned
+    (obligated to buy 300 more shares at the strike), and the covered call
+    expires worthless and adds no further risk (already collateralized by the
+    owned shares). Fixed-ratio only (100 shares : 1 call : 3 puts) — any other
+    ratio is refused, same "don't approximate a scaled variant that hasn't been
+    reasoned through" principle as SYNTHETIC_LONG.
+    - `playbooks_node`'s new Thega section gates on `IV >= 70%` alone (the same
+      threshold the ADX/IV router already uses) — **not** on detecting an actual
+      binary event (earnings, etc.), since nothing in this codebase has an
+      earnings-calendar data source yet. Don't fake the event-detection with a
+      guess; wire a real calendar source first. Reuses
+      `_fetch_synthetic_long_quotes` for the call+put (same expiry, same
+      reasoning as Synthetic Long) and `_fetch_live_quote` for the share price;
+      skips (never fabricates) if either is unavailable.
+    - Found and fixed two real bugs this surfaced in the *existing* multi-leg
+      pipeline, both from the implicit "every combo leg is an option" assumption
+      that held until Thega broke it: `paper_ledger._record_multileg_paper_fill`
+      hardcoded `multiplier=100.0` for every leg (would have booked a 100-share
+      equity leg's cash impact 100x too large — fixed to use 1.0 for EQUITY
+      legs); and `executor._execute_webull_multileg` required every leg to carry
+      an options `contract_symbol` (an equity leg has none — it's identified by
+      the underlying ticker itself, not a contract) and would place every leg
+      with `instrument_type: "OPTION"` (now `leg.asset_type`, and `symbol` falls
+      back to the ticker for an EQUITY leg).
+    - Same live-execution caveat as Synthetic Long: `_execute_webull_multileg`'s
+      exact wire-schema is unverified against a real combo order. Also: the
+      100-share equity leg needs `VESPER_MAX_QUANTITY >= 100` to pass
+      `execution_guard`'s per-leg quantity cap (default 25) — this is existing,
+      deliberate guard behavior applied uniformly to every leg regardless of
+      asset type (an equity leg's "quantity" is shares, an option leg's is
+      contracts; the guard doesn't distinguish, same as the single-leg path
+      already didn't before Thega existed), not a new gap Thega introduced.
+    - Tested in `tests/test_execution_guard.py` (THEGA formula section),
+      `tests/test_thega.py` (drafting + skip paths), and
+      `tests/test_multileg_execution.py` (equity-leg multiplier correctness,
+      executor payload shape).
 - **Premium-recycling "free share" engine (landed — paper ledger)**:
   Sweeps cumulative options-selling realized P&L from paper ledger into accumulating
   100-share blocks of a stabilizing asset (`VESPER_PREMIUM_RECYCLE_TICKER`, default `$SGOV`),
@@ -475,8 +512,6 @@ research pass done on this repo:
     premature spending if rejected.
   - Tested in `tests/test_premium_recycling.py`. (Live Webull trade-history premium mining
     remains future work).
-- **One strategy with zero code**: a delta-neutral "Thega" volatility harvest for high-IV binary
-  events (100 shares + 1 ATM covered call + 3 ATM CSPs, net delta ≈0).
 - **0DTE Flow playbook live quote fetching (landed)**: Eliminates hardcoded
   `est_premium = 1.80` placeholder. `_fetch_0dte_option_quote` filters Webull's
   option chain strictly for contracts expiring today (`datetime.now(timezone.utc).date()`),

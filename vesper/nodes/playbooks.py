@@ -937,7 +937,95 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                     f"Assignment Notional: ${assignment_notional:,.2f})"
                 )
 
-    # ── 5. PREMIUM-RECYCLING "FREE SHARE" ENGINE ───────────────────────────
+    # ── 5. THEGA: DELTA-NEUTRAL VOLATILITY HARVEST ──────────────────────────
+    # 100 shares + 1 ATM covered call + 3 ATM CSPs, same strike/expiry, net
+    # delta ~0 -- harvests high-IV premium (earnings, other binary events)
+    # without a directional bet. Gated on IV >= 70% alone (the same threshold
+    # the ADX/IV router uses for its high-IV branches) -- NOT on detecting an
+    # actual binary event, since nothing in this codebase has an
+    # earnings-calendar/event data source to check that against. Don't
+    # "fix" this by guessing at an event date; wire a real calendar source
+    # first (see ROADMAP.md).
+    if selected_playbook in ("all", "thega"):
+        for ticker, tech in technicals.items():
+            opt = options_audits.get(ticker)
+            if opt is None:
+                continue
+            iv_val = getattr(opt, "iv", 0.0) if not isinstance(opt, dict) else opt.get("iv", 0.0)
+            if iv_val is None or iv_val <= 0:
+                continue
+            iv_pct = iv_val if iv_val > 2.0 else iv_val * 100.0
+            if iv_pct < 70.0:
+                continue
+
+            entry_price = tech.close
+            strike = round(entry_price, 0)
+
+            synth_res = await asyncio.to_thread(_fetch_synthetic_long_quotes, ticker, strike)
+            if synth_res is None:
+                audit_notes.append(
+                    f"Skipped Thega for {ticker} strike ${strike:.2f}: no shared-expiry call+put quote available"
+                )
+                continue
+            call_premium, put_premium, expiry_str, call_sym, put_sym = synth_res
+
+            equity_price = await asyncio.to_thread(_fetch_live_quote, ticker)
+            if equity_price is None or equity_price <= 0:
+                audit_notes.append(f"Skipped Thega for {ticker}: no live equity quote available")
+                continue
+
+            equity_qty = 100
+            call_qty = 1
+            put_qty = 3
+            equity_notional = round(equity_qty * equity_price, 2)
+            # Worst-case capital at risk: the shares as a total loss, plus
+            # assignment on all 3 CSPs (same strike-based reasoning as every
+            # other short-option formula in this file) -- matches
+            # execution_guard's THEGA formula exactly.
+            put_assignment_notional = round(strike * 100 * put_qty, 2)
+            max_risk = round(equity_notional + put_assignment_notional, 2)
+            net_credit = round((call_premium * 100 * call_qty) + (put_premium * 100 * put_qty), 2)
+
+            prop = OrderProposal(
+                id=f"prop-thega-{uuid.uuid4().hex[:6]}",
+                ticker=ticker,
+                asset_type="EQUITY",  # net position display; legs carry the real per-leg types
+                side="BUY",
+                order_type="LIMIT",
+                quantity=equity_qty,
+                limit_price=equity_price,
+                strike=strike,
+                expiry=expiry_str,
+                strategy_type="THEGA",
+                legs=[
+                    OrderLeg(
+                        side="BUY", asset_type="EQUITY", quantity=equity_qty, limit_price=equity_price,
+                    ),
+                    OrderLeg(
+                        side="SELL", asset_type="OPTION", option_type="call", strike=strike,
+                        expiry=expiry_str, quantity=call_qty, limit_price=call_premium,
+                        contract_symbol=call_sym,
+                    ),
+                    OrderLeg(
+                        side="SELL", asset_type="OPTION", option_type="put", strike=strike,
+                        expiry=expiry_str, quantity=put_qty, limit_price=put_premium,
+                        contract_symbol=put_sym,
+                    ),
+                ],
+                stop_loss=None,
+                profit_target=None,
+                estimated_cost=max_risk,
+                max_risk=max_risk,
+                risk_reward_ratio=0.0,
+            )
+            proposals.append(prop)
+            audit_notes.append(
+                f"Drafted Thega for {ticker}: BUY 100sh @ ${equity_price:.2f} + SELL 1x Call + SELL 3x Put, "
+                f"Strike ${strike:.2f} Exp {expiry_str}, net credit ${net_credit:,.2f} "
+                f"(IV={iv_pct:.1f}% >= 70%, Max Risk: ${max_risk:,.2f})"
+            )
+
+    # ── 6. PREMIUM-RECYCLING "FREE SHARE" ENGINE ───────────────────────────
     # Sweeps realized options-selling P&L from paper ledger into accumulating
     # 100-share blocks of a stabilizing asset (default $SGOV), funded entirely
     # from collected premium (not fresh capital).

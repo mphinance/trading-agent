@@ -214,9 +214,12 @@ async def _execute_webull_multileg(prop: OrderProposal) -> ExecutionResult:
     from wb import Webull
 
     for leg in prop.legs:
-        if not leg.contract_symbol:
+        # An EQUITY leg (e.g. Thega's 100 owned shares) is identified by the
+        # underlying ticker itself -- it has no options contract to confirm,
+        # so contract_symbol is only required for OPTION legs.
+        if leg.asset_type == "OPTION" and not leg.contract_symbol:
             raise GuardError(
-                f"multi-leg order for {prop.ticker} has a leg with no contract_symbol "
+                f"multi-leg order for {prop.ticker} has an OPTION leg with no contract_symbol "
                 f"(strike={leg.strike}, expiry={leg.expiry}) -- refusing to place a "
                 "combo order without a confirmed live contract to route it to"
             )
@@ -251,6 +254,7 @@ async def _execute_webull_multileg(prop: OrderProposal) -> ExecutionResult:
         "legs": [
             {
                 "side": leg.side,
+                "asset_type": leg.asset_type,
                 "option_type": leg.option_type,
                 "strike": leg.strike,
                 "expiry": leg.expiry,
@@ -269,8 +273,11 @@ async def _execute_webull_multileg(prop: OrderProposal) -> ExecutionResult:
             "combo_type": prop.strategy_type,
             "legs": [
                 {
-                    "instrument_type": "OPTION",
-                    "symbol": leg.contract_symbol,
+                    "instrument_type": leg.asset_type,  # "OPTION" or "EQUITY"
+                    # An OPTION leg is routed by its specific contract; an
+                    # EQUITY leg has no contract_symbol and is routed by the
+                    # underlying ticker itself.
+                    "symbol": leg.contract_symbol if leg.asset_type == "OPTION" else prop.ticker,
                     "side": leg.side,
                     "order_type": prop.order_type,
                     "quantity": leg.quantity,

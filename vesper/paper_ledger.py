@@ -97,9 +97,14 @@ def _record_multileg_paper_fill(
 
     for i, leg in enumerate(legs):
         side = str(getattr(leg, "side", "BUY")).upper()
+        leg_asset_type = str(getattr(leg, "asset_type", "OPTION")).upper()
         quantity = int(getattr(leg, "quantity", 1))
         filled_price = float(getattr(leg, "limit_price", 0.0))
-        multiplier = 100.0  # every leg of a combo proposal is an option
+        # Every combo leg was an option until Thega (100 shares + covered
+        # call + CSPs) added a mixed equity+options combo -- an EQUITY leg's
+        # "quantity" is shares, not contracts, so it needs multiplier 1.0,
+        # not 100.0, or its cash impact would be booked 100x too large.
+        multiplier = 1.0 if leg_asset_type == "EQUITY" else 100.0
         total_cost = round(filled_price * quantity * multiplier, 2)
 
         fill_id = f"fill-{ticker}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
@@ -109,7 +114,7 @@ def _record_multileg_paper_fill(
             "leg_index": i,
             "session_id": session_id or "N/A",
             "ticker": ticker,
-            "asset_type": "OPTION",
+            "asset_type": leg_asset_type,
             "side": side,
             "quantity": quantity,
             "filled_price": filled_price,

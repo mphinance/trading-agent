@@ -211,3 +211,125 @@ async def test_execute_webull_multileg_blocked_by_kill_switch(monkeypatch):
             await _execute_webull_multileg(prop)
 
     mock_wb.trade.order_v2.place_option.assert_not_called()
+
+
+# ── Thega: mixed equity+options combo (paper ledger multiplier correctness) ─
+
+def _thega_proposal() -> OrderProposal:
+    return OrderProposal(
+        id="prop-thega-abc123",
+        ticker="GME",
+        asset_type="EQUITY",
+        side="BUY",
+        limit_price=50.25,
+        strike=50.0,
+        expiry="2025-09-19",
+        strategy_type="THEGA",
+        legs=[
+            OrderLeg(side="BUY", asset_type="EQUITY", quantity=100, limit_price=50.25),
+            OrderLeg(side="SELL", asset_type="OPTION", option_type="call", strike=50.0,
+                     expiry="2025-09-19", quantity=1, limit_price=1.50,
+                     contract_symbol="GME250919C00050000"),
+            OrderLeg(side="SELL", asset_type="OPTION", option_type="put", strike=50.0,
+                     expiry="2025-09-19", quantity=3, limit_price=1.20,
+                     contract_symbol="GME250919P00050000"),
+        ],
+        estimated_cost=20025.0,
+        max_risk=20025.0,
+    )
+
+
+def test_thega_fill_uses_multiplier_1_for_equity_leg_not_100(clean_paper_ledger):
+    """Regression: the multi-leg fill recorder used to hardcode multiplier=100
+    for every leg on the assumption every combo was options-only. Thega's
+    equity leg must be booked at multiplier 1 (shares), not 100 (contracts),
+    or its cash impact would be booked 100x too large."""
+    prop = _thega_proposal()
+    result = ExecutionResult(
+        order_proposal_id=prop.id, ticker=prop.ticker, status="DRY_RUN_SIMULATED",
+        filled_quantity=prop.quantity, filled_price=prop.limit_price,
+    )
+    record_paper_fill(proposal=prop, result=result)
+
+    ledger = _load_ledger()
+    fills = [f for f in ledger["fills"] if f["order_proposal_id"] == prop.id]
+    assert len(fills) == 3
+
+    equity_fill = next(f for f in fills if f["asset_type"] == "EQUITY")
+    call_fill = next(f for f in fills if f.get("option_type") == "call")
+    put_fill = next(f for f in fills if f.get("option_type") == "put")
+
+    assert equity_fill["multiplier"] == 1.0
+    assert equity_fill["total_cost"] == 5025.0  # 50.25 * 100 * 1, NOT * 100 * 100
+
+    assert call_fill["multiplier"] == 100.0
+    assert call_fill["total_cost"] == 150.0  # 1.50 * 1 * 100
+
+    assert put_fill["multiplier"] == 100.0
+    assert put_fill["total_cost"] == 360.0  # 1.20 * 3 * 100
+
+
+def test_thega_fill_nets_correct_cash_impact(clean_paper_ledger):
+    ledger = _load_ledger()
+    ledger["account"]["cash"] = 100000.0
+    _save_ledger(ledger)
+
+    prop = _thega_proposal()
+    result = ExecutionResult(
+        order_proposal_id=prop.id, ticker=prop.ticker, status="DRY_RUN_SIMULATED",
+        filled_quantity=prop.quantity, filled_price=prop.limit_price,
+    )
+    record_paper_fill(proposal=prop, result=result)
+
+    summary = get_paper_summary()
+    # -5025 (BUY 100sh) + 150 (SELL call) + 360 (SELL 3 puts) = -4515 net debit
+    assert summary["cash"] == 100000.0 - 4515.0
+
+
+# ── Live executor path: Thega equity+options combo ──────────────────────────
+
+def _thega_proposal_for_execution() -> OrderProposal:
+    return _thega_proposal()
+
+
+@pytest.mark.asyncio
+async def test_execute_webull_multileg_thega_does_not_require_equity_leg_contract_symbol():
+    """An EQUITY leg has no options contract to confirm -- only OPTION legs
+    require contract_symbol."""
+    prop = _thega_proposal_for_execution()
+    assert prop.legs[0].asset_type == "EQUITY"
+    assert prop.legs[0].contract_symbol is None
+    # Should not raise for the missing equity contract_symbol; will raise
+    # TradingDisabled instead since VESPER_TRADING isn't set here, proving it
+    # got past the contract_symbol check.
+    from vesper.execution_guard import TradingDisabled
+    with patch("wb.Webull", return_value=MagicMock(configured=True)):
+        with pytest.raises(TradingDisabled):
+            await _execute_webull_multileg(prop)
+
+
+@pytest.mark.asyncio
+async def test_execute_webull_multileg_thega_places_combo_with_ticker_for_equity_leg(monkeypatch):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "25000")
+    monkeypatch.setenv("VESPER_MAX_QUANTITY", "100")
+    prop = _thega_proposal_for_execution()
+
+    mock_wb = MagicMock()
+    mock_wb.configured = True
+    mock_wb.trade.account_v2.get_account_list.return_value = {
+        "data": [{"account_id": "acct-1", "account_class": "INDIVIDUAL_CASH"}]
+    }
+    mock_wb.portfolio.return_value = {"totals": {"buying_power": 100000.0}}
+    mock_wb.trade.order_v2.place_option.return_value = {"data": {"status": "WORKING"}}
+
+    with patch("wb.Webull", return_value=mock_wb):
+        result = await _execute_webull_multileg(prop)
+
+    assert result.status == "SUBMITTED"
+    call_args = mock_wb.trade.order_v2.place_option.call_args
+    legs_sent = call_args[0][1][0]["legs"]
+    assert len(legs_sent) == 3
+    equity_leg_sent = next(l for l in legs_sent if l["instrument_type"] == "EQUITY")
+    assert equity_leg_sent["symbol"] == "GME"  # underlying ticker, not a contract symbol
+    assert equity_leg_sent["quantity"] == 100

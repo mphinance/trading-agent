@@ -118,8 +118,71 @@ def _synthetic_long_max_risk(legs: list) -> float:
 # there. Add to this dict only with a formula that has been reasoned through
 # for that specific strategy's payoff shape; do not add a generic "sum of
 # legs" fallback, it is wrong for most multi-leg strategies.
+def _thega_max_risk(legs: list) -> float:
+    """100 shares + 1 ATM covered call + 3 ATM CSPs, same strike/expiry
+    (delta-neutral high-IV volatility harvest). Worst case is the underlying
+    going to zero: the 100 owned shares are a total loss, AND all 3 CSPs get
+    assigned -- an obligation to buy 300 more shares at the strike regardless
+    of what they're actually worth by then. The covered call expires
+    worthless in that scenario and adds no further downside (it's already
+    collateralized by the owned shares, counted once via the equity leg) --
+    same "strike-based, not premium" reasoning as the standalone CSP and
+    SYNTHETIC_LONG formulas above.
+
+    Fixed-ratio only (100 shares : 1 call : 3 puts) -- refuses any other
+    ratio rather than accept an unreasoned-through scaled variant.
+    """
+    if len(legs) != 3:
+        raise GuardError(
+            "THEGA requires exactly 3 legs (100 shares + 1 covered call + 3 CSPs, same strike/expiry)"
+        )
+
+    equity_leg = next((l for l in legs if str(l.get("asset_type", "")).upper() == "EQUITY"), None)
+    call_leg = next(
+        (l for l in legs if str(l.get("asset_type", "")).upper() == "OPTION"
+         and str(l.get("option_type", "")).lower() == "call"), None,
+    )
+    put_leg = next(
+        (l for l in legs if str(l.get("asset_type", "")).upper() == "OPTION"
+         and str(l.get("option_type", "")).lower() == "put"), None,
+    )
+    if equity_leg is None or call_leg is None or put_leg is None:
+        raise GuardError("THEGA requires one EQUITY leg, one CALL leg, and one PUT leg")
+
+    if str(equity_leg.get("side", "")).upper() != "BUY":
+        raise GuardError("THEGA requires the EQUITY leg to be BUY (the shares backing the covered call)")
+    if str(call_leg.get("side", "")).upper() != "SELL":
+        raise GuardError("THEGA requires the CALL leg to be SELL (the covered call)")
+    if str(put_leg.get("side", "")).upper() != "SELL":
+        raise GuardError("THEGA requires the PUT leg to be SELL (the cash-secured puts)")
+
+    equity_qty = float(equity_leg.get("quantity") or 0)
+    call_qty = float(call_leg.get("quantity") or 0)
+    put_qty = float(put_leg.get("quantity") or 0)
+    if equity_qty != 100 or call_qty != 1 or put_qty != 3:
+        raise GuardError(
+            "THEGA is a fixed-ratio strategy (100 shares : 1 covered call : 3 CSPs) — "
+            f"got {equity_qty:g} shares, {call_qty:g} call(s), {put_qty:g} put(s). "
+            "Refusing a scaled variant that hasn't been reasoned through."
+        )
+
+    call_strike = call_leg.get("strike")
+    put_strike = put_leg.get("strike")
+    if call_strike is None or put_strike is None:
+        raise GuardError("THEGA legs are missing a strike")
+    if call_strike != put_strike:
+        raise GuardError("THEGA requires the covered call and the CSPs to share the same (ATM) strike")
+
+    equity_price = float(equity_leg.get("limit_price") or 0)
+    equity_notional = equity_qty * equity_price
+    put_assignment_notional = float(put_strike) * 100.0 * put_qty
+
+    return equity_notional + put_assignment_notional
+
+
 _MULTI_LEG_RISK_FORMULAS: dict = {
     "SYNTHETIC_LONG": _synthetic_long_max_risk,
+    "THEGA": _thega_max_risk,
 }
 
 

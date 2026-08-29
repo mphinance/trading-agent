@@ -72,15 +72,21 @@ class OptionAudit(BaseModel):
 
 
 class OrderLeg(BaseModel):
-    """One leg of a multi-leg option order. Only meaningful inside
+    """One leg of a multi-leg combo order. Only meaningful inside
     OrderProposal.legs -- see the note there for why this exists as a
-    separate, explicit structure rather than a list of OrderProposal."""
-    side: str            # BUY or SELL
-    option_type: str     # call or put
-    strike: float
-    expiry: str
+    separate, explicit structure rather than a list of OrderProposal.
+
+    asset_type defaults to OPTION (every multi-leg combo before Thega was
+    options-only); option_type/strike/expiry are only meaningful when
+    asset_type=="OPTION" and are None for an EQUITY leg (e.g. Thega's 100
+    owned shares backing the covered call)."""
+    side: str                       # BUY or SELL
+    asset_type: str = "OPTION"      # OPTION or EQUITY
+    option_type: Optional[str] = None    # call or put -- OPTION legs only
+    strike: Optional[float] = None       # OPTION legs only
+    expiry: Optional[str] = None         # OPTION legs only
     quantity: int = 1
-    limit_price: float   # this leg's own premium
+    limit_price: float   # this leg's own premium (OPTION) or share price (EQUITY)
     contract_symbol: Optional[str] = None
 
 
