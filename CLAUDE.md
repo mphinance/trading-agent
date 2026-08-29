@@ -176,6 +176,38 @@ every alert. So it is minted with 128 bits of randomness and `status()` must
 never return it. If you add a channel, keep its secret out of `status()` the
 same way.
 
+### 4d. Voice arrives over Telegram, and it never confirms an order
+**Not built yet — this is the design it must be built to.** (Decided
+2026-08-29; see ROADMAP's LLM-layer-and-voice section for the alternatives
+weighed.)
+
+Voice comes in as a Telegram **voice note**, pulled down by the existing
+outbound-only `telegram_polling.py` loop, transcribed via OpenRouter STT, and
+answered with `sendVoice`. Do not add a local always-on microphone, and do not
+add an audio-upload endpoint — the whole reason this shape was chosen is that
+it adds **no listener and no new attack surface**, and it inherits the
+`TELEGRAM_AUTHORIZED_USER_IDS` allowlist for free. Push-to-talk is by
+construction, so no wake word is needed.
+
+Two constraints, both from measured experience rather than caution:
+
+- **Voice asks questions; buttons move money.** Approvals stay on the inline
+  buttons and must not become a voice command. A transcript is ambiguous in
+  exactly the wrong place ("approve" — *which* proposal?); the buttons are
+  unambiguous, per-user authorised and restart-safe. Voice reads state.
+- **Contextual queries, not symbol naming.** Ticker mis-transcription is a
+  repeatedly-observed failure here (NVDA → "in video"). Aim voice at questions
+  about *current* context — P&L, the flip, what's open, what's pending — and
+  send the focused symbol with every turn so common questions need no ticker.
+  Seed the STT vocab hint with tickers/jargon as the second mitigation; don't
+  rely on either alone.
+
+**Both sides get logged as text, always** — the transcript in and the spoken
+reply out. Audio is ephemeral and unauditable, and anything that can act on
+spoken commands needs the same auditability as every other path here. Posting
+the transcript as a visible Telegram message before acting on it satisfies this
+and gives the user a chance to see a mishearing before it matters.
+
 ### 5. Assume this is on video
 The user streams this work. Anything checked in gets read on stream too — do
 not commit a screenshot, log or fixture showing real account numbers,

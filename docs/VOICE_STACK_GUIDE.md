@@ -2,6 +2,25 @@
 
 This document specifies the decoupled **Cloud STT $\rightarrow$ DeepSeek-V4 Brain $\rightarrow$ Kokoro-82M TTS** pipeline using OpenRouter cloud endpoints without requiring local GPUs.
 
+> **Transport decided 2026-08-29 — read this before implementing the diagram
+> below.** The **model layers here are current and were chosen deliberately**
+> (STT options, Kokoro `af_heart`, costs). What changed is how audio gets in
+> and out: it is a **Telegram voice note**, pulled by the existing
+> outbound-only `telegram_polling.py` loop, not a local always-on microphone.
+> There is therefore **no wake word** — push-to-talk is by construction — and
+> **no audio-upload endpoint**, which is the point: the chosen shape adds no
+> listener and inherits the `TELEGRAM_AUTHORIZED_USER_IDS` allowlist.
+>
+> Two scope constraints go with it: **approvals stay on the inline buttons and
+> never become a voice command** (a transcript is ambiguous exactly where it
+> must not be), and voice targets **contextual queries rather than naming
+> symbols** (ticker mis-transcription is a measured failure here — NVDA → "in
+> video"). Box 3's "terminal / UI confirmation" below should be read as the
+> Telegram message thread, which is also the required text audit record.
+>
+> Full reasoning and the alternatives weighed: `ROADMAP.md` → "LLM layer +
+> voice". Binding rules: `CLAUDE.md` rule 4d.
+
 ---
 
 ## 🏛️ Pipeline Architecture

@@ -1237,8 +1237,51 @@ pattern in "AI agent architecture" below is the more rigorous version of
 that question, and better thought through before an LLM gets any real
 influence over a proposal's numbers, if that's ever wanted.
 
-**Voice: not built yet, but the decision is made — standalone, own voice
-stack, DeepSeek stays the brain.** (2026-08-28) Considered wiring Vesper's
+**Transport decided (2026-08-29): Telegram voice notes, not an always-on
+local mic.** Supersedes the wake-word assumption below; everything else in
+this section still stands. Voice arrives as a Telegram `message.voice`, is
+pulled down by the existing `telegram_polling.py` loop, transcribed, answered,
+and replied to with `sendVoice`. Why this beat the local-mic/wake-word design:
+
+- **No new attack surface at all.** The poller is already outbound-only —
+  audio is *pulled* from Telegram's API, nothing listens. Compare the old
+  sidecar's rule ("voice is browser-side only; an audio upload path would be a
+  new threat model"): that was about an unauthenticated HTTP panel, which no
+  longer exists. Audio over Telegram's authenticated API, pulled outbound,
+  behind the `TELEGRAM_AUTHORIZED_USER_IDS` allowlist, is a materially better
+  shape than either the old panel or a new local listener.
+- **Push-to-talk by construction.** Holding a record button is an explicit act;
+  there is no always-on microphone and no wake word to false-trigger. This is
+  why the wake-word decision below is superseded rather than merely deferred —
+  a wake word is only needed for a mic that is always listening.
+- **Works from the phone, anywhere**, not only at the machine Vesper runs on.
+- **Reuses infrastructure that already exists and is already tested** —
+  polling loop, per-user auth, proposal cards, chart attachments.
+
+**Scope constraint, deliberate: voice asks questions; buttons move money.**
+Approvals stay on the existing inline buttons and do NOT become a voice
+command. A transcript is ambiguous in exactly the wrong place ("approve" —
+*which* proposal?), whereas the buttons are unambiguous, already per-user
+authorised, and restart-safe via Discord's `DynamicItem` / the disk-backed
+approval registry. Voice reads state; it does not confirm orders.
+
+**Scope constraint, from measured experience: contextual queries, not symbol
+naming.** Ticker mis-transcription is a documented, repeatedly-observed failure
+here (NVDA → "in video"; nyx's own "Nyx" → "Nix"). So voice is aimed at
+questions about *current* context — "what's my P&L", "where's the flip",
+"what's open", "any pending approvals" — and not at naming new symbols. The
+old sidecar's fix carries forward: send the focused symbol with every turn so
+the common questions need no ticker at all. Combine with the STT vocab-biasing
+hint noted below; do not rely on either alone.
+
+**Build order when this starts:** voice-in → STT → read-only query → **text**
+reply first, so STT and routing are provable without TTS in the loop; add
+Kokoro `sendVoice` only once the read path is solid.
+
+---
+
+**Prior decision (2026-08-28), still valid where noted — standalone, own voice
+stack, DeepSeek stays the brain.** Considered wiring Vesper's
 voice interface into `nyx` (`mphinance/nyx` on host `coolify`, née a fork of
 `six-ddc/disclaw`) instead of building Vesper's own — nyx already has a full,
 running voice pipeline (Discord voice channel, wake-word, Whisper STT +
@@ -1294,6 +1337,12 @@ transcript as a visible message before acting on it (nyx's own
 `onVoiceUtterance` does exactly this — posts `🎙️ <@user>: {text}` to the
 thread before submitting it) — worth copying that pattern rather than
 inventing a separate one.
+
+**Superseded by the Telegram-voice-note transport above (2026-08-29): no wake
+word is needed for push-to-talk.** Kept because it becomes live again the
+moment anything always-listening is built, and because its *second* half — the
+STT vocab hint — applies right now regardless of transport, and is one of the
+two mitigations for ticker mis-transcription.
 
 **Decided: the wake word is "Vesper."** (2026-08-28) Two syllables, unisex,
 and — per nyx's own `STT_VOCAB` lesson (its "Nyx" → "Nix" mishearing without
