@@ -945,6 +945,20 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                 premium, expiry_str = leaps_res
                 qty = 1
                 cost = round(premium * 100 * qty, 2)
+
+                # Underlying-keyed swing stop: prefer ema_34, else sma_200, else
+                # keltner_lower (first non-None wins). This is an ADDITIONAL
+                # trigger alongside the flat contract stop_loss above, evaluated
+                # by monitor.py's evaluate_position() against a fresh
+                # analyze_technicals() read each cycle -- never leave it None
+                # here in favor of a fabricated level; if none of the three are
+                # available, the position simply keeps only the contract-pct stop.
+                underlying_stop_basis = None
+                for basis in ("ema_34", "sma_200", "keltner_lower"):
+                    if getattr(tech, basis, None) is not None:
+                        underlying_stop_basis = basis
+                        break
+
                 prop = OrderProposal(
                     id=f"prop-adxiv-leaps-{uuid.uuid4().hex[:6]}",
                     ticker=ticker,
@@ -958,6 +972,8 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                     option_type="call",
                     stop_loss=round(premium * 0.50, 2),
                     profit_target=round(premium * 2.0, 2),
+                    underlying_stop_type="underlying_level" if underlying_stop_basis else None,
+                    underlying_stop_basis=underlying_stop_basis,
                     estimated_cost=cost,
                     max_risk=cost,
                     risk_reward_ratio=2.0,
@@ -988,6 +1004,17 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                 qty = 1
                 net_premium = round((call_premium - put_premium) * 100 * qty, 2)  # debit if +, credit if -
                 assignment_notional = round(strike * 100 * qty, 2)
+
+                # Underlying-keyed swing stop, same basis-selection order as the
+                # LEAPS branch above (ema_34 -> sma_200 -> keltner_lower, first
+                # non-None wins). Applies to the combo as a whole -- the long
+                # call leg is the exposure this stop protects.
+                underlying_stop_basis = None
+                for basis in ("ema_34", "sma_200", "keltner_lower"):
+                    if getattr(tech, basis, None) is not None:
+                        underlying_stop_basis = basis
+                        break
+
                 prop = OrderProposal(
                     id=f"prop-adxiv-synth-{uuid.uuid4().hex[:6]}",
                     ticker=ticker,
@@ -1014,6 +1041,8 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                     ],
                     stop_loss=None,
                     profit_target=None,
+                    underlying_stop_type="underlying_level" if underlying_stop_basis else None,
+                    underlying_stop_basis=underlying_stop_basis,
                     # Same capital-at-risk figure execution_guard will independently
                     # recompute from the legs -- this is for the approval card /
                     # audit trail, not trusted at guard time.

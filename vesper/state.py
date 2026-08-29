@@ -53,6 +53,7 @@ class TechnicalAudit(BaseModel):
     keltner_lower: Optional[float] = None
     keltner_basis: Optional[float] = None
     keltner_upper: Optional[float] = None
+    sma_200: Optional[float] = None
     summary: str = ""
 
 
@@ -101,6 +102,16 @@ class OrderProposal(BaseModel):
     limit_price: float
     stop_loss: Optional[float] = None
     profit_target: Optional[float] = None
+    # Underlying-keyed swing-option stop (see vesper/monitor.py evaluate_position
+    # step 5). None means "legacy/contract_pct-only" -- the flat stop_loss above
+    # is still the only stop that ever applies. "underlying_level" means the
+    # basis named in underlying_stop_basis is an ADDITIONAL independent trigger,
+    # not a replacement. underlying_stop_basis is deliberately one of the exact
+    # dict keys analyze_technicals() returns ("sma_200" | "ema_34" |
+    # "keltner_lower") so no translation layer is ever needed between drafting
+    # and monitoring.
+    underlying_stop_type: Optional[str] = None
+    underlying_stop_basis: Optional[str] = None
     contract_symbol: Optional[str] = None
     expiry: Optional[str] = None
     strike: Optional[float] = None

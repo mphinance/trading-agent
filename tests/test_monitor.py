@@ -103,6 +103,148 @@ def test_healthy_position_no_trigger():
     assert trigger is None
 
 
+# ---------------------------------------------------------------------------
+# Underlying-keyed swing-option stop (200 SMA / 34 EMA / lower Keltner band)
+# ---------------------------------------------------------------------------
+
+def _swing_call_pos(current_price=6.00, entry_price=6.00, basis="ema_34"):
+    """A swing LEAPS call, comfortably inside the -40% flat stop band, so any
+    trigger observed can only be the underlying-level stop firing."""
+    return MonitoredPosition(
+        symbol="MSFT",
+        quantity=1,
+        entry_price=entry_price,
+        current_price=current_price,
+        asset_type="OPTION",
+        option_type="call",
+        underlying_stop_type="underlying_level",
+        underlying_stop_basis=basis,
+    )
+
+
+def test_underlying_level_stop_fires_for_swing_call_breach():
+    monitor = PositionMonitor()
+    pos = _swing_call_pos()
+    # pnl_pct is 0.0 -- nowhere near the -40% stop-loss band, proving this is
+    # a genuinely independent trigger.
+    tech = {"close": 395.0, "ema_34": 400.0}  # underlying close < basis level
+    trigger = monitor.evaluate_position(pos, underlying_technicals=tech)
+    assert trigger is not None
+    assert trigger.reason == "UNDERLYING_LEVEL_STOP"
+    assert trigger.urgency == "CRITICAL"
+    assert abs(pos.unrealized_pnl_pct) < 0.40
+
+
+def test_underlying_level_stop_skips_when_technicals_unavailable():
+    """Simulates analyze_technicals() failing/being unavailable this cycle --
+    even though the same close/level pair would have breached had data been
+    present, a None read must be treated as skip, not fabricated as pass."""
+    monitor = PositionMonitor()
+    pos = _swing_call_pos()
+    trigger = monitor.evaluate_position(pos, underlying_technicals=None)
+    assert trigger is None
+
+
+def test_underlying_level_stop_skips_when_not_drafted_with_swing_stop():
+    """A legacy/non-swing position (underlying_stop_type is None) must never
+    have this check apply, even given a breaching underlying_technicals dict."""
+    monitor = PositionMonitor()
+    pos = MonitoredPosition(
+        symbol="MSFT",
+        quantity=1,
+        entry_price=6.00,
+        current_price=6.00,
+        asset_type="OPTION",
+        option_type="call",
+        underlying_stop_type=None,
+        underlying_stop_basis=None,
+    )
+    tech = {"close": 300.0, "ema_34": 400.0}  # would clearly breach if checked
+    trigger = monitor.evaluate_position(pos, underlying_technicals=tech)
+    assert trigger is None
+
+
+def test_underlying_level_stop_skips_when_basis_key_missing():
+    """basis='sma_200' but the dict only carries ema_34/keltner_lower (e.g. a
+    short-history ticker where analyze_technicals couldn't compute SMA200) --
+    a missing key must be treated as unavailable, never as 0.0."""
+    monitor = PositionMonitor()
+    pos = _swing_call_pos(basis="sma_200")
+    tech = {"close": 100.0, "ema_34": 150.0, "keltner_lower": 140.0}  # no sma_200 key
+    trigger = monitor.evaluate_position(pos, underlying_technicals=tech)
+    assert trigger is None
+
+
+def test_underlying_level_stop_put_side_breach_direction():
+    monitor = PositionMonitor()
+    put_pos = MonitoredPosition(
+        symbol="MSFT",
+        quantity=1,
+        entry_price=6.00,
+        current_price=6.00,
+        asset_type="OPTION",
+        option_type="put",
+        underlying_stop_type="underlying_level",
+        underlying_stop_basis="ema_34",
+    )
+    # Put breach direction is the mirror of a call: fires when the underlying
+    # rises ABOVE the basis level.
+    trigger_breach = monitor.evaluate_position(put_pos, underlying_technicals={"close": 410.0, "ema_34": 400.0})
+    assert trigger_breach is not None
+    assert trigger_breach.reason == "UNDERLYING_LEVEL_STOP"
+
+    put_pos2 = MonitoredPosition(
+        symbol="MSFT",
+        quantity=1,
+        entry_price=6.00,
+        current_price=6.00,
+        asset_type="OPTION",
+        option_type="put",
+        underlying_stop_type="underlying_level",
+        underlying_stop_basis="ema_34",
+    )
+    trigger_no_breach = monitor.evaluate_position(put_pos2, underlying_technicals={"close": 390.0, "ema_34": 400.0})
+    assert trigger_no_breach is None
+
+
+def test_poll_paper_positions_populates_underlying_stop_fields(tmp_path, monkeypatch):
+    """End-to-end: a paper_ledger.json fill entry carrying
+    underlying_stop_type/underlying_stop_basis produces a MonitoredPosition
+    with those fields populated."""
+    from vesper.paper_ledger import record_paper_fill
+    fake_ledger = tmp_path / "paper_ledger.json"
+    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", fake_ledger)
+
+    proposal = OrderProposal(
+        id="prop-test-msft-leaps",
+        ticker="MSFT",
+        asset_type="OPTION",
+        side="BUY",
+        limit_price=18.50,
+        quantity=1,
+        strike=440.0,
+        option_type="call",
+        underlying_stop_type="underlying_level",
+        underlying_stop_basis="ema_34",
+    )
+    result = ExecutionResult(
+        order_proposal_id="prop-test-msft-leaps",
+        ticker="MSFT",
+        status="DRY_RUN_SIMULATED",
+        filled_quantity=1,
+        filled_price=18.50,
+    )
+    record_paper_fill(proposal, result, session_id="sess-test")
+
+    monitor = PositionMonitor()
+    positions = monitor.poll_paper_positions()
+    assert len(positions) == 1
+    pos = positions[0]
+    assert pos.symbol == "MSFT"
+    assert pos.underlying_stop_type == "underlying_level"
+    assert pos.underlying_stop_basis == "ema_34"
+
+
 @pytest.mark.asyncio
 async def test_execute_exit_cascade_dry_run():
     monitor = PositionMonitor()

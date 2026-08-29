@@ -56,6 +56,7 @@ async def analyst_node(state: TradingState) -> Dict[str, Any]:
                 keltner_lower=tech_data.get("keltner_lower"),
                 keltner_basis=tech_data.get("keltner_basis"),
                 keltner_upper=tech_data.get("keltner_upper"),
+                sma_200=tech_data.get("sma_200"),
                 summary=tech_data.get("summary", f"{t}: Close={close}, RSI={rsi_val:.1f}"),
             )
             technicals_dict[t] = tech_audit

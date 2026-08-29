@@ -633,15 +633,44 @@ research pass done on this repo:
   equity proposal yet (the ADX/IV router's Wheel branch only sells CSPs, it
   doesn't simulate assignment), so the wheel-stock bucket is correctly wired
   but has no real caller yet either — same shape as the strike-vs-premium
-  guard fix landing before collar-following needed it. Sector-swing buckets,
-  underlying-price-keyed swing-option stops, and the 25%-to-`$SGOV` tax sweep
-  remain backlog (see below). Tested in `tests/test_circuit_breaker.py` and
+  guard fix landing before collar-following needed it. Sector-swing buckets
+  and the 25%-to-`$SGOV` tax sweep remain backlog (see below);
+  underlying-price-keyed swing-option stops (also mentioned in that same
+  backlog list before) have since landed for paper positions -- see the next
+  bullet. Tested in `tests/test_circuit_breaker.py` and
   `tests/test_portfolio_governance.py`.
-- **Backlog, not yet built**: swing-option stops keyed to the *underlying's*
-  price level (200 SMA/34 EMA/lower Keltner band) instead of a fixed % on the
-  contract itself; a 15% sector-concentration bucket; route 25% of high-yield
-  distributions to `$SGOV` for taxes automatically (an extension of the
-  premium-recycling engine's sweep logic, not a new mechanism).
+- **Underlying-keyed swing-option stops (landed, paper positions only)**:
+  the ADX/IV Router's LEAPS branch (Branch 3) and Synthetic Long branch
+  (Branch 4) now draft `OrderProposal.underlying_stop_type="underlying_level"`
+  with `underlying_stop_basis` set to whichever of `ema_34` / `sma_200` /
+  `keltner_lower` is available on the candidate's `TechnicalAudit` (first
+  non-None wins, ema_34 preferred) -- reusing `analyze_technicals()`'s
+  already-computed values rather than a second indicator pipeline.
+  `vesper/monitor.py`'s `evaluate_position()` re-resolves the basis against a
+  fresh `analyze_technicals()` read each monitoring cycle (one fetch per
+  unique underlying per cycle; the existing 300s/3600s `@smart_cache` means
+  this doesn't hit yfinance on every 15s tick) and fires
+  `UNDERLYING_LEVEL_STOP` as an ADDITIONAL trigger alongside the flat -40%
+  contract stop -- both stay armed, whichever breaches first exits the
+  position. Fails closed: a missing `analyze_technicals()` read this cycle,
+  or the named basis key being absent from it (e.g. a short-history ticker
+  with no 200-day SMA), skips the check entirely rather than treating it as
+  passed or as 0.0. **Known limitation, not silently accepted**: this only
+  applies to paper/dry-run positions today. Webull's own position API
+  returns no strategy/stop metadata, and this codebase has no local record
+  tying a filled live contract back to the playbook that drafted it, so
+  `poll_webull_positions()` always leaves `underlying_stop_type`/
+  `underlying_stop_basis` as `None` and a live OPTION position silently
+  keeps only the flat contract-pct stop -- structurally the same gap as the
+  wheel-assignment-tracking limitation above it, and closed the same way: a
+  local live-fill record store, not a guess at Webull's raw payload shape.
+  Tested in `tests/test_monitor.py` (fires on breach independent of the -40%
+  band, skips on missing technicals/basis-type/basis-key, both option-type
+  directions, and the paper-ledger-to-`MonitoredPosition` wiring) and
+  `tests/test_adx_iv_router.py` (basis selection order on the drafting side).
+- **Backlog, not yet built**: a 15% sector-concentration bucket; route 25% of
+  high-yield distributions to `$SGOV` for taxes automatically (an extension
+  of the premium-recycling engine's sweep logic, not a new mechanism).
 
 ### AI agent architecture
 - **LLM-as-Bayesian-network-builder for explainable proposals.** An arXiv

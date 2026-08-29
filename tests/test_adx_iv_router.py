@@ -15,6 +15,9 @@ def _make_state(
     adx_14: float,
     iv: float,
     selected_playbook: str = "adx_iv",
+    ema_34: float = None,
+    sma_200: float = None,
+    keltner_lower: float = None,
 ) -> TradingState:
     tech = TechnicalAudit(
         ticker=ticker,
@@ -24,6 +27,9 @@ def _make_state(
         ema_stack="NEUTRAL",
         atr_14=close * 0.03,
         adx_14=adx_14,
+        ema_34=ema_34,
+        sma_200=sma_200,
+        keltner_lower=keltner_lower,
         summary=f"{ticker} test summary",
     )
     opt = OptionAudit(
@@ -122,13 +128,60 @@ async def test_adx_iv_router_branch3_leaps_call():
     notes = res["audit_trail"][0]["notes"]
     assert any("[LEAPS] Call for MSFT" in n and "Cost: $1,850.00" in n for n in notes)
 
+    # No swing-stop basis was available on the stub -> underlying_stop_type
+    # must stay None (never fabricated), leaving only the flat contract stop.
+    assert p.underlying_stop_type is None
+    assert p.underlying_stop_basis is None
+
+
+@pytest.mark.asyncio
+async def test_adx_iv_router_branch3_leaps_sets_underlying_stop_basis_preferring_ema_34():
+    """LEAPS branch: when ema_34 is available on the technical audit, it wins
+    over sma_200/keltner_lower (first non-None in the ema_34 -> sma_200 ->
+    keltner_lower preference order)."""
+    state = _make_state(
+        ticker="MSFT", close=440.0, adx_14=27.0, iv=0.28,
+        ema_34=430.0, sma_200=400.0, keltner_lower=420.0,
+    )
+
+    with patch("vesper.nodes.playbooks.fetch_live_equity", return_value=50000.0):
+        with patch("vesper.nodes.playbooks._fetch_leaps_option_quote", return_value=(18.50, "2025-06-20")):
+            res = await playbooks_node(state)
+
+    p: OrderProposal = res["proposals"][0]
+    assert p.underlying_stop_type == "underlying_level"
+    assert p.underlying_stop_basis == "ema_34"
+
+
+@pytest.mark.asyncio
+async def test_adx_iv_router_branch3_leaps_falls_back_to_sma_200_then_keltner_lower():
+    """When ema_34 is unavailable, falls back to sma_200; when both ema_34 and
+    sma_200 are unavailable, falls back to keltner_lower."""
+    state_sma = _make_state(
+        ticker="MSFT", close=440.0, adx_14=27.0, iv=0.28,
+        ema_34=None, sma_200=400.0, keltner_lower=420.0,
+    )
+    with patch("vesper.nodes.playbooks.fetch_live_equity", return_value=50000.0):
+        with patch("vesper.nodes.playbooks._fetch_leaps_option_quote", return_value=(18.50, "2025-06-20")):
+            res_sma = await playbooks_node(state_sma)
+    assert res_sma["proposals"][0].underlying_stop_basis == "sma_200"
+
+    state_kc = _make_state(
+        ticker="MSFT", close=440.0, adx_14=27.0, iv=0.28,
+        ema_34=None, sma_200=None, keltner_lower=420.0,
+    )
+    with patch("vesper.nodes.playbooks.fetch_live_equity", return_value=50000.0):
+        with patch("vesper.nodes.playbooks._fetch_leaps_option_quote", return_value=(18.50, "2025-06-20")):
+            res_kc = await playbooks_node(state_kc)
+    assert res_kc["proposals"][0].underlying_stop_basis == "keltner_lower"
+
 
 @pytest.mark.asyncio
 async def test_adx_iv_router_branch4_synthetic_long_drafts_multileg_combo():
     """Branch 4: ADX >= 20 + IV >= 70% -> Synthetic Long (BUY call + SELL put,
     same strike/expiry). Now landed via OrderProposal.legs + execution_guard's
     SYNTHETIC_LONG risk formula -- see docs/... multi-leg design note."""
-    state = _make_state(ticker="NVDA", close=120.0, adx_14=32.0, iv=0.88)
+    state = _make_state(ticker="NVDA", close=120.0, adx_14=32.0, iv=0.88, ema_34=118.0)
 
     with patch("vesper.nodes.playbooks.fetch_live_equity", return_value=50000.0):
         with patch(
@@ -163,6 +216,10 @@ async def test_adx_iv_router_branch4_synthetic_long_drafts_multileg_combo():
     # put leg is the capital-at-risk driver, same reasoning as the Wheel CSP)
     assert p.estimated_cost == 12000.0
     assert p.max_risk == 12000.0
+
+    # Combo-level swing stop from the stubbed ema_34
+    assert p.underlying_stop_type == "underlying_level"
+    assert p.underlying_stop_basis == "ema_34"
 
     notes = res["audit_trail"][0]["notes"]
     assert any(

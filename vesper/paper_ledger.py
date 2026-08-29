@@ -124,6 +124,11 @@ def _record_multileg_paper_fill(
             "option_type": getattr(leg, "option_type", None),
             "expiry": getattr(leg, "expiry", None),
             "strategy_type": strategy_type,
+            # Strategy-level stop metadata belongs to the combo as a whole, not
+            # to any one leg -- read off the top-level proposal (see playbooks.py
+            # Branch 4 / Synthetic Long, the only combo that sets these today).
+            "underlying_stop_type": getattr(proposal, "underlying_stop_type", None),
+            "underlying_stop_basis": getattr(proposal, "underlying_stop_basis", None),
             "timestamp": now,
             "status": "OPEN",
             "current_price": filled_price,
@@ -186,6 +191,8 @@ def record_paper_fill(
         "strike": getattr(proposal, "strike", None),
         "option_type": getattr(proposal, "option_type", None),
         "strategy_type": getattr(proposal, "strategy_type", None),
+        "underlying_stop_type": getattr(proposal, "underlying_stop_type", None),
+        "underlying_stop_basis": getattr(proposal, "underlying_stop_basis", None),
         "timestamp": now,
         "status": "OPEN",
         "current_price": filled_price,

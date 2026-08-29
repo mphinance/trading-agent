@@ -33,6 +33,13 @@ class MonitoredPosition:
     peak_gain_pct: float = 0.0
     breakeven_locked: bool = False
     contract_symbol: Optional[str] = None
+    # Underlying-keyed swing-option stop (see evaluate_position step 5).
+    # None on both means "no swing stop drafted for this position" -- it
+    # keeps only the flat contract-pct stop above. Populated from the paper
+    # ledger fill for paper positions; always None for Webull-sourced
+    # positions today (see poll_webull_positions for why).
+    underlying_stop_type: Optional[str] = None
+    underlying_stop_basis: Optional[str] = None
 
     @property
     def unrealized_pnl_pct(self) -> float:
@@ -82,6 +89,7 @@ class PositionMonitor:
         current_time_et: Optional[datetime] = None,
         spy_spot: Optional[float] = None,
         spy_gamma_flip: Optional[float] = None,
+        underlying_technicals: Optional[Dict[str, Any]] = None,
     ) -> Optional[ExitTrigger]:
         """Evaluate deterministic exit rules for a single position."""
         pnl = pos.unrealized_pnl_pct
@@ -124,7 +132,37 @@ class PositionMonitor:
                 pnl_pct=pnl,
             )
 
-        # 5. Dealer Gamma Flip Crossing (SPY Call with spot below Gamma Flip)
+        # 5. Underlying-Keyed Swing-Option Stop (200 SMA / 34 EMA / lower
+        # Keltner band on the UNDERLYING, not a fixed % on the contract).
+        # This is an ADDITIONAL independent trigger alongside the flat -40%
+        # stop above -- both stay armed, whichever breaches first exits the
+        # position. Only evaluates when the position was actually drafted
+        # with a swing stop (underlying_stop_type=="underlying_level") AND
+        # this cycle's underlying_technicals read succeeded; a fetch failure
+        # or a missing basis key means "skip this cycle", never "passed" or
+        # "0.0" -- fail closed, never fabricate a level.
+        if (
+            pos.asset_type == "OPTION"
+            and pos.underlying_stop_type == "underlying_level"
+            and pos.underlying_stop_basis
+            and underlying_technicals is not None
+        ):
+            level = underlying_technicals.get(pos.underlying_stop_basis)
+            underlying_close = underlying_technicals.get("close")
+            if level is not None and underlying_close is not None:
+                is_put = (pos.option_type or "").upper() == "PUT"
+                breached = underlying_close > level if is_put else underlying_close < level
+                if breached:
+                    return ExitTrigger(
+                        position=pos,
+                        reason="UNDERLYING_LEVEL_STOP",
+                        urgency="CRITICAL",
+                        sell_quantity=pos.quantity,
+                        est_proceeds=pos.quantity * pos.current_price * 100,
+                        pnl_pct=pnl,
+                    )
+
+        # 6. Dealer Gamma Flip Crossing (SPY Call with spot below Gamma Flip)
         if pos.symbol.startswith("SPY") and pos.option_type == "CALL" and spy_spot and spy_gamma_flip:
             if spy_spot < spy_gamma_flip:
                 return ExitTrigger(
@@ -135,7 +173,7 @@ class PositionMonitor:
                     pnl_pct=pnl,
                 )
 
-        # 6. Time-Based Exit for 0DTE (>= 3:00 PM ET)
+        # 7. Time-Based Exit for 0DTE (>= 3:00 PM ET)
         now_et = current_time_et or datetime.now(timezone.utc)
         if pos.is_0dte and (now_et.hour > self.time_stop_hour_et or (now_et.hour == self.time_stop_hour_et and now_et.minute >= self.time_stop_minute_et)):
             return ExitTrigger(
@@ -174,6 +212,17 @@ class PositionMonitor:
                             current_price=last,
                             asset_type="OPTION" if is_opt else "EQUITY",
                             contract_symbol=sym if is_opt else None,
+                            # underlying_stop_type/basis stay None (their
+                            # dataclass default) for every Webull-sourced
+                            # position. Webull's own position API returns no
+                            # strategy/stop metadata, and this codebase has no
+                            # local record tying a live fill back to the
+                            # playbook that drafted it -- so a live OPTION
+                            # position silently keeps only the flat
+                            # contract-pct stop until a local live-fill
+                            # record store exists (see ROADMAP.md). This is
+                            # the correct "skip when unavailable" behavior,
+                            # not an oversight.
                         )
                     )
         except Exception as e:
@@ -201,6 +250,8 @@ class PositionMonitor:
                         asset_type=asset_type,
                         strike=f.get("strike"),
                         option_type=f.get("option_type"),
+                        underlying_stop_type=f.get("underlying_stop_type"),
+                        underlying_stop_basis=f.get("underlying_stop_basis"),
                     )
                 )
         except Exception as e:
@@ -358,6 +409,28 @@ class PositionMonitor:
         except Exception:
             pass
 
+        # Fetch underlying technicals for every position drafted with a swing
+        # stop (underlying_stop_type=="underlying_level"), once per unique
+        # underlying ticker per cycle -- multiple contracts on the same name
+        # (e.g. two paper fills on the same LEAPS underlying) share one fetch.
+        # analyze_technicals() is @smart_cache'd at 300s/3600s TTL, so calling
+        # it every monitor tick (default 15s) does NOT hit yfinance every
+        # tick despite the naive per-cycle call site -- the cache absorbs it.
+        underlying_tech: Dict[str, Optional[Dict[str, Any]]] = {}
+        swing_underlyings = {
+            p.symbol for p in positions
+            if p.asset_type == "OPTION" and p.underlying_stop_type == "underlying_level"
+        }
+        if swing_underlyings:
+            from mcp_server.technicals import analyze_technicals
+            for u in swing_underlyings:
+                try:
+                    res = await analyze_technicals(ticker=u, period="1y")
+                    underlying_tech[u] = res.data if hasattr(res, "data") and isinstance(res.data, dict) else None
+                except Exception as e:
+                    logger.warning(f"Could not fetch underlying technicals for {u}: {e}")
+                    underlying_tech[u] = None
+
         for pos in positions:
             # Update cache
             if pos.symbol not in self.tracked_positions:
@@ -367,7 +440,12 @@ class PositionMonitor:
                 existing.current_price = pos.current_price
                 pos = existing
 
-            trigger = self.evaluate_position(pos, spy_spot=spy_spot, spy_gamma_flip=spy_flip)
+            trigger = self.evaluate_position(
+                pos,
+                spy_spot=spy_spot,
+                spy_gamma_flip=spy_flip,
+                underlying_technicals=underlying_tech.get(pos.symbol),
+            )
             if trigger:
                 res = await self.execute_exit_cascade(trigger, live=live)
                 results.append(res)
