@@ -2,334 +2,320 @@
 
 ## What this repo is
 
-A companion deck for **Webull Desktop**: live positions, portfolio guardrails,
-TraderDaddy Pro signals, dealer-gamma structure, live price alerts, a Claude chat
-panel, and an **MCP server that lets Claude Desktop read the account and trade it
-by voice**. Runs beside the Webull app, not on top of it.
+**Vesper**, a LangGraph-based autonomous trading agent for **Webull**, plus the
+market-data and signal tooling it runs on. It scans, analyses, drafts orders,
+enforces risk deterministically, asks a human for approval over Telegram or
+Discord, executes, and monitors open positions for exits.
 
-The intended rig is three windows: **Webull Desktop** (charts, manual trading),
-**sidecar** (the deck), and **Claude Desktop** (voice, connected to sidecar's
-MCP server). You talk to Claude; Claude calls sidecar; sidecar calls Webull.
+It is a **single-operator personal tool**. That is a load-bearing assumption
+throughout, not a packaging accident — there is no authentication, no
+multi-tenancy, and no user model anywhere in this codebase.
 
-**This app can place orders.** That was not true before — see rule 3 for what
-changed and what guards it. See [README.md](./README.md) for setup, deploy, and
-the full list of API traps, and [docs/API.md](./docs/API.md) for every MCP tool,
-HTTP route, the ticket handshake, and the SSE event shapes.
-
-**This is the org's only real Webull integration.** The one in `trading-dashboard`
-(now archived) was a credential form wired to a `setTimeout`. Nothing else here
-talks to Webull.
+**This app can place real orders.** See rule 3 for the one module allowed to,
+and rule 1 for the network stance that makes that survivable.
 
 Related repos, and why this isn't merged into them:
 - `TraderDaddy-Desktop` — the serious desktop app (Rust/Tauri, Tradier-only,
-  hard-wired). Build that one for Tradier; this one is the Webull companion.
-- `traderdaddy-bridge` — a **demo** of a canonical broker schema, not a library.
-  Its adapters take injected payload dicts, not credentials; `preview_order`
-  echoes the request back; nothing in it can place an order; zero Webull. Do not
-  try to host this there.
+  hard-wired). Build that one for Tradier; this one is the Webull agent.
+- `traderdaddy-bridge` — a **demo** of a canonical broker schema, not a
+  library. Its adapters take injected payload dicts, not credentials;
+  `preview_order` echoes the request back; nothing in it can place an order;
+  zero Webull. Do not try to host this there.
 - `alpha-command-center` — someone else's production algo system. We don't own
   its UI. Not a home for this.
 
+> **History that will otherwise confuse you.** Commit `de60d51` replaced an
+> earlier browser-dashboard "sidecar" with Vesper and deleted 12 files in one
+> go. Most got successors (`orders.py`→`vesper/execution_guard.py`,
+> `risk.py`→`vesper/risk.py`, `watcher.py`→also `vesper/monitor.py`,
+> `notify.py`→also `vesper/bot/*`). **`server.py`, `static/index.html` and
+> `chat.py` did not, and are not coming back** — there is no HTTP API, no
+> browser UI and no browser chat panel. The alert + push-stream stack
+> (`alerts.py`, `quotes.py`, `notify.py`, `watcher.py`, `stream.py`) *was*
+> restored on 2026-08-29 and is live again; see rules 4c and 4d. If you find a
+> doc referring to a browser deck or an HTTP route, it predates all of this.
+
 ## Stack
 
-- **Backend:** Python + FastAPI + uvicorn. No build step, no frontend framework.
-- **Broker:** `webull-openapi-python-sdk` 2.0.16 (the official one) —
-  `webull.core` / `webull.trade` / `webull.data`. Accounts, balances, positions,
-  market data, options, research, screeners, watchlists, and the full v3 order
-  surface.
-- **Push:** MQTT (`paho`, via `DataStreamingClient`) for quotes, gRPC (via
-  `TradeEventsClient`) for order/position/fill events — so a fill you make in
-  Webull Desktop shows up here in about a second instead of on the next poll.
-- **Voice:** `mcp_server.py` on the official `mcp` SDK (`MCPServer`), stdio
-  transport, for Claude Desktop. Browser-side mic is separate — see rule 4c.
-- **Signals:** TraderDaddy Pro over plain JSON-RPC (`POST /api/v1/mcp`). No MCP
-  client library — the endpoint takes a bare `tools/call` with no handshake.
-  (Unrelated to our own MCP server, despite the name collision.)
-- **Chat:** Claude Agent SDK (`claude_agent_sdk`), which shells out to the
-  `claude` CLI binary.
-- **UI:** one `static/index.html`. Inline SVG/CSS, no deps, no bundler.
-- **Deploy:** systemd **user** service bound to a Tailscale IP (see rule 1).
+- **Agent:** Python + LangGraph. `vesper/graph.py` compiles the node pipeline;
+  `vesper/runner.py` drives a session. Disk-backed SQLite checkpointer, so a
+  run paused at the approval gate survives a restart.
+- **Broker:** `webull-openapi-python-sdk` 2.0.16 — `webull.core` /
+  `webull.trade` / `webull.data`. Public.com is a second, partial adapter.
+- **Signals/data:** TraderDaddy Pro over plain JSON-RPC (`td.py`), TickerTrace
+  (`tickertrace_mcp.py`), yfinance, TradingView screener.
+- **Approval channels:** Telegram (long-poll) and Discord (gateway bot).
+- **LLM:** OpenRouter via `vesper/llm.py`. Narrative and red-team only — see
+  rule 6.
+- **MCP:** `mcp_server/` exposes the quant tooling to MCP hosts (FastMCP,
+  stdio by default).
+- **Deploy:** systemd **user** service (see rule 1).
 
 ## Critical design rules
 
 ### 1. Loopback or Tailscale. Never 0.0.0.0.
 This app has **no authentication**, holds live brokerage credentials, and can
-place orders. Binding it to a LAN lets any device on the wifi read the account's
-balances and positions *and trade with them*. `deploy/install.sh` *refuses to
-run* without a Tailscale IP rather than falling back — the guardrail is in code,
-not in a comment. Live on venus at `100.113.21.73:8787`, tailnet-only.
+place orders. `deploy/install.sh` *refuses to run* without a Tailscale IP
+rather than falling back — the guardrail is in code, not in a comment.
 
-This rule got more load-bearing when rule 3 changed. `SIDECAR_TRADING=0` is the
-lever if you ever need the deck somewhere less private.
+Nuance since the migration: **nothing in this repo currently serves HTTP.**
+The only HTTP server left is `vesper/bot/inbound.py`'s aiohttp webhook app,
+and nothing starts it. Both live approval paths are **outbound-only** —
+Telegram long-polls, Discord holds a gateway connection — so no inbound port
+is opened at all today. That is a stronger position than the rule requires;
+the rule exists for the moment someone re-adds a listener. `SIDECAR_HOST` and
+`deploy/sidecar.service` still assume the old `run.sh`/port-8787 layout and
+are **stale** — treat them as unverified until someone re-deploys.
 
-### 2. Secrets live outside the repo, and only in files
-`../.env.webull`, `../.env.anthropic` and `../.env.telegram` sit in the **parent**
-directory, so they cannot be committed by construction. `run.sh` sources them. An `export` in a
-shell does **not** reach the server — every Bash call spawns a fresh shell, and
-systemd gets its own environment. Audit `git diff --cached` for `sk-ant-` /
-`td_live_` before any push.
+### 2. Secrets live in gitignored env files, in two places
+- **`./.env`** at the repo root — where this project's credentials actually
+  live now (`TD_API_KEY`, `TDPRO_API_KEY`, `WEBULL_APP_KEY`,
+  `WEBULL_APP_SECRET`, `WEBULL_KEY`, `WEBULL_SECRET`, `WEBULL_REGION_ID`,
+  `WEBULL_ENVIRONMENT`). Gitignored, 0600. `vesper.py` `load_dotenv()`s it at
+  startup, which is why every module can read `os.environ`.
+- **`../.env.*`** one directory up — the original convention (uncommittable by
+  construction). `notify.py` still reads `../.env.notify` / `../.env.telegram`
+  *and* `./.env`, so either works.
+
+An `export` in a shell does **not** reach a systemd service — it gets its own
+environment. Audit `git diff --cached` for `sk-ant-` / `td_live_` before any
+push.
 
 ### 3. The order path is real, and it lives in exactly one file
-This rule used to read "there is no order path, keep it that way." That was
-reversed deliberately, on request, with the threat model the old rule asked for.
-`orders.py` is now the only module that can move money. Everything else reads.
-If you are adding a broker write, it goes there or it does not go in.
+`vesper/execution_guard.py` is the only module that can move money. Everything
+else reads. If you are adding a broker write, it goes there or it does not go
+in. (`orders.py`, which older docs name, is gone — this is its successor.)
 
-Three properties hold it together — none is decoration:
+Properties that hold it together, none decorative:
 
-- **Preview, then confirm, then place.** `preview()` runs the guards, gets
-  Webull's own cost estimate, and stages a ticket carrying a SHA-256 of the
-  exact payload. `place()` takes a `ticket_id`, never an order. So no single
-  call can both construct and fire, and what gets confirmed out loud is
-  byte-for-byte what reaches the broker. Tickets are single-use and expire in
-  120s. `SIDECAR_ORDER_CONFIRM=0` collapses this to one step.
+- **Preview, then confirm, then place.** `preview()` runs the guards and
+  stages a ticket carrying a SHA-256 of the exact payload. `place()` takes a
+  `ticket_id`, never an order — so no single call can both construct and fire,
+  and what was approved is byte-for-byte what reaches the broker. Tickets are
+  single-use and expire in 120s.
 - **Guards run server-side, on every path.** Notional cap
-  (`SIDECAR_MAX_NOTIONAL`, default $2500), quantity cap, optional symbol
-  allowlist, optional buying-power fraction. `replace` re-runs them, because
-  amending a working order can raise exposure. `cancel` never runs them —
-  reducing risk is always allowed. Market orders get priced from the live quote
-  so the cap can't be dodged by omitting a limit.
-- **`SIDECAR_TRADING=0` is the kill switch.**
+  (`VESPER_MAX_NOTIONAL`, default $2500), quantity cap, optional symbol
+  allowlist, optional buying-power fraction. A **SELL-to-open** option is
+  sized off the **strike**, not the premium — a cash-secured put commits
+  `strike × 100 × qty` on assignment, and reading `limit_price` instead let a
+  $19k risk sail past a $2.5k cap. Multi-leg combos dispatch to a **whitelist**
+  of per-strategy formulas (`_MULTI_LEG_RISK_FORMULAS`); an unregistered
+  `strategy_type` is refused outright, never approximated.
+- **`VESPER_TRADING=0` is the kill switch**, and it defaults **off**.
+- **`vesper/halt.py` is the emergency freeze**, checked before anything else.
+  `vesper/circuit_breaker.py` trips it automatically on a 15% trailing-peak NLV
+  drawdown.
 
-**The in-app chat panel has no order tools, and that is deliberate.** `chat.py`
-holds `WebFetch`/`WebSearch`, so it reads text written by strangers. Giving
-order tools to a component with attacker-controllable input makes the account
-the payload of any prompt injection. Claude Desktop over MCP is different: it is
-driven by the user's voice, not by a page it fetched. If you ever wire the panel
-to `orders.py`, that is a new threat model, not a small addition.
+**Only `mcp_server` and the approval bots reach the agent; none of them holds
+broker credentials or implements its own risk checks.** Any adapter that grows
+its own order path is a new threat model, not a small addition.
 
-This also raises the stakes on rule 1. An unauthenticated read-only deck on a
-tailnet is survivable; an unauthenticated *trading* deck on 0.0.0.0 is not.
+### 4. Inject live state; never make the model fetch it
+`vesper/llm.py` formats portfolio + signals + dealer gamma into the turn.
+Faster, no tool round-trip, guaranteed current.
 
-### 4. Inject live state into chat; never make the model fetch it
-`WebFetch` upgrades `http://` to `https://`, so it **cannot** read this app's own
-loopback server. `chat.py` formats the portfolio + signals + dealer gamma into the
-turn instead. Faster, no tool round-trip, guaranteed current.
+The cost of injection is context, so **inject the compacted shape, never the
+raw payload**. `get_gex_ticker` returns ~200 strikes / ~40KB on SPY, mostly
+zeroes. `td.levels()` reduces it to ~1.3KB and is the only thing that should
+be injected.
 
-The cost of injection is context, so **inject the compacted shape, never the raw
-payload**. `get_gex_ticker` returns the full strike ladder — ~200 strikes, ~40KB
-on SPY, mostly zeroes. `td.levels()` reduces it to ~1.3KB and is the only thing
-`_fmt_levels()` will read. If a future block starts costing more than the
-portfolio it is meant to inform, compact it before injecting it.
-
-### 4b. Gamma is a map of positioning, not a forecast
+### 4a. Gamma is a map of positioning, not a forecast
 Dealer gamma marks where hedging is concentrated, which is why price often
-*reacts* there. It never means price will travel there, and a wall above spot is
-not a reason to be long. The system prompt says this explicitly and the read
-should keep saying it — the failure mode is a level being repeated back as a
-target.
+*reacts* there. It never means price will travel there, and a wall above spot
+is not a reason to be long. The failure mode is a level being repeated back as
+a target.
 
-The flip is a **regime boundary**, and the two tools disagree about where it is:
-`get_gex_ticker`'s `gammaFlipLevel` is read off the ladder, `get_apex_levels`'
-`gammaFlip` is simulated. When they straddle spot the regime call is genuinely
-uncertain, so `td.levels()` sets `flip_split` and both the UI and the prompt say
-so. Do not "fix" this by picking one silently — the disagreement is the signal.
+The flip is a **regime boundary**, and the two tools disagree about where it
+is: `get_gex_ticker`'s `gammaFlipLevel` is read off the ladder,
+`get_apex_levels`' `gammaFlip` is simulated. When they straddle spot the regime
+call is genuinely uncertain, so `td.levels()` sets `flip_split`. Do not "fix"
+this by silently picking one — the disagreement is the signal.
 
-### 4c. Voice is browser-side only
-The mic uses the Web Speech API in `static/index.html`. Nothing about voice
-reaches the server — the transcript arrives as an ordinary chat POST. Keep it
-that way; an audio upload path would be a new threat model for a panel that
-already holds brokerage credentials and no authentication.
+### 4b. Push accelerates the monitor; it is never a dependency
+`stream.py`'s gRPC trade-event feed wakes `vesper/monitor.py` the moment an
+order/position event lands, so a fill — including one placed by hand in Webull
+Desktop — is acted on in ~1s instead of waiting out the 15s poll. This matters
+because the monitor enforces a **-40% stop on 0DTE positions**, where a
+15s-stale price is a lot of price.
 
-Two traps that will look like bugs: recognition transcribes the app's own
-spoken reply if synthesis isn't cancelled first, and tickers are mis-transcribed
-constantly (NVDA becomes "in video"). The focused Dealer Gamma symbol is sent
-with every turn so the common questions need no ticker at all.
+If the feed can't start (no SDK, blocked egress, no credentials) the wake event
+simply never fires and the loop polls exactly as before. Keep it that way: a
+missing push feed must degrade, never break. The **MQTT quote feed is
+deliberately not started** — nothing consumes per-tick quotes today, so it
+would add a connection, a thread and a failure mode for no consumer.
 
-### 4d. Alerts: the level is live, and a break is a transition
-`alerts.py` exists because every native alert system (Webull, IBKR, TradingView)
-stores a frozen NUMBER, and dealer gamma moves daily. An alert here can reference
-`flip` / `pin` / `wall_above` / `wall_below`, re-resolved from TDPro every tick.
+### 4c. Alerts: the level is live, and a break is a transition
+`alerts.py` exists because every native alert system (Webull, IBKR,
+TradingView) stores a frozen NUMBER, and dealer gamma moves daily. An alert
+here can reference `flip` / `pin` / `wall_above` / `wall_below`, re-resolved
+from TDPro every tick. Armed with `vesper.py alerts --arm SYMBOL LEVEL
+DIRECTION`; **evaluated by the watcher thread inside `vesper loop`** — a
+one-shot CLI process cannot watch anything after it exits.
 
-Do not "simplify" either of these; both were wrong on the first pass and both are
-covered by tests:
+Do not "simplify" either of these; both were wrong on the first pass and both
+are covered by tests:
 
 - **Never test `price <= level`.** That fires the moment you arm an alert on a
-  level price has already passed. Alerts fire on a CROSSING, and one armed on the
-  wrong side starts `pending` until price returns.
-- **A moving level must never fire an alert on its own.** If the flip moves past
-  a stationary price, price did not break anything. Both previous and current
-  price are compared against the CURRENT level, so only price movement can cross
-  it; a level that jumps over price re-pends the alert instead of firing.
+  level price has already passed. Alerts fire on a CROSSING, and one armed on
+  the wrong side starts `pending` until price returns.
+- **A moving level must never fire an alert on its own.** If the flip moves
+  past a stationary price, price did not break anything. Both previous and
+  current price are compared against the CURRENT level.
 
-Also: `resolve_level()` returns None rather than falling back to a remembered
-number when TDPro is unavailable. A stale flip is the exact failure this module
-exists to prevent, so an outage silences dynamic alerts instead of misfiring them.
+`resolve_level()` returns None rather than falling back to a remembered number
+when TDPro is unavailable. A stale flip is the exact failure this module exists
+to prevent, so an outage silences dynamic alerts instead of misfiring them.
 
-The watcher is a background THREAD, not an asyncio task — the Webull SDK is
-blocking, and a slow snapshot inside the event loop would stall the SSE chat
-stream that shares it.
+The watcher is a background **thread**, not an asyncio task — the Webull SDK is
+blocking, and a slow snapshot inside the event loop would stall the graph and
+the Telegram poller.
 
-Delivery is `notify.Notifier`, fanning out to ntfy and/or Telegram. **An ntfy
-topic is a credential, not a name.** There are no accounts: whoever knows the
-topic reads every alert. So it is minted with 128 bits of randomness, the env
-file is 0600, and `status()` must never return it — this panel is streamed, and
-a topic read off a frame is a subscription someone else keeps. If you add a
-channel, keep its secret out of `status()` the same way.
-
-### 4e. MCP is the control surface, never the watcher
-`mcp_server.py` connects Claude Desktop over stdio and is a thin client: no
-credentials, no broker, one HTTP call per tool to routes that already exist.
-sidecar stays the only process holding the Webull keys.
-
-That thinness is also what makes the order tools safe to expose here: the
-notional cap, the allowlist and the preview→confirm handshake live in
-`orders.py` and apply to voice trades for free. An MCP server that built its own
-Webull client would need two 2FA token files, would race the deck for the same
-2 req/2s account budget, and would drift from the deck's guards within a week.
-Don't. Use `mcp.sh`, which is a stdio wrapper over the same HTTP API.
-
-A stdio MCP server only runs while Claude Desktop is talking to it, so nothing
-that must happen while you are away can live there. Alerts are evaluated by
-sidecar's own thread; MCP only arms and inspects.
-
-Keep it stdio. A remote connector means exposing an app with no authentication
-to the internet — supermcp is where a shareable, OAuth-gated version belongs.
+Delivery is `notify.Notifier` → ntfy and/or Telegram. **An ntfy topic is a
+credential, not a name.** There are no accounts: whoever knows the topic reads
+every alert. So it is minted with 128 bits of randomness and `status()` must
+never return it. If you add a channel, keep its secret out of `status()` the
+same way.
 
 ### 5. Assume this is on video
-The user streams this panel. `static/index.html` scrubs anything matching
-`sk-ant-…` / `td_live_…` before rendering, and `chat.py` sets
-`setting_sources=[]` so the user's `~/.claude` config never leaks into frame.
-Prompts are not a guarantee; the scrub is. The same logic applies to anything
-checked into the repo, not just what renders live — screenshots and docs get
-read on stream too; don't commit one showing real account numbers or balances.
+The user streams this work. Anything checked in gets read on stream too — do
+not commit a screenshot, log or fixture showing real account numbers,
+balances, API keys or an ntfy topic. (The old browser deck did live regex
+scrubbing of `sk-ant-…` / `td_live_…` before rendering; with the UI gone, the
+protection is now entirely "don't commit it" plus CI's credential scan.)
 
-### 6. Prefer the subscription credential
-`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) over `ANTHROPIC_API_KEY`.
-On the OAuth token there is no per-token cost, so **model choice is free** —
-default `claude-sonnet-5`, and don't reach for Haiku to "save money" that isn't
-being spent. The SDK still reports `total_cost_usd` on OAuth; it's notional.
-Note: the Agent SDK docs say offering claude.ai login *in a product for other
-users* needs prior approval — personal use only.
+### 6. The LLM may narrate, reject, or shrink — never originate or increase
+`generate_candidate_thesis()` appends narrative *after* a proposal's numbers
+are already fixed, so it cannot influence sizing or entry.
+`audit_proposal_risk()` runs in `risk_gate_node` only *after* the
+deterministic check passed, and may only REJECT or halve `quantity` — never
+approve what the deterministic gate rejected, never increase size. It fails
+open (skips) on an LLM error and is skipped entirely without an API key.
+
+This is deliberate and has been re-affirmed against tempting alternatives
+(see ROADMAP's rejected-ideas notes). Strategies are deterministic Python.
+An LLM that can originate a position is a different product with a different
+risk profile.
+
+### 7. Prefer the subscription credential
+`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) over
+`ANTHROPIC_API_KEY`. On the OAuth token there is no per-token cost, so **model
+choice is free** — don't reach for a weaker model to "save money" that isn't
+being spent.
 
 ## Gotchas that will cost you an hour
 
-Documented at length in the README. Most were verified 2026-07-16; the rate-limit
-buckets and the Python version were re-verified 2026-08-01 against SDK 2.0.16 and
-webull-inc's own reference, and both had been recorded wrong before that:
-
-- **The tight rate limit is one bucket, not all of them.** US region:
-  order query (which is where balance and positions live) is **2 req / 2s**,
-  but **market data is 600 req/min** and order place/replace/cancel is
-  600 req/min. `wb.py` uses a lock, backoff and a stale fallback for the scarce
-  bucket; `md.py` is a separate client on the generous one, which is why live
-  quotes can refresh every second without starving the portfolio poll. Do not
-  merge those two modules.
+- **The tight rate limit is one bucket, not all of them.** US region: order
+  query (where balance and positions live) is **2 req / 2s**, but market data
+  is **600 req/min** and order place/replace/cancel is 600/min. `wb.py` uses a
+  lock, backoff and a stale fallback for the scarce bucket; `md.py` is a
+  separate client on the generous one. **Do not merge those two modules**, and
+  route new quote reads through `md.Market` rather than the raw SDK client so
+  they inherit its chunking and caching.
 - **Buying power is shared across accounts** — totals use `max()`, not `sum()`.
 - **`sk-ant-oat…` is an OAuth token, not an API key.** Same prefix, same ~108
-  length as a real key, so every structural check passes — but it belongs in
-  `CLAUDE_CODE_OAUTH_TOKEN`, and in `ANTHROPIC_API_KEY` it yields
-  `401 invalid x-api-key`.
-- **The Agent SDK reports auth failure as** `Claude Code returned an error
-  result: success`. Useless. Test the credential directly against the API.
+  length, so every structural check passes — but in `ANTHROPIC_API_KEY` it
+  yields `401 invalid x-api-key`.
 - **TDPro's `get_conviction` takes `symbol`, not `ticker`** — an unknown key is
-  ignored and you silently get the market-wide gauge for every call.
+  silently ignored and you get the market-wide gauge for every call.
+  **`get_earnings_flow` has the same trap**: its `symbol` argument is not a
+  filter at all, it always returns the full market-wide slate.
 - **TDPro doesn't declare a charset**, so `requests` decodes UTF-8 as
-  ISO-8859-1 and em-dashes arrive as `â€"`.
-- **Python 3.14 now works.** This used to be `>=3.8,<3.14`; SDK 2.0.16 declares
-  `python_requires='>=3.8,<3.15'` with explicit cryptography/grpcio pins for
-  3.14. venus no longer needs its `python3.10` venv — though the existing one is
-  fine and there's no reason to rebuild it mid-session.
-- **The Python Agent SDK ships no `claude` binary** (only the TS one does).
-  `npm i -g @anthropic-ai/claude-code` or chat fails at runtime, not install.
+  ISO-8859-1 and em-dashes arrive as `â€"`. `td.py` pins it.
+- **Python 3.14 works.** SDK 2.0.16 declares `python_requires='>=3.8,<3.15'`
+  with explicit cryptography/grpcio pins for 3.14.
 
 ## Layout
 
 ```
-wb.py          Webull client — credentials, account/balance/position/order reads,
-               caching and rate-limit handling. Owns the shared ApiClient.
-md.py          Market data, research, screeners, watchlists (600/min bucket)
-orders.py      THE ORDER PATH — guards, preview/confirm tickets, place/replace/cancel
-stream.py      MQTT quote push + gRPC trade-event push, bridged onto an SSE bus
-risk.py        Portfolio guardrails
-td.py          TraderDaddy Pro client (direct JSON-RPC) + dealer-gamma levels
-chat.py        In-app Claude chat via the Agent SDK. Read-only tools, no order path.
-alerts.py      Alert store + crossing logic (a level can BE the dealer structure)
-quotes.py      Last price: Webull data -> portfolio -> TDPro spot, tagged by source
-watcher.py     Background thread that evaluates alerts and delivers them
-notify.py      Alert delivery: ntfy (no signup) and/or Telegram
-mcp_server.py  Claude Desktop MCP server (stdio, thin client over the HTTP API)
-mcp.sh         What Claude Desktop spawns
-server.py      FastAPI routes
-run.sh         Launcher — sources ../.env.*, binds loopback unless told otherwise
-static/        Single-page UI, no build step
-deploy/        systemd unit + Tailscale-bound installer
-tests/         pytest suite, hermetic — the Webull and Agent SDKs are stubbed
-               in conftest.py so CI needs neither a compiler nor a broker
-.github/       CI on Python 3.10 and 3.14, a compileall pass, the UI check with
-               node present, and a credential scan. Every push and PR.
-requirements.txt      Runtime. Unpinned except `mcp>=2` — 2.0 renamed FastMCP
-                      to MCPServer, so below that floor the import fails.
-requirements-dev.txt  Test deps. NOT a superset — see Tests.
-pytest.ini            testpaths=tests, asyncio_mode=auto
-docs/API.md    Generated-from-code reference: MCP tools, HTTP routes, SSE event
-               shapes, the ticket handshake. Regenerate it if you add a route or
-               a tool — a stale API doc is worse than none, and tests/test_docs.py
-               fails the build if it drifts.
-docs/webull-api/  Vendored Webull OpenAPI protocol reference (endpoints, rate
-                  limits, MQTT streaming). Upstream's words, not ours — when it
-                  disagrees with our notes, check the live API before trusting
-                  either.
-```
+vesper.py          CLI entrypoint: scan / analyze / 0dte / morning / monitor /
+                   loop / listen / alerts / halt / resume / status / paper
+vesper/
+  graph.py         LangGraph pipeline + disk-backed SQLite checkpointer
+  runner.py        Drives one agent session
+  loop.py          Unattended daemon: scheduled scans + monitor + alert watcher
+  state.py         Pydantic models (OrderProposal, OrderLeg, TradingState, …)
+  execution_guard.py  THE ORDER PATH — guards, tickets, multi-leg risk formulas
+  risk.py          RiskEnforcer: sizing + capital-allocation buckets
+  circuit_breaker.py  Trailing-peak NLV drawdown -> automatic halt
+  halt.py          Emergency freeze, checked by the guard before anything else
+  monitor.py       Position monitor + exit cascade (push-woken, see rule 4b)
+  paper_ledger.py  Simulated fills, mark-to-market, realized/unrealized P&L
+  account.py       Live equity/NLV reads
+  sector.py        Ticker -> sector (yfinance), for the concentration bucket
+  llm.py           OpenRouter: thesis narrative + risk red-team (rule 6)
+  flow_classifier.py  Directional-vs-hedge options flow scoring
+  alerts_runner.py    Builds/starts the alert watcher (rule 4c)
+  stream_runner.py    gRPC trade-event push -> monitor wake-up (rule 4b)
+  nodes/           regime, scanner, analyst, playbooks, risk_gate,
+                   human_gate, executor, reflection
+  bot/             Telegram + Discord adapters, gateway, inbound approvals
+  brokers/         public_broker.py (second, partial adapter)
 
-Two modules read prices and they are not redundant. `md.py` is the full market
-data surface (quotes, depth, bars, chains, research) and reports failure.
-`quotes.py` is a last-price cache with a fallback chain — Webull snapshot,
-then portfolio, then TDPro spot — so the alert watcher keeps working when market
-data is unentitled. Substituting a source is right for an alert and wrong for
-research; that's why they're separate.
+wb.py              Webull client — credentials, account/position/order reads,
+                   caching and the scarce 2-req/2s bucket
+md.py              Market data, research, screeners, watchlists (600/min bucket)
+td.py              TraderDaddy Pro client + td.levels() dealer-gamma compaction
+alerts.py          Alert store + crossing logic (a level can BE dealer structure)
+watcher.py         Background thread evaluating alerts
+quotes.py          Last price w/ fallback chain: md snapshot -> portfolio -> TDPro
+notify.py          Alert delivery: ntfy and/or Telegram
+stream.py          MQTT quote push + gRPC trade-event push onto one bus
+tickertrace_mcp.py / momentum_mcp.py   Data-source MCP clients
+mcp_server/        Quant tooling exposed over MCP (FastMCP, stdio)
+tests/             pytest, hermetic — Webull and Agent SDKs stubbed in conftest
+deploy/            systemd unit + Tailscale-gated installer (STALE, see rule 1)
+docs/              API.md, expansion plan, OpenRouter pricing, voice stack
+ROADMAP.md         Single planning doc: status, known gaps, ideas backlog
+```
 
 ## Tests
 
-`pip install -r requirements-dev.txt && pytest -q`. CI runs the same on every
-push and PR. The suite is hermetic — no network, no broker, no credentials —
-because a green build must not depend on TDPro or ntfy.sh being up.
+`pip install -r requirements-dev.txt && pytest -q`. **384 passing.** The suite
+is hermetic — no network, no broker, no credentials — because a green build
+must not depend on TDPro or ntfy.sh being up.
 
-Two rules if you touch it:
-
-- **`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
-  SDK and the Agent SDK are stubbed in `tests/conftest.py`, so CI never installs
-  them: one needs a compiler and pins the python version, the other shells out
-  to an npm-only binary. Do not "fix" this by installing the real ones.
+- **`requirements-dev.txt` is not a superset of `requirements.txt`.** The
+  Webull SDK and Agent SDK are stubbed in `tests/conftest.py`: one needs a
+  compiler and pins the Python version, the other shells out to an npm-only
+  binary. Do not "fix" this by installing the real ones. It *does* need
+  transitive deps that no test imports directly (`tradingview_screener`,
+  `fastmcp`) — verify with a clean-venv `pip install -r requirements-dev.txt &&
+  pytest --collect-only`, which is the only check that catches those.
+- **`conftest.py`'s `_isolated_vesper_state` autouse fixture** redirects every
+  on-disk state file (halt, circuit breaker, paper ledger, approval registry,
+  graph checkpoints) to `tmp_path` for *every* test. Add any new state file to
+  it — a module that starts touching real state mid-run silently corrupts
+  unrelated tests later in the same session, which has happened here before.
 - **The tests encode the decisions in the rules above, not just behaviour.**
-  `test_orders.py` pins the ticket handshake and the caps (rule 3),
-  `test_mcp.py` asserts the order tools exist but that `place_order` only ever
-  takes a ticket, `test_notify.py` asserts the ntfy topic never reaches
-  `status()` (rule 4d/5), and `test_alerts.py` pins both crossing properties
-  (rule 4d). If a rule here changes, the test is the other half of the change —
-  `test_mcp.py` used to assert that NO order tool existed, and rewriting it was
-  part of reversing rule 3, not an afterthought.
+  `test_execution_guard.py` pins the ticket handshake, the caps and the
+  strike-vs-premium rule; `test_alerts.py` pins both crossing properties;
+  `test_notify.py` asserts the ntfy topic never reaches `status()`;
+  `test_stream_runner.py` catches reverting the monitor's push wake-up back to
+  a plain sleep. If a rule here changes, the test is the other half of the
+  change.
 
 ## Status
 
-Verified against the live account: positions, guardrails, TDPro signals, chat.
+**Verified against the live account:** positions, balances, TDPro signals,
+dealer-gamma levels, market-data snapshots (`md.Market.snapshot` confirmed
+returning live prices), TDPro's earnings calendar and unusual-activity feed.
 
-**The order path, market data, streaming and the MCP server have NOT been
-exercised against the live account.** They are tested end to end against a stub
-broker — `tests/test_orders.py` covers payload shapes, guards, and the ticket
-lifecycle, `tests/test_alerts.py` covers the crossing invariants, and
-`tests/test_docs.py` catches a module that no longer imports; the MCP server was
-driven over stdio through preview → confirm → place → cancel. That proves the wiring, not the broker's acceptance of it.
-Webull's own field-level validation, fractional-share and extended-hours rules,
-and option-strategy handling are unproven here. First live order should be one
+**NOT exercised against the live account: the order path.** It is tested end
+to end against a stub broker — payload shapes, guards, ticket lifecycle,
+multi-leg combos — which proves the wiring, not the broker's acceptance of it.
+Webull's field-level validation, fractional-share and extended-hours rules, and
+option-strategy handling are unproven here. **First live order should be one
 share of something cheap, placed with Webull Desktop open so you can watch it
-land.
+land.** There is also a known signature mismatch in the single-leg live path
+(`place_order(payload)` vs the SDK's `place_order(account_id, new_orders, …)`)
+that is flagged in ROADMAP and deliberately not fixed blind.
 
-Market data and streaming are coded against SDK 2.0.16 signatures but not run
-against the live entitlement — market data needs a subscription in the regional
-Webull app, and the streaming feeds need MQTT/gRPC egress that venus may or may
-not have. `quotes.py` degrades to portfolio and TDPro spot when that's missing,
-so alerts survive it.
+**Live-position metadata is a known gap.** Webull's position API carries no
+strategy tag and no link back to the order that created it, so three features
+(wheel-stock bucket, underlying-keyed swing stops, earnings-exit tagging) work
+in paper mode and silently no-op on live positions. ROADMAP explains what to
+verify with live access before building the registry that would close it.
 
-Deployed on venus (`100.113.21.73:8787`) as a boot-enabled user service. The
-local Crostini copy binds `127.0.0.1`, which the ChromeOS browser **cannot
-reach** — Chrome lives outside the container, and only `penguin` is on the
-tailnet, not ChromeOS itself.
-
-**venus runs whatever was last rsynced, not whatever is on `main`.** Nothing
-redeploys it automatically, so after the order path landed the running service
-was still a build with no `orders.py` in it. Check `/api/health` — it reports
-`trading` and `confirm_required` — before assuming the deck you are looking at
-has the guards this file describes. Redeploy with the rsync + `install.sh` in
-the README, and note that the new deps (`mcp>=2`, `httpx`) mean
-`pip install -r requirements.txt` has to run there too, not just a file copy.
+**Deployment is stale.** `deploy/` still describes the pre-migration
+`run.sh`/port-8787 service. Nothing redeploys automatically. Re-verify before
+trusting anything about a running instance.

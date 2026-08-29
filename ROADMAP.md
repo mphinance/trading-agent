@@ -899,6 +899,57 @@ research pass done on this repo:
   distribution-tracking source (Webull dividend history or similar), not an
   approximation from `realized_pnl`.
 
+### Restored from `de60d51` (2026-08-29) — alerts + push streaming
+
+`de60d51` swapped the sidecar for Vesper and deleted 12 files in one commit.
+Most had successors. Two subsystems silently did not, and were restored:
+
+**Alert stack — `alerts.py` + `quotes.py` + `notify.py` + `watcher.py`.**
+Nothing since the migration could arm "tell me when SPY breaks the gamma flip"
+and have it fire while nobody was watching — which was the entire reason the
+module existed, since every native alert system stores a frozen number and
+dealer gamma moves daily. Restored verbatim (all pure-stdlib and
+dependency-injected, so they imported unmodified) along with their original
+530 lines of tests, 73 of which passed on restore untouched. New wiring, since
+`server.py` was their only constructor and is gone for good:
+`vesper/alerts_runner.py` builds the stack and supplies a `levels_of()` backed
+by `td.levels()`; `vesper loop` starts the watcher best-effort; `vesper.py
+alerts` is the arm/list/disarm control surface.
+- **Real bug found by running it against the live account**, not by reading it:
+  `quotes.py` called `wb_data.market_data.get_snapshot()`, an attribute
+  `md.Market` does not expose, so the primary quote source raised every tick
+  and silently degraded to the portfolio/TDPro fallbacks. Repointed at
+  `Market.snapshot()`, which also means the watcher now inherits Market's
+  chunking, caching and 600/min bucket handling instead of bypassing them.
+  Verified live: snapshot `ok`, SPY priced via the `webull` source.
+- Also handled: `Market` reports per-symbol failures *inline* as
+  `{"error": ...}` rather than raising, so an all-symbols-failed response now
+  latches the source off exactly as an exception did — otherwise an unentitled
+  account would re-call the full symbol list every tick forever.
+
+**Push streaming — `stream.py`.** The consequential half is the gRPC
+trade-event feed. Between the migration and the restore, `monitor.py` polled
+`wb.portfolio()` every 15s *while enforcing a -40% stop on 0DTE positions* —
+so every fill (including one placed by hand in Webull Desktop) took up to 15s
+to become visible and every exit decision ran on data up to 15s stale.
+`vesper/stream_runner.py` now wakes the monitor on any order/position/option
+event, cutting that to ~1s. Deliberate design points:
+- **Push is an accelerator, never a dependency.** Missing SDK, blocked egress
+  or unset credentials all return False rather than raising; the wake event
+  simply never fires and the loop polls exactly as before.
+- The **MQTT quote feed is deliberately NOT started** — nothing consumes
+  per-tick quotes (`quotes.py` polls snapshots on the watcher's own 15s tick,
+  well inside the 600/min bucket), so it would add a connection, a thread and
+  a failure mode for no consumer. Revisit only if something needs sub-second
+  quotes.
+- Regression test pins the behaviour that matters: 2+ scans within 1s against
+  a 30s interval is only reachable via the wake path, so reverting the
+  `wait_for()` to a plain `sleep()` fails the suite.
+
+**Still gone, deliberately:** `server.py`, `static/index.html`, `chat.py` —
+the HTTP API, browser dashboard and browser chat panel. No plan to restore;
+the approval surface is Telegram/Discord and the tool surface is MCP.
+
 ### Borrowed from the 2026-08-29 open-source survey
 
 Surveyed 8 repos (AutoHedge, Vibe-Trading, claude-ads, toprank/NotFair,
@@ -954,12 +1005,17 @@ costing any of it):** the doc's "what exists today" describes the
 repo (all deleted in `de60d51`): `orders.py` (the doc says the order path
 "must remain centralized in `orders.py`" — that role is now
 `vesper/execution_guard.py` alone), `server.py` + `static/` (no browser
-dashboard), `chat.py` (no browser-chat adapter), `alerts.py` (no alerts
-subsystem, so the contract's `list_alerts`/`arm_alert`/`cancel_alert` have
-nothing behind them), and `stream.py` (no SSE). There is **no served HTTP API
-at all** — the only HTTP server left is `vesper/bot/inbound.py`'s aiohttp
+dashboard), and `chat.py` (no browser-chat adapter). There is **no served HTTP
+API at all** — the only HTTP server left is `vesper/bot/inbound.py`'s aiohttp
 webhook app, which nothing currently starts. The `/api/v1` hits in the tree
 are TickerTrace's *external* API being consumed, not one being served.
+
+*(Updated later the same day: `alerts.py`, `quotes.py`, `notify.py`,
+`watcher.py` and `stream.py` — also deleted in `de60d51` — have since been
+**restored and rewired**, so the contract's `list_alerts`/`arm_alert`/
+`cancel_alert` now do have a subsystem behind them, and the push feed exists
+again. See the "Restored from `de60d51`" entry below. `server.py`,
+`static/` and `chat.py` remain gone and are not planned.)*
 Consequence: Phase 2's "keep HTTP as the universal escape hatch" and "maintain
 a clean `/api/v1` contract" are **net-new build**, not preservation of
 something working — a materially different cost than the doc implies. What

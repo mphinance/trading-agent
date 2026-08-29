@@ -59,7 +59,14 @@ except ModuleNotFoundError as e:  # pragma: no cover - operator ergonomics
     raise SystemExit(1)
 
 PARENT = Path(__file__).resolve().parent.parent
-ENV_PATHS = (PARENT / ".env.notify", PARENT / ".env.telegram")
+REPO = Path(__file__).resolve().parent
+# `../.env.notify` / `../.env.telegram` are the original convention (secrets one
+# directory up, so they cannot be committed by construction). The repo-root
+# `./.env` is where this project's credentials actually live now -- it is
+# gitignored and 0600, and `vesper.py` load_dotenv()s it at startup, which is
+# why os.environ is checked first in each channel below. Both are read so
+# either convention works regardless of how a process was launched.
+ENV_PATHS = (PARENT / ".env.notify", PARENT / ".env.telegram", REPO / ".env")
 
 TELEGRAM_API = "https://api.telegram.org"
 NTFY_DEFAULT_SERVER = "https://ntfy.sh"
@@ -208,7 +215,7 @@ class Notifier:
             "channels": [c.status() for c in self.channels],
             "reason": None if self.configured else (
                 "no delivery channel — set NTFY_TOPIC (no signup) or TELEGRAM_BOT_TOKEN "
-                "+ TELEGRAM_CHAT_ID in ../.env.notify"),
+                "+ TELEGRAM_CHAT_ID in ./.env (or ../.env.notify)"),
         }
 
     def send(self, text: str, title: str = "") -> bool:
