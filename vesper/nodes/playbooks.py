@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
@@ -31,6 +33,173 @@ def _fetch_live_quote(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning(f"Could not fetch live quote for {symbol}: {e}")
         return None
+
+
+def _fetch_live_option_quote(
+    underlying: str,
+    strike: float,
+    option_type: str = "PUT",
+) -> Optional[float]:
+    """Fetch real live option contract price for a given underlying and strike.
+
+    Blocking — wrap in asyncio.to_thread.
+    Returns None (never a fabricated placeholder) if Webull is unconfigured or no quote exists.
+    """
+    try:
+        from wb import Webull
+        from md import Market
+
+        wb = Webull()
+        if not wb.configured:
+            return None
+
+        mkt = Market(wb)
+        chain_res = mkt.option_chain(
+            underlying=underlying,
+            option_type=option_type.upper(),
+            strike_gte=strike - 0.01,
+            strike_lte=strike + 0.01,
+        )
+
+        contracts = []
+        if isinstance(chain_res, list):
+            contracts = chain_res
+        elif isinstance(chain_res, dict):
+            contracts = chain_res.get("data") or chain_res.get("contracts") or chain_res.get("list") or []
+
+        if not contracts:
+            return None
+
+        contract_sym = None
+        for c in contracts:
+            c_strike = float(c.get("strike_price") or c.get("strikePrice") or c.get("strike") or 0.0)
+            if abs(c_strike - strike) < 0.05:
+                contract_sym = c.get("symbol") or c.get("ticker") or c.get("contract_symbol")
+                break
+
+        if not contract_sym and contracts:
+            contract_sym = contracts[0].get("symbol") or contracts[0].get("ticker")
+
+        if not contract_sym:
+            return None
+
+        snap_res = mkt.option_snapshot([contract_sym])
+        snap_data = (snap_res.get(contract_sym) or snap_res) if isinstance(snap_res, dict) else None
+        if not snap_data:
+            return None
+
+        last = snap_data.get("last") or snap_data.get("close")
+        if last and float(last) > 0:
+            return float(last)
+
+        bid = float(snap_data.get("bid") or snap_data.get("bid_price") or 0)
+        ask = float(snap_data.get("ask") or snap_data.get("ask_price") or 0)
+        if bid > 0 and ask > 0:
+            return round((bid + ask) / 2.0, 2)
+        if bid > 0:
+            return bid
+        if ask > 0:
+            return ask
+
+        return None
+    except Exception as e:
+        logger.debug(f"Could not fetch live option quote for {underlying} {strike} {option_type}: {e}")
+        return None
+
+
+def _fetch_income_fund_detail(fund: str) -> Optional[Dict[str, Any]]:
+    """Fetch income fund details from TickerTrace. Blocking — wrap in asyncio.to_thread."""
+    try:
+        from tickertrace_mcp import get_income_fund_detail
+        res = get_income_fund_detail(fund=fund)
+        return res if isinstance(res, dict) else None
+    except Exception as e:
+        logger.warning(f"Could not fetch TickerTrace income fund detail for {fund}: {e}")
+        return None
+
+
+def _extract_fund_put_hedges(fund_data: Dict[str, Any], default_ticker: str) -> List[tuple[str, float]]:
+    """Extract (underlying, strike) for all protective PUT holdings in the fund's option book."""
+    results: List[tuple[str, float]] = []
+
+    candidates = []
+    for key in ("options", "option_book", "holdings", "positions", "calls_and_puts", "hedges", "data"):
+        val = fund_data.get(key)
+        if isinstance(val, list):
+            candidates.extend(val)
+        elif isinstance(val, dict):
+            for sub_val in val.values():
+                if isinstance(sub_val, list):
+                    candidates.extend(sub_val)
+
+    if not candidates and isinstance(fund_data, dict):
+        for v in fund_data.values():
+            if isinstance(v, list):
+                candidates.extend(v)
+
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+
+        opt_type = str(
+            item.get("option_type")
+            or item.get("type")
+            or item.get("put_call")
+            or item.get("side_type")
+            or ""
+        ).upper()
+        desc = str(item.get("description") or item.get("symbol") or item.get("name") or "").upper()
+
+        is_put = (opt_type == "PUT") or (" PUT" in desc) or ("_P" in desc) or (desc.endswith("P"))
+        if not is_put:
+            continue
+
+        underlying = (
+            item.get("underlying")
+            or item.get("ticker")
+            or item.get("underlying_symbol")
+            or item.get("symbol")
+        )
+        if not underlying and desc:
+            parts = desc.split()
+            if parts and parts[0].isalpha() and len(parts[0]) <= 6:
+                underlying = parts[0]
+
+        if not underlying:
+            underlying = default_ticker
+
+        if isinstance(underlying, str):
+            if len(underlying) > 6 and any(c.isdigit() for c in underlying):
+                clean_underlying = re.split(r"\d", underlying)[0].strip()
+                if clean_underlying:
+                    underlying = clean_underlying
+            underlying = underlying.upper().strip()
+        else:
+            underlying = default_ticker.upper().strip()
+
+        strike = item.get("strike") or item.get("strike_price") or item.get("strikePrice")
+        if strike is None and desc:
+            match = re.search(r"(\d+(?:\.\d+)?)\s*P", desc) or re.search(r"[CP](\d{8})", desc)
+            if match:
+                val = match.group(1)
+                strike = float(val) / 1000.0 if len(val) == 8 else float(val)
+
+        if strike is not None:
+            try:
+                strike_val = float(strike)
+                if strike_val > 0 and underlying:
+                    results.append((underlying, strike_val))
+            except (ValueError, TypeError):
+                pass
+
+    seen = set()
+    deduped = []
+    for pair in results:
+        if pair not in seen:
+            seen.add(pair)
+            deduped.append(pair)
+
+    return deduped
 
 
 async def playbooks_node(state: TradingState) -> Dict[str, Any]:
@@ -235,6 +404,64 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                         audit_notes.append(
                             f"Drafted 2x Leveraged Alternate: {proxy_2x} ({proxy_shares} shares @ ${proxy_price:.2f})"
                         )
+
+    # ── 3. COLLAR-FOLLOWING PLAYBOOK (Income ETF Protective Put Replication) ─
+    # Sells Cash-Secured Puts (CSPs) at the exact strikes an option-income ETF
+    # bought as its own protective hedge (e.g. ULTY, QQQI, NVDY).
+    # Configured via VESPER_COLLAR_FOLLOW_FUNDS (comma-separated list of funds).
+    if selected_playbook in ("all", "collar_following", "collar"):
+        follow_funds_env = os.getenv("VESPER_COLLAR_FOLLOW_FUNDS", "").strip()
+        follow_funds = [f.strip().upper() for f in follow_funds_env.split(",") if f.strip()]
+
+        for fund in follow_funds:
+            fund_detail = await asyncio.to_thread(_fetch_income_fund_detail, fund)
+            if not fund_detail:
+                audit_notes.append(f"Collar-Following: TickerTrace data unavailable for {fund}")
+                continue
+
+            put_hedges = _extract_fund_put_hedges(fund_detail, default_ticker=fund)
+            if not put_hedges:
+                audit_notes.append(f"Collar-Following: No protective put holdings found in {fund} option book")
+                continue
+
+            for under_ticker, put_strike in put_hedges:
+                # Fetch real live option quote. NEVER fabricate or guess a premium.
+                live_premium = await asyncio.to_thread(_fetch_live_option_quote, under_ticker, put_strike, "PUT")
+                if live_premium is None or live_premium <= 0:
+                    audit_notes.append(
+                        f"Skipped Collar CSP for {under_ticker} strike ${put_strike:.2f} ({fund}): "
+                        "no live option quote available"
+                    )
+                    continue
+
+                # Sizing: Conservative 1 contract for small account safety
+                qty = 1
+                premium = round(live_premium, 2)
+                # Assignment capital commitment = strike * 100 * qty
+                assignment_notional = round(put_strike * 100 * qty, 2)
+
+                collar_prop = OrderProposal(
+                    id=f"prop-collar-{uuid.uuid4().hex[:6]}",
+                    ticker=under_ticker,
+                    asset_type="OPTION",
+                    side="SELL",
+                    order_type="LIMIT",
+                    quantity=qty,
+                    limit_price=premium,
+                    strike=put_strike,
+                    option_type="put",
+                    stop_loss=round(premium * 2.5, 2),       # Buy to close at 250% premium
+                    profit_target=round(premium * 0.20, 2),   # Harvest 80% premium decay
+                    estimated_cost=assignment_notional,       # REAL capital at risk on assignment
+                    max_risk=assignment_notional,             # Cash-secured put assignment liability
+                    risk_reward_ratio=0.53,
+                )
+                proposals.append(collar_prop)
+                audit_notes.append(
+                    f"Drafted Collar-Following CSP for {under_ticker} ({fund} hedge): "
+                    f"SELL 1x Put Strike ${put_strike:.2f} @ ${premium:.2f} "
+                    f"(Assignment Notional: ${assignment_notional:,.2f})"
+                )
 
     audit_entry = {
         "node": "playbooks_node",
