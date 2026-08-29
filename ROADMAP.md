@@ -546,9 +546,29 @@ research pass done on this repo:
   - Tested in `tests/test_loop.py` (scheduling predicate, halted-skip, live
     forces `interactive=True`, exceptions don't kill the loop, stale-date
     pruning).
-- **`0dte_flow` tightening (backlog)**: only run weeklies where IV>70%, sell puts at
-  0.30 delta or at major OI put walls, reject wide-spread chains, harvest ATM
-  CSP vega on earnings week and BTC the next day.
+- **`0dte_flow` tightening — landed (2026-08-29)**: now requires IV >= 70%
+  (`options_audits`, same source/threshold the ADX/IV router and Thega already
+  use — not a new Webull-snapshot IV field, since nothing in this codebase has
+  ever confirmed one exists there), selects the strike from a real major OI
+  put/call wall (`td.levels()`'s `walls`, picking the highest `call_oi`/
+  `put_oi` wall on the bullish/bearish side) instead of a fixed `spot +/- 1`
+  offset, and rejects a quote whose bid/ask spread exceeds
+  `MAX_0DTE_SPREAD_PCT` (15%, in `_fetch_0dte_option_quote` itself — a wide
+  0DTE spread is real execution risk, not something to draft against and hope
+  for the best). Any one of the three being unavailable skips the draft rather
+  than falling back to the old, looser behavior.
+  - **True ~0.30-delta strike selection was NOT implemented** — that needs an
+    option Greeks calculation this codebase doesn't have (`py_vollib` is
+    listed as future tooling below, not installed). Wall-based selection is
+    the other half of the "0.30delta OR major OI walls" spec that's actually
+    achievable with what's already wired up. Don't fake a delta number to
+    close this gap; wire `py_vollib` (or equivalent) first.
+  - **Earnings-week CSP vega harvest was NOT implemented** — that's really
+    describing a variant of Thega (see above), not a 0DTE-flow tightening; it
+    needs a real earnings-calendar data source this codebase doesn't have
+    either. Left as backlog, not approximated.
+  - Tested in `tests/test_0dte_playbook.py` (wall selection, IV gate, spread
+    rejection, and the updated end-to-end drafting/skip paths).
 - **Portfolio-level circuit breaker & capital allocation buckets (landed)**:
   `vesper/circuit_breaker.py` tracks a persisted high-water-mark NLV
   (separate state file from `halt.py`'s, same atomic-write pattern) and trips

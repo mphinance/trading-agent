@@ -107,6 +107,51 @@ def _fetch_live_option_quote(
         return None
 
 
+def _select_0dte_wall_strike(ticker: str, is_bullish: bool) -> Optional[float]:
+    """Pick a 0DTE strike from TraderDaddy's major OI put/call walls
+    (td.levels()'s "walls" list) rather than a fixed spot+/-1 offset.
+
+    True delta-based (~0.30delta) strike selection would need an option
+    Greeks calculation this codebase doesn't have (py_vollib is listed as
+    future tooling in ROADMAP.md, not installed) -- wall-based selection is
+    the other half of the "0.30delta OR major OI walls" spec that's actually
+    achievable with what's already wired up (td.levels() is already used
+    elsewhere in this file's spirit-cousins). Returns None (never falls back
+    to a fabricated offset) if TDPro is unconfigured, levels() errors, or no
+    wall exists on the relevant side -- a 0DTE draft with no real wall to
+    anchor the strike to should be skipped, not approximated.
+
+    Blocking — wrap in asyncio.to_thread.
+    """
+    try:
+        from td import TDPro
+
+        client = TDPro()
+        if not client.configured:
+            return None
+
+        data = client.levels(ticker)
+        if not isinstance(data, dict) or data.get("error"):
+            return None
+
+        walls = data.get("walls") or []
+        side = "above" if is_bullish else "below"
+        oi_key = "call_oi" if is_bullish else "put_oi"
+
+        candidates = [w for w in walls if w.get("side") == side and w.get("strike") is not None]
+        if not candidates:
+            return None
+
+        best = max(candidates, key=lambda w: w.get(oi_key) or 0)
+        return float(best["strike"])
+    except Exception as e:
+        logger.debug(f"Could not select 0DTE wall strike for {ticker}: {e}")
+        return None
+
+
+MAX_0DTE_SPREAD_PCT = 0.15
+
+
 def _fetch_0dte_option_quote(
     underlying: str,
     strike: float,
@@ -115,7 +160,13 @@ def _fetch_0dte_option_quote(
     """Fetch live option price for a contract expiring TODAY (0DTE).
 
     Blocking — wrap in asyncio.to_thread.
-    Returns price or None if Webull is unconfigured, no contract expires today, or no quote exists.
+    Returns price or None if Webull is unconfigured, no contract expires today,
+    no quote exists, or the bid/ask spread is wider than MAX_0DTE_SPREAD_PCT
+    of the price -- a 0DTE contract quoted with a wide spread is genuine
+    execution risk (the fill you'd actually get can differ a lot from the
+    quote used to size and stop the trade), not something to draft against
+    and hope for the best on. Checked whenever both bid and ask are present,
+    regardless of which of bid/ask/last ends up being the returned price.
     """
     try:
         from wb import Webull
@@ -177,14 +228,26 @@ def _fetch_0dte_option_quote(
         if not snap_data:
             return None
 
+        bid = float(snap_data.get("bid") or snap_data.get("bid_price") or 0)
+        ask = float(snap_data.get("ask") or snap_data.get("ask_price") or 0)
+        mid = round((bid + ask) / 2.0, 2) if (bid > 0 and ask > 0) else None
+
+        if bid > 0 and ask > 0:
+            reference_price = mid if mid else ask
+            spread_pct = (ask - bid) / reference_price if reference_price else 0.0
+            if spread_pct > MAX_0DTE_SPREAD_PCT:
+                logger.debug(
+                    f"Rejected 0DTE quote for {underlying} {strike} {option_type}: "
+                    f"spread {spread_pct:.1%} exceeds {MAX_0DTE_SPREAD_PCT:.0%} max (bid={bid}, ask={ask})"
+                )
+                return None
+
         last = snap_data.get("last") or snap_data.get("close")
         if last and float(last) > 0:
             return float(last)
 
-        bid = float(snap_data.get("bid") or snap_data.get("bid_price") or 0)
-        ask = float(snap_data.get("ask") or snap_data.get("ask_price") or 0)
-        if bid > 0 and ask > 0:
-            return round((bid + ask) / 2.0, 2)
+        if mid:
+            return mid
         if bid > 0:
             return bid
         if ask > 0:
@@ -519,16 +582,42 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
         opt = options_audits.get(ticker)
         
         # ── 1. 0DTE FLOW PLAYBOOK (SPY / QQQ) ──────────────────────────────────
+        # Tightened (2026-08-29): requires IV >= 70% (same threshold used
+        # elsewhere in this file), a strike selected from a real major OI
+        # put/call wall (td.levels()) rather than a fixed spot+/-1 offset, and
+        # rejects a quote whose bid/ask spread is too wide for reliable
+        # execution (_fetch_0dte_option_quote's own MAX_0DTE_SPREAD_PCT
+        # check). Any one of these being unavailable skips the draft rather
+        # than falling back to the old, looser behavior.
         if ticker in ("SPY", "QQQ") and regime and regime.spy_spot and regime.spy_gamma_flip:
             spot = regime.spy_spot
             flip = regime.spy_gamma_flip
             is_bullish = spot > flip
             side_type = "call" if is_bullish else "put"
-            strike = round(spot + (1.0 if is_bullish else -1.0), 0)
+
+            iv_val = getattr(opt, "iv", 0.0) if opt is not None and not isinstance(opt, dict) else (opt.get("iv", 0.0) if isinstance(opt, dict) else None)
+            iv_pct = (iv_val if iv_val > 2.0 else iv_val * 100.0) if iv_val else None
+            if iv_pct is None or iv_pct < 70.0:
+                audit_notes.append(
+                    f"Skipped 0DTE {ticker} {side_type.upper()}: IV "
+                    f"{'unavailable' if iv_pct is None else f'{iv_pct:.1f}% < 70%'}"
+                )
+                continue
+
+            strike = await asyncio.to_thread(_select_0dte_wall_strike, ticker, is_bullish)
+            if strike is None:
+                audit_notes.append(
+                    f"Skipped 0DTE {ticker} {side_type.upper()}: no major OI "
+                    f"{'call' if is_bullish else 'put'} wall available to anchor a strike to"
+                )
+                continue
 
             live_premium = await asyncio.to_thread(_fetch_0dte_option_quote, ticker, strike, side_type)
             if live_premium is None or live_premium <= 0:
-                audit_notes.append(f"Skipped 0DTE {ticker} {side_type.upper()}: no live same-day option quote available")
+                audit_notes.append(
+                    f"Skipped 0DTE {ticker} {side_type.upper()} strike ${strike:.2f}: no live same-day "
+                    "option quote available (or bid/ask spread too wide)"
+                )
                 continue
 
             est_premium = round(live_premium, 2)
@@ -554,7 +643,10 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                 risk_reward_ratio=1.25,
             )
             proposals.append(prop)
-            audit_notes.append(f"Drafted 0DTE {ticker} {side_type.upper()} Strike {strike} @ ${est_premium:.2f} (Spot={spot} vs Flip={flip})")
+            audit_notes.append(
+                f"Drafted 0DTE {ticker} {side_type.upper()} Strike {strike} @ ${est_premium:.2f} "
+                f"(Spot={spot} vs Flip={flip}, IV={iv_pct:.1f}%, strike from major OI wall)"
+            )
             continue
 
         # ── 2. TAO OF TRADING BOUNCE 2.0 & MOMENTUM PULLBACK PLAYBOOK ────────
