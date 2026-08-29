@@ -485,11 +485,30 @@ class PositionMonitor:
 
 
 async def run_monitor_loop(interval_sec: float = 15.0, live: bool = False, once: bool = False):
-    """Continuous background loop for position monitoring."""
+    """Continuous background loop for position monitoring.
+
+    Polls every `interval_sec`, but is also woken immediately by the gRPC
+    trade-event feed when one is available (see vesper/stream_runner.py), so a
+    fill -- including one placed by hand in Webull Desktop -- is acted on in
+    about a second rather than up to a full interval later. If the feed can't
+    start, `wake` is simply never set and this degrades to exactly the timer
+    behaviour it had before.
+    """
     monitor = PositionMonitor()
     print("\n" + "=" * 76)
     print(f"🛡️ VESPER ACTIVE POSITION MONITOR & EXIT CASCADE (Mode: {'LIVE' if live else 'DRY_RUN'})")
     print(f"Rules: Take Profit=+50% | Stop Loss=-40% | Trailing Breakeven=+25% | Time Stop=15:00 ET")
+
+    wake = asyncio.Event()
+    pushed = False
+    if not once:
+        from vesper.stream_runner import start_trade_events
+
+        pushed = await start_trade_events(wake)
+    print(
+        f"Fills: {'push (gRPC trade events) + ' if pushed else ''}poll every {interval_sec:g}s"
+        + ("" if pushed else "  [push unavailable]")
+    )
     print("=" * 76)
 
     while True:
@@ -507,4 +526,12 @@ async def run_monitor_loop(interval_sec: float = 15.0, live: bool = False, once:
 
         if once:
             break
-        await asyncio.sleep(interval_sec)
+
+        # Sleep until the interval elapses OR a trade event lands, whichever
+        # comes first. wait_for on the Event rather than sleep() is what turns
+        # a fill into a ~1s reaction instead of a ~15s one.
+        try:
+            await asyncio.wait_for(wake.wait(), timeout=interval_sec)
+            wake.clear()
+        except asyncio.TimeoutError:
+            pass
