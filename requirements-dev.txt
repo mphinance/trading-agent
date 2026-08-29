@@ -43,8 +43,10 @@ discord.py     # Discord gateway client with dynamic interactive approval button
 
 
 # Quantitative analysis, charts, backtesting & technical indicators
+numpy
 pandas
 pandas-ta
 matplotlib
 mplfinance
 scipy
+yfinance       # market data in mcp_server/data.py (exercised by tests/test_backtest.py)
