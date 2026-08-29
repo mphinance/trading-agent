@@ -28,6 +28,8 @@ Examples:
   python vesper.py --playbook squeeze   # Trigger Momentum Volatility Squeeze playbook
   python vesper.py analyze AAPL --live  # Live Webull order execution (with safety gate)
   python vesper.py listen               # Long-poll Telegram for Approve/Reject/halt/resume taps
+  python vesper.py loop                 # Unattended: scheduled scans + continuous position monitor
+  python vesper.py loop --live          # Same, but drafts pause for remote approval (run `listen` too)
         """
     )
     
@@ -35,11 +37,18 @@ Examples:
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen"],
+        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen", "loop"],
         help="Action command",
     )
     parser.add_argument("ticker", nargs="?", default=None, help="Target symbol for analysis")
-    parser.add_argument("--playbook", default="all", choices=["all", "momentum_squeeze", "0dte_flow", "institutional_convergence"], help="Select specific strategy playbook")
+    parser.add_argument(
+        "--playbook", default="all",
+        choices=[
+            "all", "momentum_squeeze", "0dte_flow", "institutional_convergence",
+            "collar_following", "adx_iv_router", "thega", "recycle",
+        ],
+        help="Select specific strategy playbook",
+    )
     parser.add_argument("--persona", default="default", choices=["default", "traderlady"], help="Select AI voice & response persona")
     parser.add_argument("--live", action="store_true", help="Enable live Webull OpenAPI execution mode")
     parser.add_argument("--non-interactive", action="store_true", help="Run without human confirmation prompts")
@@ -154,6 +163,24 @@ Examples:
             asyncio.run(_run_listeners())
         except KeyboardInterrupt:
             print("\n[!] Vesper listener interrupted by user.")
+        sys.exit(0)
+
+    if args.command == "loop":
+        # Unattended market-hours scheduling: scheduled full scans + the
+        # continuous position monitor in the background. Run `vesper listen`
+        # as a separate process alongside this for --live to actually be
+        # able to approve anything it drafts -- this command never places an
+        # order without an explicit remote approval tap (see vesper/loop.py).
+        from vesper.loop import run_continuous_loop
+
+        loop_mode = "live" if args.live else "dry_run"
+        try:
+            asyncio.run(run_continuous_loop(
+                mode=loop_mode, playbook=args.playbook, persona=args.persona,
+                monitor_interval_sec=args.interval,
+            ))
+        except KeyboardInterrupt:
+            print("\n[!] Vesper continuous loop interrupted by user.")
         sys.exit(0)
 
     mode = "live" if args.live else "dry_run"

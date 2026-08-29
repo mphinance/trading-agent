@@ -517,6 +517,35 @@ research pass done on this repo:
   option chain strictly for contracts expiring today (`datetime.now(timezone.utc).date()`),
   fetching real bid/ask/last snapshots. If no contract expires today or quote fetch
   fails, the proposal is skipped rather than fabricated. Tested in `tests/test_0dte_playbook.py`.
+- **Continuous execution daemon (`vesper loop`, landed)**: `vesper/loop.py` runs
+  `monitor.py`'s position monitor continuously in the background alongside
+  scheduled full scans at `09:30`/`11:00`/`14:00` ET (weekdays only, no holiday
+  calendar — a scan firing on a market holiday mostly drafts nothing rather than
+  doing anything unsafe). `15:00` (the 0DTE hard exit) is deliberately **not** a
+  scan slot — that's `monitor.py`'s own time-based exit rule, already running via
+  the background monitor task. Split into `_check_and_fire_scans` (one testable
+  scheduling tick) and `run_continuous_loop` (the thin `while True` wrapper),
+  same `poll_once`/`run_forever` shape as `telegram_polling.py`.
+  - **Safety property, not just a default**: `mode="dry_run"` runs fully
+    autonomously (`interactive=False`, can never reach a live broker).
+    `mode="live"` always runs `interactive=True` instead — a scheduled scan can
+    draft proposals, but `human_gate_node`'s `interrupt()` pauses the graph and
+    waits for an explicit Telegram/Discord approval tap. There is no path here
+    where "live" and "unattended" combine to place an order without a human in
+    the loop — run `vesper listen` as a separate process alongside `vesper loop
+    --live` for that approval tap to actually reach anything.
+  - Skips (doesn't queue) a scheduled scan while halted, with a channel
+    broadcast explaining why, rather than running a pass that execution_guard
+    would block anyway.
+  - `--playbook`'s CLI choices were stale (missing `collar_following`,
+    `adx_iv_router`, `thega`, `recycle` — only `momentum_squeeze`/`0dte_flow`/
+    `institutional_convergence` were selectable, and the first and third don't
+    match anything `playbooks_node` checks for anymore). Added the real values
+    so `vesper loop --playbook thega` (etc.) actually works; didn't do a full
+    audit of the pre-existing drift beyond what this needed.
+  - Tested in `tests/test_loop.py` (scheduling predicate, halted-skip, live
+    forces `interactive=True`, exceptions don't kill the loop, stale-date
+    pruning).
 - **`0dte_flow` tightening (backlog)**: only run weeklies where IV>70%, sell puts at
   0.30 delta or at major OI put walls, reject wide-spread chains, harvest ATM
   CSP vega on earnings week and BTC the next day.
