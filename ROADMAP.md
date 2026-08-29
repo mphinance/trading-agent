@@ -60,12 +60,33 @@ that actually needs careful design saved for last so it doesn't get rushed:
    `RSI(2)` dip trigger, and true Keltner Channel math (`ta.kc` length 14, 2x ATR)
    in `mcp_server/technicals.py`, `vesper/state.py`, `vesper/nodes/analyst.py`,
    and `vesper/nodes/playbooks.py`.
-5. **Module 2's inbound ingestion layer + auth (done)**: Built `create_inbound_app()`
-   aiohttp server with Telegram secret token verification (`X-Telegram-Bot-Api-Secret-Token`),
-   Discord Ed25519 signature verification (`X-Signature-Ed25519` / `X-Signature-Timestamp`),
-   and REST Bearer auth (`Authorization: Bearer <TOKEN>`) with LangGraph thread resume.
-6. **LLM Reasoning & Risk Red-Teaming (done)**: Wired OpenRouter `audit_proposal_risk()`
-   into `risk_gate_node` for qualitative trade evaluation and position size adjustment.
+5. **Module 2's inbound ingestion layer + auth — code real, two bugs found and
+   fixed, still not started by anything.** `create_inbound_app()` (aiohttp)
+   with Telegram secret-token verification, real Discord Ed25519 crypto
+   verification, and REST Bearer auth is genuinely there and correctly wired
+   to `approval_registry`. Found and fixed on review: **all three auth guards
+   failed OPEN when their secret env var was unset** — `verify_*` returned
+   `True` ("authorized") with no secret configured at all, meaning a deploy
+   that forgot to set `TELEGRAM_WEBHOOK_SECRET`/`DISCORD_PUBLIC_KEY`/
+   `VESPER_WEBHOOK_SECRET` would silently accept unauthenticated approve/
+   reject/halt commands from anyone who reached the port. Now fails closed
+   (rejects everything until configured), matches `deploy/install.sh`'s own
+   "refuse to run unsafe, don't silently degrade" rule. Also fixed: two
+   non-constant-time secret comparisons (`==` → `hmac.compare_digest`), and
+   `/health`+`/approvals` both returned full pending-proposal details
+   (ticker/side/quantity/price) with **no auth at all** — split into an
+   unauthenticated minimal `/health` and a bearer-guarded `/approvals`.
+   Added a regression test (`test_auth_guards_fail_closed_when_unconfigured`)
+   and declared `aiohttp`/`cryptography` in `requirements.txt` (neither was
+   listed despite being imported). **Still not actually running**: nothing
+   calls `create_inbound_app()` from `vesper.py` or anywhere else — the
+   server exists but no CLI command starts it. That's the remaining piece.
+6. **LLM Reasoning & Risk Red-Teaming (done, verified safe)**: `audit_proposal_risk()`
+   wired into `risk_gate_node`, but only after a proposal already passes the
+   deterministic check — it can REJECT or halve `quantity` (never increase it
+   or approve something the deterministic gate didn't), fails open (skips
+   silently) on an LLM error rather than blocking, and is skipped entirely
+   without an API key. Verified by reading the call site directly.
 
 - **LLM reasoning: half landed.** `vesper/llm.py` (OpenRouter,
   `deepseek/deepseek-v4-flash` default) is wired into `playbooks_node` via

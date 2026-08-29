@@ -6,6 +6,7 @@ and HTTP dashboards to resolve paused LangGraph human approval gates in real tim
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -175,20 +176,32 @@ class ApprovalRegistry:
 
 
 # ── Cryptographic & Secret Authentication Guards ──────────────────────────────
+#
+# All three guards below fail CLOSED when unconfigured, not open. An earlier
+# version of this file returned True ("authorized") whenever the relevant
+# secret env var was unset — meaning a deploy that forgot to set
+# TELEGRAM_WEBHOOK_SECRET/DISCORD_PUBLIC_KEY/VESPER_WEBHOOK_SECRET would
+# silently accept unauthenticated approve/reject/halt commands from anyone
+# who could reach the port. This repo's own deploy/install.sh refuses to run
+# without a Tailscale IP rather than falling back to something less safe —
+# these guards follow the same rule: no configured secret means the route is
+# unusable, not open.
 
 def verify_telegram_webhook_secret(secret_token_header: Optional[str]) -> bool:
     """Verify Telegram X-Telegram-Bot-Api-Secret-Token against environment configuration."""
     expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if not expected:
-        return True  # Auth not required if secret is unconfigured
-    return bool(secret_token_header and secret_token_header.strip() == expected)
+        logger.warning("TELEGRAM_WEBHOOK_SECRET not configured — rejecting all Telegram webhook calls.")
+        return False
+    return bool(secret_token_header) and hmac.compare_digest(secret_token_header.strip(), expected)
 
 
 def verify_discord_signature(signature: Optional[str], timestamp: Optional[str], body: bytes) -> bool:
     """Verify Discord Ed25519 request signature using cryptographic public key."""
     pub_key_hex = os.getenv("DISCORD_PUBLIC_KEY", "").strip()
     if not pub_key_hex:
-        return True  # Auth not required if public key is unconfigured
+        logger.warning("DISCORD_PUBLIC_KEY not configured — rejecting all Discord webhook calls.")
+        return False
     if not signature or not timestamp:
         return False
     try:
@@ -208,11 +221,12 @@ def verify_bearer_token(auth_header: Optional[str]) -> bool:
     expected = os.getenv("VESPER_WEBHOOK_SECRET", "") or os.getenv("VESPER_API_TOKEN", "")
     expected = expected.strip()
     if not expected:
-        return True  # Auth not required if token is unconfigured
+        logger.warning("VESPER_WEBHOOK_SECRET/VESPER_API_TOKEN not configured — rejecting all REST approval calls.")
+        return False
     if not auth_header or not auth_header.startswith("Bearer "):
         return False
     token = auth_header[7:].strip()
-    return token == expected
+    return hmac.compare_digest(token, expected)
 
 
 # ── Webhook HTTP Server Factory (aiohttp) ────────────────────────────────────
@@ -268,11 +282,22 @@ def create_inbound_app() -> Any:
         return web.json_response(res)
 
     async def handle_health(request: web.Request) -> web.Response:
+        # Deliberately unauthenticated (infra liveness probes don't send auth
+        # headers) and deliberately minimal — no pending-proposal details here.
+        # A ticker/side/quantity/price list is exactly what an unauthenticated
+        # GET should never hand out; see handle_approvals for the guarded view.
         from vesper.halt import is_halted
-        halted, details = is_halted()
+        halted, _details = is_halted()
+        return web.json_response({"status": "ok", "is_halted": halted})
+
+    async def handle_approvals(request: web.Request) -> web.Response:
+        # Pending proposals name real trade intentions (ticker/side/quantity/
+        # price) — same auth as the REST approval route, not the open liveness
+        # probe above.
+        auth = request.headers.get("Authorization")
+        if not verify_bearer_token(auth):
+            return web.json_response({"error": "Unauthorized bearer token"}, status=401)
         return web.json_response({
-            "status": "ok",
-            "is_halted": halted,
             "pending_approvals_count": len(approval_registry.list_pending()),
             "pending_approvals": approval_registry.list_pending(),
         })
@@ -281,7 +306,7 @@ def create_inbound_app() -> Any:
     app.router.add_post("/webhook/discord", handle_discord)
     app.router.add_post("/webhook/approval", handle_rest_approval)
     app.router.add_get("/health", handle_health)
-    app.router.add_get("/approvals", handle_health)
+    app.router.add_get("/approvals", handle_approvals)
 
     return app
 

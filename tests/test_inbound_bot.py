@@ -168,6 +168,33 @@ def test_auth_verifications(monkeypatch):
     assert verify_discord_signature(sig_hex, "diff_timestamp", body) is False
 
 
+def test_auth_guards_fail_closed_when_unconfigured(monkeypatch):
+    """An unset secret must reject every request, not accept everything.
+
+    A prior version of these guards returned True ("authorized") when the
+    corresponding env var was unset, meaning a deploy that forgot to set
+    TELEGRAM_WEBHOOK_SECRET/DISCORD_PUBLIC_KEY/VESPER_WEBHOOK_SECRET would
+    silently accept unauthenticated approve/reject/halt commands from anyone
+    who could reach the port. This is the regression test for that fix.
+    """
+    from vesper.bot.inbound import (
+        verify_telegram_webhook_secret,
+        verify_discord_signature,
+        verify_bearer_token,
+    )
+
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("DISCORD_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("VESPER_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("VESPER_API_TOKEN", raising=False)
+
+    assert verify_telegram_webhook_secret("anything") is False
+    assert verify_telegram_webhook_secret(None) is False
+    assert verify_discord_signature("sig", "ts", b"{}") is False
+    assert verify_bearer_token("Bearer anything") is False
+    assert verify_bearer_token(None) is False
+
+
 @pytest.mark.asyncio
 async def test_inbound_aiohttp_server_endpoints(clean_registry, monkeypatch):
     """Verify inbound aiohttp web endpoints route callbacks and enforce auth."""
