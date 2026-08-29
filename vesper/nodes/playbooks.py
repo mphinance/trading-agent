@@ -107,6 +107,107 @@ def _fetch_live_option_quote(
         return None
 
 
+def _fetch_leaps_option_quote(
+    underlying: str,
+    strike: float,
+    min_dte_days: int = 180,
+    max_dte_days: int = 400,
+) -> Optional[tuple[float, str]]:
+    """Fetch live option price and expiry for a far-dated LEAPS call contract (6-12 months out).
+
+    Blocking — wrap in asyncio.to_thread.
+    Returns (price, expiry_str) or None if no suitable contract or quote exists.
+    """
+    try:
+        from wb import Webull
+        from md import Market
+
+        wb = Webull()
+        if not wb.configured:
+            return None
+
+        mkt = Market(wb)
+        chain_res = mkt.option_chain(
+            underlying=underlying,
+            option_type="CALL",
+            strike_gte=strike - 0.01,
+            strike_lte=strike + 0.01,
+        )
+
+        contracts = []
+        if isinstance(chain_res, list):
+            contracts = chain_res
+        elif isinstance(chain_res, dict):
+            contracts = chain_res.get("data") or chain_res.get("contracts") or chain_res.get("list") or []
+
+        if not contracts:
+            return None
+
+        now = datetime.now(timezone.utc).date()
+        leaps_contracts = []
+        for c in contracts:
+            c_strike = float(c.get("strike_price") or c.get("strikePrice") or c.get("strike") or 0.0)
+            if abs(c_strike - strike) > 0.05:
+                continue
+
+            exp_str = c.get("expire_date") or c.get("expiration_date") or c.get("expiry") or c.get("start_date")
+            if not exp_str:
+                continue
+
+            try:
+                exp_date = datetime.strptime(str(exp_str)[:10], "%Y-%m-%d").date()
+                dte = (exp_date - now).days
+                if min_dte_days <= dte <= max_dte_days:
+                    leaps_contracts.append((dte, str(exp_str)[:10], c))
+            except Exception:
+                continue
+
+        if not leaps_contracts:
+            for c in contracts:
+                exp_str = c.get("expire_date") or c.get("expiration_date") or c.get("expiry")
+                if not exp_str:
+                    continue
+                try:
+                    exp_date = datetime.strptime(str(exp_str)[:10], "%Y-%m-%d").date()
+                    dte = (exp_date - now).days
+                    if dte >= min_dte_days:
+                        leaps_contracts.append((dte, str(exp_str)[:10], c))
+                except Exception:
+                    continue
+
+        if not leaps_contracts:
+            return None
+
+        leaps_contracts.sort(key=lambda x: abs(x[0] - 270))
+        target_dte, target_expiry, target_contract = leaps_contracts[0]
+        contract_sym = target_contract.get("symbol") or target_contract.get("ticker")
+        if not contract_sym:
+            return None
+
+        snap_res = mkt.option_snapshot([contract_sym])
+        snap_data = (snap_res.get(contract_sym) or snap_res) if isinstance(snap_res, dict) else None
+        if not snap_data:
+            return None
+
+        last = snap_data.get("last") or snap_data.get("close")
+        if last and float(last) > 0:
+            return float(last), target_expiry
+
+        bid = float(snap_data.get("bid") or snap_data.get("bid_price") or 0)
+        ask = float(snap_data.get("ask") or snap_data.get("ask_price") or 0)
+        if bid > 0 and ask > 0:
+            return round((bid + ask) / 2.0, 2), target_expiry
+        if bid > 0:
+            return bid, target_expiry
+        if ask > 0:
+            return ask, target_expiry
+
+        return None
+    except Exception as e:
+        logger.debug(f"Could not fetch LEAPS option quote for {underlying} {strike}: {e}")
+        return None
+
+
 def _fetch_income_fund_detail(fund: str) -> Optional[Dict[str, Any]]:
     """Fetch income fund details from TickerTrace. Blocking — wrap in asyncio.to_thread."""
     try:
@@ -461,6 +562,144 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                     f"Drafted Collar-Following CSP for {under_ticker} ({fund} hedge): "
                     f"SELL 1x Put Strike ${put_strike:.2f} @ ${premium:.2f} "
                     f"(Assignment Notional: ${assignment_notional:,.2f})"
+                )
+
+    # ── 4. ADX / IV OPTION-STYLE ROUTER PLAYBOOK ────────────────────────────
+    # Classifies candidates by trend strength (ADX(14) >= 20) vs implied volatility (IV >= 70%):
+    #   • ADX < 20  + IV < 70%  -> "Training Wheels": buy shares outright
+    #   • ADX < 20  + IV >= 70% -> "Wheel": sell Cash-Secured Put (CSP) at near-the-money strike
+    #   • ADX >= 20 + IV < 70%  -> "LEAPS": buy far-dated call (6-12 months out)
+    #   • ADX >= 20 + IV >= 70% -> "Synthetic Long": multi-leg deferred (skipped)
+    if selected_playbook in ("all", "adx_iv", "adx_iv_router", "router"):
+        for ticker, tech in technicals.items():
+            opt = options_audits.get(ticker)
+            if tech.adx_14 is None or opt is None:
+                continue
+
+            iv_val = getattr(opt, "iv", 0.0) if not isinstance(opt, dict) else opt.get("iv", 0.0)
+            if iv_val is None or iv_val <= 0:
+                continue
+
+            iv_pct = iv_val if iv_val > 2.0 else iv_val * 100.0
+            is_trending = tech.adx_14 >= 20.0
+            is_high_iv = iv_pct >= 70.0
+            entry_price = tech.close
+            atr = tech.atr_14 or (entry_price * 0.03)
+
+            # Branch 1: ADX < 20 + IV < 70% -> "Training Wheels" (buy shares outright)
+            if not is_trending and not is_high_iv:
+                stop_loss = round(entry_price - (atr * 1.5), 2)
+                profit_target = round(entry_price + (atr * 3.0), 2)
+                shares, total_cost, total_risk = RiskEnforcer.calculate_vol_targeted_size(
+                    account_equity=calibrated_equity,
+                    entry_price=entry_price,
+                    stop_loss_price=stop_loss,
+                    target_price=profit_target,
+                    atr_14=atr,
+                )
+                if shares > 0:
+                    prop = OrderProposal(
+                        id=f"prop-adxiv-eq-{uuid.uuid4().hex[:6]}",
+                        ticker=ticker,
+                        asset_type="EQUITY",
+                        side="BUY",
+                        order_type="LIMIT",
+                        quantity=shares,
+                        limit_price=entry_price,
+                        stop_loss=stop_loss,
+                        profit_target=profit_target,
+                        estimated_cost=total_cost,
+                        max_risk=total_risk,
+                        risk_reward_ratio=round((profit_target - entry_price) / max(0.01, entry_price - stop_loss), 2),
+                    )
+                    proposals.append(prop)
+                    audit_notes.append(
+                        f"Drafted ADX/IV Router [Training Wheels] Equity Buy for {ticker}: "
+                        f"{shares} shares @ ${entry_price:.2f} (ADX={tech.adx_14:.1f} < 20, IV={iv_pct:.1f}% < 70%)"
+                    )
+
+            # Branch 2: ADX < 20 + IV >= 70% -> "Wheel" (sell cash-secured put)
+            elif not is_trending and is_high_iv:
+                strike = round(entry_price, 0)
+                live_premium = await asyncio.to_thread(_fetch_live_option_quote, ticker, strike, "PUT")
+                if live_premium is None or live_premium <= 0:
+                    audit_notes.append(
+                        f"Skipped ADX/IV Router [Wheel] CSP for {ticker} strike ${strike:.2f}: no live option quote available"
+                    )
+                    continue
+
+                qty = 1
+                premium = round(live_premium, 2)
+                # Assignment capital commitment = strike * 100 * qty
+                assignment_notional = round(strike * 100 * qty, 2)
+                prop = OrderProposal(
+                    id=f"prop-adxiv-wheel-{uuid.uuid4().hex[:6]}",
+                    ticker=ticker,
+                    asset_type="OPTION",
+                    side="SELL",
+                    order_type="LIMIT",
+                    quantity=qty,
+                    limit_price=premium,
+                    strike=strike,
+                    option_type="put",
+                    stop_loss=round(premium * 2.5, 2),
+                    profit_target=round(premium * 0.20, 2),
+                    estimated_cost=assignment_notional,
+                    max_risk=assignment_notional,
+                    risk_reward_ratio=0.53,
+                )
+                proposals.append(prop)
+                audit_notes.append(
+                    f"Drafted ADX/IV Router [Wheel] CSP for {ticker}: SELL 1x Put Strike ${strike:.2f} @ ${premium:.2f} "
+                    f"(ADX={tech.adx_14:.1f} < 20, IV={iv_pct:.1f}% >= 70%, Assignment Notional: ${assignment_notional:,.2f})"
+                )
+
+            # Branch 3: ADX >= 20 + IV < 70% -> "LEAPS" (buy far-dated call 6-12 months out)
+            elif is_trending and not is_high_iv:
+                strike = round(entry_price, 0)
+                leaps_res = await asyncio.to_thread(_fetch_leaps_option_quote, ticker, strike)
+                if leaps_res is None:
+                    audit_notes.append(
+                        f"Skipped ADX/IV Router [LEAPS] for {ticker} strike ${strike:.2f}: no far-dated (180d+) option quote available"
+                    )
+                    continue
+
+                premium, expiry_str = leaps_res
+                qty = 1
+                cost = round(premium * 100 * qty, 2)
+                prop = OrderProposal(
+                    id=f"prop-adxiv-leaps-{uuid.uuid4().hex[:6]}",
+                    ticker=ticker,
+                    asset_type="OPTION",
+                    side="BUY",
+                    order_type="LIMIT",
+                    quantity=qty,
+                    limit_price=premium,
+                    strike=strike,
+                    expiry=expiry_str,
+                    option_type="call",
+                    stop_loss=round(premium * 0.50, 2),
+                    profit_target=round(premium * 2.0, 2),
+                    estimated_cost=cost,
+                    max_risk=cost,
+                    risk_reward_ratio=2.0,
+                )
+                proposals.append(prop)
+                audit_notes.append(
+                    f"Drafted ADX/IV Router [LEAPS] Call for {ticker}: BUY 1x Strike ${strike:.2f} Exp {expiry_str} @ ${premium:.2f} "
+                    f"(ADX={tech.adx_14:.1f} >= 20, IV={iv_pct:.1f}% < 70%, Cost: ${cost:,.2f})"
+                )
+
+            # Branch 4: ADX >= 20 + IV >= 70% -> "Synthetic Long" (simultaneous BUY call + SELL put)
+            # SKIP THIS BRANCH ENTIRELY: Synthetic long is a genuine multi-leg strategy
+            # (simultaneous long call and short put) that OrderProposal and execution_guard
+            # do not yet support (single proposal = single leg order pipeline).
+            # Deliberately deferred to a separate multi-leg execution milestone rather than
+            # approximating with an unsafe single-leg substitute.
+            elif is_trending and is_high_iv:
+                audit_notes.append(
+                    f"Skipped ADX/IV Router [Synthetic Long] for {ticker} (ADX={tech.adx_14:.1f} >= 20, IV={iv_pct:.1f}% >= 70%): "
+                    "multi-leg execution pipeline deferred"
                 )
 
     audit_entry = {

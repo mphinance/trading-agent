@@ -381,13 +381,17 @@ research pass done on this repo:
   `risk_gate_node` and `ExecutionGuard`'s strike-based notional caps. Tested in
   `tests/test_collar_following.py`. (Automated fund screening via
   `/api/v1/fund-effectiveness` and multi-expiry laddering remain future backlog items).
-- **Three strategies with zero code**: an ADX/IV option-style router
-  (`ADX<20`+`IV≥70%`→Wheel, `ADX≥20`+`IV<70%`→LEAPS, `ADX≥20`+`IV≥70%`→
-  Synthetic long via same-strike call+put, else buy shares outright);
-  a premium-recycling "free share" engine (sweep 100% of options-selling
-  P&L into shares until a free 100-share block accumulates); and a delta-neutral
-  "Thega" volatility harvest for high-IV binary events (100 shares + 1 ATM
-  covered call + 3 ATM CSPs, net delta ≈0).
+- **ADX/IV Option-Style Router playbook (landed — 3 of 4 branches)**:
+  Classifies candidates by trend strength (`ADX(14) >= 20`) and IV (`IV >= 70%`):
+  - `ADX < 20` + `IV < 70%` -> "Training Wheels": buy shares outright with volatility-targeted sizing.
+  - `ADX < 20` + `IV >= 70%` -> "Wheel": sell Cash-Secured Put at near-the-money strike with full assignment notional (`strike * 100 * qty`).
+  - `ADX >= 20` + `IV < 70%` -> "LEAPS": buy far-dated call (6-12 months out, ~180-400 DTE) with premium-based notional (`premium * 100 * qty`).
+  - `ADX >= 20` + `IV >= 70%` -> "Synthetic Long": **explicitly NOT done** (skipped with audit note; multi-leg pipeline deferred to dedicated multi-leg order execution milestone).
+  Tested in `tests/test_adx_iv_router.py`.
+- **Two strategies with zero code**: a premium-recycling "free share" engine
+  (sweep 100% of options-selling P&L into shares until a free 100-share block
+  accumulates); and a delta-neutral "Thega" volatility harvest for high-IV binary
+  events (100 shares + 1 ATM covered call + 3 ATM CSPs, net delta ≈0).
 - **`0dte_flow` tightening**: only run weeklies where IV>70%, sell puts at
   0.30 delta or at major OI put walls, reject wide-spread chains, harvest ATM
   CSP vega on earnings week and BTC the next day.
