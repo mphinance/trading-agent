@@ -1189,6 +1189,53 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                         f"Premium Recycling: unswept PnL (${unswept_pnl:,.2f}) below 100-share threshold for {recycle_ticker} (${block_cost:,.2f})"
                     )
 
+    # ── 7. TAX RESERVE SWEEP (25% of Realized P&L to $SGOV) ────────────────
+    # Sweeps 25% of cumulative realized P&L -- tracked as an independent pool
+    # from the free-share engine's 75% (see paper_ledger.get_paper_summary) --
+    # into whole-share (not 100-share-block) buys of a stabilizing asset,
+    # earmarked as a tax set-aside. Configured via VESPER_TAX_RESERVE_TICKER
+    # (default SGOV, same default as the free-share pool but tracked
+    # separately -- the two pools may even choose different tickers).
+    if selected_playbook in ("all", "tax_reserve", "taxsweep"):
+        from vesper.paper_ledger import get_unswept_tax_reserve
+        unswept_tax = await asyncio.to_thread(get_unswept_tax_reserve)
+        tax_reserve_ticker = os.getenv("VESPER_TAX_RESERVE_TICKER", "SGOV").strip().upper()
+
+        if tax_reserve_ticker and unswept_tax > 0:
+            tax_price = await asyncio.to_thread(_fetch_live_quote, tax_reserve_ticker)
+            if tax_price is None:
+                audit_notes.append(
+                    f"Skipped Tax Reserve Sweep for {tax_reserve_ticker}: no live quote available"
+                )
+            else:
+                qty = int(unswept_tax // tax_price)
+                if qty >= 1:
+                    cost = round(tax_price * qty, 2)
+                    tax_prop = OrderProposal(
+                        id=f"prop-taxsweep-{uuid.uuid4().hex[:6]}",
+                        ticker=tax_reserve_ticker,
+                        asset_type="EQUITY",
+                        side="BUY",
+                        order_type="LIMIT",
+                        quantity=qty,
+                        limit_price=tax_price,
+                        stop_loss=round(tax_price * 0.98, 2),
+                        profit_target=round(tax_price * 1.05, 2),
+                        estimated_cost=cost,
+                        max_risk=cost,
+                        risk_reward_ratio=1.0,
+                    )
+                    proposals.append(tax_prop)
+                    audit_notes.append(
+                        f"Drafted Tax Reserve Sweep Buy: {qty} shares of {tax_reserve_ticker} @ ${tax_price:.2f} "
+                        f"(Funded by ${cost:,.2f} of ${unswept_tax:,.2f} unswept 25% tax reserve)"
+                    )
+                else:
+                    audit_notes.append(
+                        f"Tax Reserve Sweep: unswept reserve (${unswept_tax:,.2f}) below price of "
+                        f"one share of {tax_reserve_ticker} (${tax_price:,.2f})"
+                    )
+
     audit_entry = {
         "node": "playbooks_node",
         "timestamp": datetime.now(timezone.utc).isoformat(),

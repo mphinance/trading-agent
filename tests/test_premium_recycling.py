@@ -92,7 +92,7 @@ async def test_premium_recycling_sufficient_pnl_drafts_100_share_buy(clean_paper
     # Drafting alone MUST NOT mark the premium as swept prematurely
     summary = get_paper_summary()
     assert summary["swept_premium"] == 0.0
-    assert summary["unswept_premium"] == 15000.0
+    assert summary["unswept_premium"] == 11250.0
 
 
 @pytest.mark.asyncio
@@ -113,7 +113,7 @@ async def test_premium_recycling_rejected_proposal_does_not_spend_premium(clean_
 
     # Simulate human rejection (no execution fill recorded)
     # The ledger swept_premium must remain 0.0
-    assert get_unswept_premium() == 15000.0
+    assert get_unswept_premium() == 11250.0
 
 
 @pytest.mark.asyncio
@@ -149,7 +149,7 @@ async def test_premium_recycling_executed_proposal_marks_swept_and_prevents_doub
     # Verify swept premium was updated in ledger
     summary = get_paper_summary()
     assert summary["swept_premium"] == 10050.0
-    assert summary["unswept_premium"] == 4950.0
+    assert summary["unswept_premium"] == 1200.0  # 0.75 * 15000 - 10050 = 11250 - 10050
 
     # On the second run, unswept PnL ($4,950) is now below $10,050 threshold
     state2 = _make_state()

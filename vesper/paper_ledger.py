@@ -30,6 +30,7 @@ def _load_ledger() -> Dict[str, Any]:
                 "unrealized_pnl": 0.0,
                 "realized_pnl": 0.0,
                 "swept_premium": 0.0,
+                "tax_reserve_swept": 0.0,
                 "total_nlv": DEFAULT_STARTING_CASH,
                 "last_marked_at": datetime.now(timezone.utc).isoformat(),
             },
@@ -41,10 +42,12 @@ def _load_ledger() -> Dict[str, Any]:
             data = json.load(f)
             if not isinstance(data, dict):
                 raise ValueError("Ledger data is not a dict")
-            # Ensure swept_premium is initialized
+            # Ensure swept_premium/tax_reserve_swept are initialized
             acc = data.setdefault("account", {})
             if "swept_premium" not in acc:
                 acc["swept_premium"] = 0.0
+            if "tax_reserve_swept" not in acc:
+                acc["tax_reserve_swept"] = 0.0
             return data
     except Exception as e:
         logger.warning(f"Failed to load paper ledger: {e}")
@@ -55,6 +58,7 @@ def _load_ledger() -> Dict[str, Any]:
                 "unrealized_pnl": 0.0,
                 "realized_pnl": 0.0,
                 "swept_premium": 0.0,
+                "tax_reserve_swept": 0.0,
                 "total_nlv": DEFAULT_STARTING_CASH,
                 "last_marked_at": datetime.now(timezone.utc).isoformat(),
             },
@@ -212,13 +216,23 @@ def record_paper_fill(
 
     fills.append(fill_entry)
 
-    # If this fill is from a premium recycling proposal, mark the premium as swept
+    # If this fill is from a premium recycling proposal, mark the premium as swept.
+    # If it's from the tax-reserve sweep, mark that independent pool instead --
+    # the two id prefixes are mutually exclusive by construction, so a fill can
+    # only ever match one of these branches.
     if str(order_id).startswith("prop-recycle-"):
         current_swept = float(account.get("swept_premium", 0.0))
         account["swept_premium"] = round(current_swept + total_cost, 2)
         logger.info(
             f"♻️ [PREMIUM RECYCLED] Swept ${total_cost:,.2f} into {quantity}x {ticker} "
             f"(Total swept: ${account['swept_premium']:,.2f})"
+        )
+    elif str(order_id).startswith("prop-taxsweep-"):
+        current_tax_swept = float(account.get("tax_reserve_swept", 0.0))
+        account["tax_reserve_swept"] = round(current_tax_swept + total_cost, 2)
+        logger.info(
+            f"🏦 [TAX RESERVE SWEPT] Swept ${total_cost:,.2f} into {quantity}x {ticker} "
+            f"(Total tax-reserve swept: ${account['tax_reserve_swept']:,.2f})"
         )
 
     _save_ledger(ledger)
@@ -373,7 +387,14 @@ def get_paper_summary() -> Dict[str, Any]:
 
     realized_pnl = float(account.get("realized_pnl", 0.0))
     swept_premium = float(account.get("swept_premium", 0.0))
-    unswept_premium = max(0.0, round(realized_pnl - swept_premium, 2))
+    # 75% of cumulative realized P&L is the free-share pool's ceiling. This was
+    # 100% before the tax-reserve sweep below carved out the other 25% as an
+    # independent pool -- see the "TAX RESERVE SWEEP" section in
+    # vesper/nodes/playbooks.py for why these are two self-contained pools
+    # rather than one shared number split at sweep time.
+    unswept_premium = max(0.0, round(0.75 * realized_pnl - swept_premium, 2))
+    tax_reserve_swept = float(account.get("tax_reserve_swept", 0.0))
+    unswept_tax_reserve = max(0.0, round(0.25 * realized_pnl - tax_reserve_swept, 2))
 
     return {
         "initial_cash": init_cash,
@@ -383,6 +404,8 @@ def get_paper_summary() -> Dict[str, Any]:
         "realized_pnl": realized_pnl,
         "swept_premium": swept_premium,
         "unswept_premium": unswept_premium,
+        "tax_reserve_swept": tax_reserve_swept,
+        "unswept_tax_reserve": unswept_tax_reserve,
         "unrealized_pnl": float(account.get("unrealized_pnl", 0.0)),
         "open_positions_count": len(open_fills),
         "closed_trades_count": len(closed),
@@ -406,3 +429,20 @@ def get_unswept_premium() -> float:
     """Return available unswept realized options premium."""
     summary = get_paper_summary()
     return float(summary.get("unswept_premium", 0.0))
+
+
+def mark_tax_reserve_swept(amount: float) -> float:
+    """Mark an amount of realized P&L as swept into the tax reserve (25% pool)."""
+    ledger = _load_ledger()
+    account = ledger.setdefault("account", {})
+    current_swept = float(account.get("tax_reserve_swept", 0.0))
+    new_swept = round(current_swept + amount, 2)
+    account["tax_reserve_swept"] = new_swept
+    _save_ledger(ledger)
+    return new_swept
+
+
+def get_unswept_tax_reserve() -> float:
+    """Return available unswept 25% tax-reserve pool."""
+    summary = get_paper_summary()
+    return float(summary.get("unswept_tax_reserve", 0.0))

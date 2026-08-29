@@ -551,6 +551,48 @@ research pass done on this repo:
     premature spending if rejected.
   - Tested in `tests/test_premium_recycling.py`. (Live Webull trade-history premium mining
     remains future work).
+  - **BEHAVIOR CHANGE (superseded by the Tax Reserve Sweep below)**: this
+    pool's ceiling is now `unswept_premium = 0.75 * realized_pnl - swept_premium`
+    (was `realized_pnl - swept_premium`, i.e. 100%). The other 25% of
+    realized P&L is now reserved for the tax-sweep pool instead of being
+    available to the free-share engine. `tests/test_premium_recycling.py`'s
+    fixture-derived expected numbers were updated accordingly (0.75x of each
+    fixture's `realized_pnl`); the proposal-shape and threshold-message
+    assertions were unaffected.
+- **Tax Reserve Sweep — 25% of realized P&L to $SGOV (landed — paper ledger)**:
+  The other half of the split above. Independent pool, same source
+  (`realized_pnl`), same atomic-save ledger, own `tax_reserve_swept` field
+  and `mark_tax_reserve_swept`/`get_unswept_tax_reserve` functions mirroring
+  the free-share engine's `mark_premium_swept`/`get_unswept_premium` exactly.
+  Configured via `VESPER_TAX_RESERVE_TICKER` (default `$SGOV`, tracked
+  separately from the free-share ticker so the two pools could target
+  different assets if ever desired). Selectable via `--playbook tax_reserve`
+  (alias `taxsweep`); id prefix `prop-taxsweep-`.
+  - Computes `unswept_tax_reserve = 0.25 * realized_pnl - tax_reserve_swept`.
+  - **Whole-share sizing, deliberately NOT a 100-share block**: `qty = floor(unswept_tax_reserve / live_quote)`.
+    A mandatory tax set-aside sweeping only in expensive 100-share blocks
+    (~$10,000 of SGOV at ~$100/share) could sit fully unswept for a long time
+    on a smaller/newer account, defeating the point of setting money aside
+    "as you go." The free-share engine's 100-share block stays as-is — that
+    pool is framed as a discretionary bonus, where waiting for a full block is
+    fine and even thematically appropriate.
+  - Same fabrication and swept-only-on-fill guarantees as the free-share
+    engine: skips (never fabricates) on a missing live quote, and only marks
+    `tax_reserve_swept` in `record_paper_fill` on an actual fill, not at draft
+    time.
+  - The two pools are mutually exclusive by construction (`prop-recycle-` vs
+    `prop-taxsweep-` id prefixes), each with its own swept-tracking field, so
+    filling one never moves the other and neither pool's swept+unswept total
+    can exceed its own 75%/25% share of `realized_pnl`.
+  - `--playbook`'s CLI choices (`vesper.py`) gained `tax_reserve` alongside
+    the existing `recycle` entry.
+  - Tested in `tests/test_tax_reserve_sweep.py` (insufficient-reserve skip,
+    whole-share draft with a deliberately non-round quantity, draft-does-not-
+    sweep, rejected-proposal leaves reserve untouched, fill marks
+    `tax_reserve_swept` and shrinks the next draft, quote-unavailable skip,
+    `_load_ledger` migration of a ledger missing `tax_reserve_swept`, direct
+    `mark_tax_reserve_swept` accumulation, and pool-independence from the
+    free-share engine).
 - **0DTE Flow playbook live quote fetching (landed)**: Eliminates hardcoded
   `est_premium = 1.80` placeholder. `_fetch_0dte_option_quote` filters Webull's
   option chain strictly for contracts expiring today (`datetime.now(timezone.utc).date()`),
@@ -634,7 +676,8 @@ research pass done on this repo:
   doesn't simulate assignment), so the wheel-stock bucket is correctly wired
   but has no real caller yet either — same shape as the strike-vs-premium
   guard fix landing before collar-following needed it. The 25%-to-`$SGOV`
-  tax sweep remains backlog (see below); underlying-price-keyed swing-option
+  tax sweep (also formerly backlog) has since landed too -- see the
+  "Tax Reserve Sweep" bullet above; underlying-price-keyed swing-option
   stops (also mentioned in that same backlog list before) have since landed
   for paper positions -- see the next bullet, and the 15% sector-
   concentration bucket (also formerly backlog) has since landed too -- see
@@ -714,9 +757,16 @@ research pass done on this repo:
   a new `tests/conftest.py` autouse fixture that stubs `yfinance.Ticker`
   globally (a per-ticker deterministic stand-in, not a real sector) rather
   than exempting this feature from "no network in tests."
-- **Backlog, not yet built**: route 25% of high-yield distributions to
-  `$SGOV` for taxes automatically (an extension of the premium-recycling
-  engine's sweep logic, not a new mechanism).
+- **Backlog, not yet built**: this line used to read "route 25% of
+  high-yield distributions to `$SGOV` for taxes automatically." The general
+  case -- 25% of cumulative *realized P&L* -- has landed (see "Tax Reserve
+  Sweep" above). What's still backlog is the narrower, distributions-specific
+  variant: `paper_ledger.py`'s `realized_pnl` reflects closed-trade P&L only,
+  not incoming dividend/distribution cash from held positions, so a fund that
+  pays a distribution without a matching closed trade wouldn't feed the
+  sweep at all under the current mechanism. Closing this needs a real
+  distribution-tracking source (Webull dividend history or similar), not an
+  approximation from `realized_pnl`.
 
 ### AI agent architecture
 - **LLM-as-Bayesian-network-builder for explainable proposals.** An arXiv
