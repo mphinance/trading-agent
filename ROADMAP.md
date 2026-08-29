@@ -475,7 +475,12 @@ research pass done on this repo:
     remains future work).
 - **One strategy with zero code**: a delta-neutral "Thega" volatility harvest for high-IV binary
   events (100 shares + 1 ATM covered call + 3 ATM CSPs, net delta ≈0).
-- **`0dte_flow` tightening**: only run weeklies where IV>70%, sell puts at
+- **0DTE Flow playbook live quote fetching (landed)**: Eliminates hardcoded
+  `est_premium = 1.80` placeholder. `_fetch_0dte_option_quote` filters Webull's
+  option chain strictly for contracts expiring today (`datetime.now(timezone.utc).date()`),
+  fetching real bid/ask/last snapshots. If no contract expires today or quote fetch
+  fails, the proposal is skipped rather than fabricated. Tested in `tests/test_0dte_playbook.py`.
+- **`0dte_flow` tightening (backlog)**: only run weeklies where IV>70%, sell puts at
   0.30 delta or at major OI put walls, reject wide-spread chains, harvest ATM
   CSP vega on earnings week and BTC the next day.
 - **Portfolio risk rules missing from `vesper/risk.py`**: a 15% trailing

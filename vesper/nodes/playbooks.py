@@ -107,6 +107,95 @@ def _fetch_live_option_quote(
         return None
 
 
+def _fetch_0dte_option_quote(
+    underlying: str,
+    strike: float,
+    option_type: str = "CALL",
+) -> Optional[float]:
+    """Fetch live option price for a contract expiring TODAY (0DTE).
+
+    Blocking — wrap in asyncio.to_thread.
+    Returns price or None if Webull is unconfigured, no contract expires today, or no quote exists.
+    """
+    try:
+        from wb import Webull
+        from md import Market
+
+        wb = Webull()
+        if not wb.configured:
+            return None
+
+        mkt = Market(wb)
+        chain_res = mkt.option_chain(
+            underlying=underlying,
+            option_type=option_type.upper(),
+            strike_gte=strike - 0.01,
+            strike_lte=strike + 0.01,
+        )
+
+        contracts = []
+        if isinstance(chain_res, list):
+            contracts = chain_res
+        elif isinstance(chain_res, dict):
+            contracts = chain_res.get("data") or chain_res.get("contracts") or chain_res.get("list") or []
+
+        if not contracts:
+            return None
+
+        today = datetime.now(timezone.utc).date()
+        today_contracts = []
+        for c in contracts:
+            c_strike = float(c.get("strike_price") or c.get("strikePrice") or c.get("strike") or 0.0)
+            if abs(c_strike - strike) > 0.05:
+                continue
+
+            exp_str = c.get("expire_date") or c.get("expiration_date") or c.get("expiry") or c.get("start_date")
+            if not exp_str:
+                continue
+
+            try:
+                exp_date = datetime.strptime(str(exp_str)[:10], "%Y-%m-%d").date()
+                if exp_date == today:
+                    today_contracts.append(c)
+            except Exception:
+                continue
+
+        if not today_contracts:
+            return None
+
+        target_contract = today_contracts[0]
+        contract_sym = (
+            target_contract.get("symbol")
+            or target_contract.get("ticker")
+            or target_contract.get("contract_symbol")
+        )
+        if not contract_sym:
+            return None
+
+        snap_res = mkt.option_snapshot([contract_sym])
+        snap_data = (snap_res.get(contract_sym) or snap_res) if isinstance(snap_res, dict) else None
+        if not snap_data:
+            return None
+
+        last = snap_data.get("last") or snap_data.get("close")
+        if last and float(last) > 0:
+            return float(last)
+
+        bid = float(snap_data.get("bid") or snap_data.get("bid_price") or 0)
+        ask = float(snap_data.get("ask") or snap_data.get("ask_price") or 0)
+        if bid > 0 and ask > 0:
+            return round((bid + ask) / 2.0, 2)
+        if bid > 0:
+            return bid
+        if ask > 0:
+            return ask
+
+        return None
+    except Exception as e:
+        logger.debug(f"Could not fetch 0DTE option quote for {underlying} {strike} {option_type}: {e}")
+        return None
+
+
 def _fetch_leaps_option_quote(
     underlying: str,
     strike: float,
@@ -436,8 +525,13 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
             is_bullish = spot > flip
             side_type = "call" if is_bullish else "put"
             strike = round(spot + (1.0 if is_bullish else -1.0), 0)
-            
-            est_premium = 1.80  # Estimated 0DTE contract price
+
+            live_premium = await asyncio.to_thread(_fetch_0dte_option_quote, ticker, strike, side_type)
+            if live_premium is None or live_premium <= 0:
+                audit_notes.append(f"Skipped 0DTE {ticker} {side_type.upper()}: no live same-day option quote available")
+                continue
+
+            est_premium = round(live_premium, 2)
             qty = 1             # Strict 1-contract small account sizing
             cost = round(est_premium * 100 * qty, 2)
             stop_loss = round(est_premium * (1 - RiskEnforcer.STOP_LOSS_0DTE_PCT), 2)
@@ -460,7 +554,7 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
                 risk_reward_ratio=1.25,
             )
             proposals.append(prop)
-            audit_notes.append(f"Drafted 0DTE {ticker} {side_type.upper()} Strike {strike} (Spot={spot} vs Flip={flip})")
+            audit_notes.append(f"Drafted 0DTE {ticker} {side_type.upper()} Strike {strike} @ ${est_premium:.2f} (Spot={spot} vs Flip={flip})")
             continue
 
         # ── 2. TAO OF TRADING BOUNCE 2.0 & MOMENTUM PULLBACK PLAYBOOK ────────
