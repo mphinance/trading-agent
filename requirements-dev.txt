@@ -55,7 +55,9 @@ pandas-ta
 matplotlib
 mplfinance
 scipy
-yfinance       # market data in mcp_server/data.py (exercised by tests/test_backtest.py)
+yfinance       # market data in mcp_server/data.py (tests/test_backtest.py) and
+               # vesper/sector.py's ticker->sector lookup (also in requirements.txt now --
+               # it's a production dep of risk_gate_node's sector-concentration bucket)
 
 # Transitive from vesper/nodes/__init__.py's node imports -- every playbook/
 # risk/execution test collects the whole vesper.nodes package, which pulls

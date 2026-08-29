@@ -43,6 +43,66 @@ def _count_open_positions_live() -> tuple[int, float]:
         return 0, 0.0
 
 
+def _sector_notional_paper() -> Dict[str, float]:
+    """Sector -> total open notional, from the paper ledger's own tracked
+    fills. `ticker` on a paper fill is already the clean underlying
+    (OrderProposal.ticker is separate from contract_symbol/strike/expiry/
+    option_type -- see vesper/state.py -- and record_paper_fill persists
+    that same `ticker` field), so no OCC/contract-symbol parsing is needed
+    here, unlike the live-mode OPTION gap below."""
+    from vesper.paper_ledger import get_paper_positions
+    from vesper.sector import get_sector
+
+    out: Dict[str, float] = {}
+    for pos in get_paper_positions():
+        sector = get_sector(pos.get("ticker", ""))
+        if sector is None:
+            logger.info(f"Sector concentration: skipping {pos.get('ticker')} (sector unresolved)")
+            continue
+        out[sector] = out.get(sector, 0.0) + float(pos.get("total_cost") or 0.0)
+    return out
+
+
+def _sector_notional_live() -> Dict[str, float]:
+    """Sector -> total open notional, from wb.portfolio()'s live positions.
+    Blocking -- wrap in asyncio.to_thread.
+
+    EQUITY positions are counted in full: wb.py's `symbol` field IS the
+    ticker for equities, so vesper.sector.get_sector resolves it directly.
+
+    OPTION positions are skipped, with an audit note (see risk_gate_node):
+    wb.py's _position() normalizer has no underlying-ticker field distinct
+    from the option contract symbol (confirmed by reading _position() and
+    grepping wb.py + docs/webull-api/ for "underlying" -- zero hits), so
+    there is no way to resolve an OPTION position's sector without guessing
+    at the underlying from the contract symbol. That would be exactly the
+    kind of fabrication rule 1 forbids, so this skips rather than parses an
+    assumed OCC root symbol. Same honesty pattern as the existing
+    wheel-stock live-mode gap in _count_open_positions_live above.
+    """
+    from wb import Webull
+    from vesper.sector import get_sector
+
+    wb = Webull()
+    if not wb.configured:
+        return {}
+    out: Dict[str, float] = {}
+    for account in wb.portfolio().get("accounts", []):
+        for pos in account.get("positions", []):
+            if "OPTION" in str(pos.get("instrument_type", "")).upper():
+                logger.info(
+                    f"Sector concentration: OPTION position {pos.get('symbol')} skipped in "
+                    "live mode (underlying ticker not exposed by wb.py yet)"
+                )
+                continue
+            sector = get_sector(pos.get("symbol", ""))
+            if sector is None:
+                logger.info(f"Sector concentration: skipping {pos.get('symbol')} (sector unresolved)")
+                continue
+            out[sector] = out.get(sector, 0.0) + float(pos.get("market_value") or 0.0)
+    return out
+
+
 def _count_open_positions_paper() -> tuple[int, float]:
     """(open_long_option_count, wheel_stock_notional) from the paper ledger's
     own tracked fills, which DO carry strategy_type -- see paper_ledger.py's
@@ -99,11 +159,17 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
     # above for why they're not interchangeable).
     if mode == "dry_run":
         open_long_option_count, wheel_stock_notional = _count_open_positions_paper()
+        sector_notional = _sector_notional_paper()
     else:
         open_long_option_count, wheel_stock_notional = await asyncio.to_thread(_count_open_positions_live)
+        sector_notional = await asyncio.to_thread(_sector_notional_live)
         audit_notes.append(
             "Capital allocation: wheel-stock bucket not enforced in live mode "
             "(no strategy tagging on live broker positions) — see ROADMAP.md."
+        )
+        audit_notes.append(
+            "Capital allocation: sector-concentration bucket does not count live OPTION "
+            "positions (no underlying-ticker field exposed by wb.py yet) — see ROADMAP.md."
         )
 
     from vesper.llm import audit_proposal_risk, is_llm_enabled
@@ -125,6 +191,31 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
                 # batch -- otherwise two long-option proposals in one pass
                 # could both pass a "max 1" check independently.
                 open_long_option_count += 1
+        if is_valid:
+            # Only a proposal that ADDS exposure runs the sector-concentration
+            # bucket (mirrors check_sector_concentration's own is_closing/side
+            # gate) -- skip the sector lookup entirely for a SELL/closing
+            # proposal rather than paying for a network call whose result
+            # would be discarded.
+            is_adding_exposure = prop.side.upper() in ("BUY", "LONG") and not getattr(prop, "is_closing", False)
+            sector = None
+            if is_adding_exposure:
+                from vesper.sector import get_sector
+                sector = await asyncio.to_thread(get_sector, prop.ticker)
+            is_valid, err = RiskEnforcer.check_sector_concentration(
+                prop,
+                sector=sector,
+                sector_notional=sector_notional,
+                account_equity=account_equity,
+            )
+            if is_valid and sector and is_adding_exposure:
+                # Same same-batch-stacking rationale as open_long_option_count
+                # above: a proposal in this batch that will itself add sector
+                # notional must count against the next one in the same batch.
+                added = prop.estimated_cost or (
+                    prop.limit_price * prop.quantity * (100 if prop.asset_type == "OPTION" else 1)
+                )
+                sector_notional[sector] = sector_notional.get(sector, 0.0) + added
         if is_valid:
             # Qualitative LLM Red-Team Audit (if OpenRouter active)
             if is_llm_enabled():

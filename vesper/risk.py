@@ -181,3 +181,69 @@ class RiskEnforcer:
                 )
 
         return True, None
+
+    # Sector-concentration bucket. Distinct from the two buckets above:
+    # those key off strategy_type/asset_type tags this codebase already
+    # tracks; this one keys off a ticker's GICS sector, which nothing else
+    # here resolves -- vesper/sector.py does that lookup and is the only
+    # caller-side dependency (see check_sector_concentration's `sector`
+    # argument below). This function stays pure/no-I/O like its siblings.
+    MAX_SECTOR_CONCENTRATION_PCT = 0.15
+
+    @classmethod
+    def check_sector_concentration(
+        cls,
+        proposal: OrderProposal,
+        sector: Optional[str],
+        sector_notional: Dict[str, float],
+        account_equity: float,
+        max_sector_pct: float = MAX_SECTOR_CONCENTRATION_PCT,
+    ) -> Tuple[bool, Optional[str]]:
+        """Pure, deterministic bucket check -- mirrors
+        check_capital_allocation_buckets's shape. Callers (risk_gate_node)
+        are responsible for resolving `sector` (vesper/sector.get_sector)
+        and building `sector_notional` from whatever position source is
+        authoritative for the current mode.
+
+        Caps notional in any single GICS sector at MAX_SECTOR_CONCENTRATION_PCT
+        (15%) of account equity, counting only proposals/positions that ADD
+        exposure (a BUY that isn't closing an existing short) -- reducing or
+        closing exposure never runs this guard, same precedent as orders.py's
+        cancel path always being allowed.
+
+        DELIBERATE fail-closed choice, and NOT simply copy-pasted from the
+        wheel-stock bucket above: when `sector` is None for a proposal that
+        IS adding exposure, this REJECTS rather than silently passing. The
+        wheel-stock bucket only activates on an explicit strategy_type tag
+        (an opt-in condition, not a lookup failure), so a proposal without
+        that tag correctly skips it. Here, failing to resolve a sector is a
+        DATA gap on a bucket that is otherwise always active for a BUY, so
+        rule 2 (guards fail closed on missing/ambiguous data) applies
+        directly: an unresolvable ticker must not be silently treated as
+        "no sector, no cap."
+        """
+        is_adding_exposure = (
+            proposal.side.upper() in ("BUY", "LONG")
+            and not getattr(proposal, "is_closing", False)
+        )
+        if not is_adding_exposure:
+            return True, None
+
+        if sector is None:
+            return False, (
+                f"Capital allocation: could not resolve sector for {proposal.ticker} -- "
+                f"sector-concentration bucket cannot be verified, failing closed."
+            )
+
+        added_notional = proposal.estimated_cost or (
+            proposal.limit_price * proposal.quantity * (100 if proposal.asset_type == "OPTION" else 1)
+        )
+        projected = sector_notional.get(sector, 0.0) + added_notional
+        cap = account_equity * max_sector_pct
+        if projected > cap:
+            return False, (
+                f"Capital allocation: {sector} sector notional would reach ${projected:,.2f}, "
+                f"exceeding the {max_sector_pct:.0%} cap (${cap:,.2f}) of account equity."
+            )
+
+        return True, None

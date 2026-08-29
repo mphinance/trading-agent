@@ -633,11 +633,12 @@ research pass done on this repo:
   equity proposal yet (the ADX/IV router's Wheel branch only sells CSPs, it
   doesn't simulate assignment), so the wheel-stock bucket is correctly wired
   but has no real caller yet either — same shape as the strike-vs-premium
-  guard fix landing before collar-following needed it. Sector-swing buckets
-  and the 25%-to-`$SGOV` tax sweep remain backlog (see below);
-  underlying-price-keyed swing-option stops (also mentioned in that same
-  backlog list before) have since landed for paper positions -- see the next
-  bullet. Tested in `tests/test_circuit_breaker.py` and
+  guard fix landing before collar-following needed it. The 25%-to-`$SGOV`
+  tax sweep remains backlog (see below); underlying-price-keyed swing-option
+  stops (also mentioned in that same backlog list before) have since landed
+  for paper positions -- see the next bullet, and the 15% sector-
+  concentration bucket (also formerly backlog) has since landed too -- see
+  two bullets down. Tested in `tests/test_circuit_breaker.py` and
   `tests/test_portfolio_governance.py`.
 - **Underlying-keyed swing-option stops (landed, paper positions only)**:
   the ADX/IV Router's LEAPS branch (Branch 3) and Synthetic Long branch
@@ -668,9 +669,54 @@ research pass done on this repo:
   band, skips on missing technicals/basis-type/basis-key, both option-type
   directions, and the paper-ledger-to-`MonitoredPosition` wiring) and
   `tests/test_adx_iv_router.py` (basis selection order on the drafting side).
-- **Backlog, not yet built**: a 15% sector-concentration bucket; route 25% of
-  high-yield distributions to `$SGOV` for taxes automatically (an extension
-  of the premium-recycling engine's sweep logic, not a new mechanism).
+- **15% sector-concentration bucket (landed)**: a third capital allocation
+  bucket alongside the two above, capping total notional in any single GICS
+  sector at `RiskEnforcer.MAX_SECTOR_CONCENTRATION_PCT` (15%) of account
+  equity. `vesper/sector.py` is a new, deliberately I/O module (kept out of
+  `risk.py`, which stays pure/no-I/O by its own docstring convention) that
+  resolves a ticker to its sector via `yfinance.Ticker(ticker).info["sector"]`
+  and caches the result (including a `None` miss, so an unclassifiable
+  ticker doesn't re-hit the network every pass) for the life of the process
+  -- sector classification is static metadata, not a live market value, so
+  this is not a rule-1 "fabricate market data" violation. TDPro's
+  `get_sector_flow` was evaluated and ruled out: it returns a market-wide
+  payload of GICS sector ETFs regardless of any `symbol`/`ticker` argument
+  passed (the same unknown-key footgun this file already documents for
+  `get_conviction`), not a per-ticker sector classification.
+  `RiskEnforcer.check_sector_concentration` (pure, mirrors
+  `check_capital_allocation_buckets`'s shape) is wired into `risk_gate_node`
+  the same way, sourcing sector notional from `paper_ledger.get_paper_positions()`
+  in dry-run and `wb.portfolio()` in live mode. **Deliberately fails closed,
+  unlike the wheel-stock bucket above**: when a BUY proposal's sector can't
+  be resolved, this bucket REJECTS rather than silently passing -- the
+  wheel-stock bucket only activates on an explicit `strategy_type` tag (an
+  opt-in condition where "no tag" correctly means "skip"), but an
+  unresolvable sector on an otherwise-always-active bucket is a genuine data
+  gap, and rule 2 says guards fail closed on that, not open. **Known gap,
+  not fabricated around**: live-mode OPTION positions are skipped (with an
+  explicit audit note) rather than counted, because `wb.py`'s `_position()`
+  normalizer has no underlying-ticker field distinct from the option
+  contract symbol -- confirmed by reading `_position()` in full and grepping
+  `wb.py` + `docs/webull-api/` for "underlying" (zero hits). Guessing an
+  underlying from the OCC contract symbol was rejected as exactly the kind
+  of fabrication rule 1 forbids; closing this needs `wb.py`'s normalizer to
+  actually surface that field (if the raw SDK payload has one -- unverified
+  this session) or a local live-fill record store, not a parsed guess.
+  Live-mode EQUITY positions are NOT affected by this gap and are enforced
+  in full, immediately -- `wb.py`'s `symbol` field IS the ticker for
+  equities. `yfinance` moved from `requirements-dev.txt`-only to
+  `requirements.txt`, since `risk_gate_node` is a production code path, not
+  test/backtest-only. Tested in `tests/test_sector_concentration.py` (pure
+  function cap/boundary/fail-closed cases, dry-run wiring including same-
+  batch stacking and existing-paper-position counting, live-mode equity
+  counting plus the OPTION-skip audit note, and `vesper/sector.get_sector`'s
+  caching of both hits and misses); the suite's hermetic contract is kept by
+  a new `tests/conftest.py` autouse fixture that stubs `yfinance.Ticker`
+  globally (a per-ticker deterministic stand-in, not a real sector) rather
+  than exempting this feature from "no network in tests."
+- **Backlog, not yet built**: route 25% of high-yield distributions to
+  `$SGOV` for taxes automatically (an extension of the premium-recycling
+  engine's sweep logic, not a new mechanism).
 
 ### AI agent architecture
 - **LLM-as-Bayesian-network-builder for explainable proposals.** An arXiv

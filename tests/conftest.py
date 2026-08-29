@@ -133,6 +133,54 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolated_sector_cache(monkeypatch):
+    """vesper/sector.py's _SECTOR_CACHE is a module-level, in-process dict
+    (deliberately NOT a disk-backed state file -- sector classification is
+    static metadata, not market data, so it's cached for the life of the
+    process; see vesper/sector.py's own docstring). Reset it fresh for every
+    test so a mocked or unresolvable sector value cached by one test can
+    never leak into another within the same pytest process -- the same
+    order-dependent-leak concern _isolated_vesper_state above exists to
+    prevent, just for an in-memory dict instead of an on-disk file. A
+    test-specific reset (there are several in tests/test_sector_concentration.py)
+    is harmless on top of this, same as the note on _isolated_vesper_state.
+    """
+    monkeypatch.setattr("vesper.sector._SECTOR_CACHE", {})
+
+
+@pytest.fixture(autouse=True)
+def _stub_sector_network_lookup(monkeypatch):
+    """vesper.sector.get_sector calls out to yfinance over the network on a
+    cache miss, which the suite's hermetic contract (no network, no broker,
+    no credentials -- see CLAUDE.md's Tests section) forbids. risk_gate_node
+    calls get_sector for every proposal that adds exposure (the sector-
+    concentration bucket in vesper/risk.py), so without this, any test that
+    drafts an ordinary BUY proposal through risk_gate_node would silently
+    depend on network access and, offline, get None back -- which the bucket
+    correctly fails closed on, incidentally rejecting proposals that have
+    nothing to do with sector logic.
+
+    Stubbed at the yfinance.Ticker level, not by replacing get_sector itself,
+    so get_sector's real caching logic still runs under test everywhere;
+    tests that exercise sector logic directly (tests/test_sector_concentration.py)
+    layer their own patch("yfinance.Ticker", ...) / patch("vesper.sector.get_sector", ...)
+    on top of this inside their own `with` block. The stand-in sector name is
+    deliberately not a real GICS sector (so it can't be mistaken for one) and
+    is a stable per-ticker value, so two different tickers never collide into
+    the same sector bucket by accident.
+    """
+    class _StubYfinanceTicker:
+        def __init__(self, ticker):
+            self._ticker = ticker
+
+        @property
+        def info(self):
+            return {"sector": f"TEST_SECTOR_{self._ticker.upper()}"}
+
+    monkeypatch.setattr("yfinance.Ticker", _StubYfinanceTicker)
+
+
 @pytest.fixture
 def levels():
     """A realistic td.levels() payload, shaped like a real SPY response."""

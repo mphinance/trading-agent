@@ -65,3 +65,9 @@ cryptography
 # Discord gateway client with dynamic interactive approval buttons
 discord.py
 
+# vesper/sector.py: ticker->sector lookup for the 15% sector-concentration
+# risk bucket in vesper/risk.py (risk_gate_node calls it on every proposal
+# that adds exposure, so it's on the production path, not test-only -- see
+# requirements-dev.txt's own yfinance line, which test_backtest.py also uses).
+yfinance
+
