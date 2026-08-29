@@ -43,6 +43,24 @@ for the Starter (Dealer-HUD) vs. Pro (TDPro MCP + Vesper) ecosystem split.
 
 ## 🚧 Known Gaps (not yet a Module, but tracked)
 
+**Pre-emptive fix, 2026-08-28 — `execution_guard.py`'s notional check for a
+short option used the premium, not the strike.** Found while scoping the
+collar-following idea below (its first real caller): selling an option to
+*open* a position (a cash-secured put, a covered call) commits capital equal
+to `strike * 100 * quantity` on assignment, not the few dollars of premium
+in `limit_price` — the old formula (`limit_price * 100 * quantity`) would
+have let a short option worth $19,000 of real risk sail past a $2,500
+`VESPER_MAX_NOTIONAL` cap because the guard was looking at a $250 premium
+figure instead. Nothing in this codebase constructed a SELL-to-open option
+payload yet (only `monitor.py`'s exit cascade sells options, and always to
+*close* an existing tracked position, where the premium-based market value
+*is* the right figure) — fixed now, before the collar-following strategy
+below becomes the first thing that actually needs it. Payloads must now
+include `strike` for a SELL option, or `is_closing: True` if it's closing an
+existing long instead of opening a new short (`monitor.py` already sets
+this). Guard raises `GuardError` rather than silently under-counting if
+neither is present. 4 new tests in `tests/test_execution_guard.py`.
+
 **Start here, in this order** — cheapest/lowest-risk first, the one thing
 that actually needs careful design saved for last so it doesn't get rushed:
 

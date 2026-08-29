@@ -142,8 +142,39 @@ class ExecutionGuard:
             )
 
         limit_price = float(payload.get("limit_price") or 0)
-        multiplier = 100.0 if str(payload.get("asset_type", "")).upper() == "OPTION" else 1.0
-        notional = quantity * limit_price * multiplier
+        is_option = str(payload.get("asset_type", "")).upper() == "OPTION"
+        multiplier = 100.0 if is_option else 1.0
+
+        is_opening_short_option = (
+            is_option
+            and str(payload.get("side", "")).upper() == "SELL"
+            and not payload.get("is_closing", False)
+        )
+        if is_opening_short_option:
+            # Selling an option to OPEN a new position (a cash-secured put, a
+            # covered call) commits capital equal to the strike, not the
+            # premium collected -- limit_price here is a few dollars of
+            # premium while the real obligation on assignment is
+            # strike*100*quantity, which can be 10-100x larger. Using
+            # limit_price for this branch would let a short option sail past
+            # VESPER_MAX_NOTIONAL while the guard believes it's looking at a
+            # tiny order. Require the strike explicitly rather than silently
+            # under-counting the risk. (A SELL that's *closing* an existing
+            # long position — monitor.py's exit cascade — sets
+            # payload["is_closing"]=True and skips this: for a close, the
+            # market value limit_price*100*qty is the correct figure, not
+            # the strike.)
+            strike = payload.get("strike")
+            if strike is None:
+                raise GuardError(
+                    "cannot assess risk of a short option (side=SELL, asset_type=OPTION) "
+                    "without a strike price in the payload — refusing rather than "
+                    "under-counting notional from the premium alone"
+                )
+            notional = quantity * float(strike) * multiplier
+        else:
+            notional = quantity * limit_price * multiplier
+
         if notional and notional > config["max_notional"]:
             raise GuardError(
                 f"order notional ~${notional:,.2f} exceeds VESPER_MAX_NOTIONAL "

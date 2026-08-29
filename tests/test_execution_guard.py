@@ -125,3 +125,55 @@ def test_place_calls_broker_fn_exactly_once_on_success(monkeypatch, guard):
 def test_unknown_ticket_id_rejected(guard):
     with pytest.raises(GuardError, match="unknown"):
         guard.place("not-a-real-ticket", dict(BASE_PAYLOAD), lambda: {"status": "ok"})
+
+
+# ── SELL-to-open option notional: strike, not premium ──────────────────────
+# A short option's real capital commitment is the strike, not the few
+# dollars of premium in limit_price. Regression tests for the bug where a
+# cash-secured put could sail past VESPER_MAX_NOTIONAL because the guard was
+# reading the premium instead of the strike.
+
+def test_sell_to_open_option_requires_strike(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    payload = {
+        "symbol": "AAPL", "side": "SELL", "quantity": 1,
+        "limit_price": 2.50, "asset_type": "OPTION",
+    }
+    with pytest.raises(GuardError, match="strike"):
+        guard.preview("p1", payload)
+
+
+def test_sell_to_open_option_notional_uses_strike_not_premium(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "5000")
+    # $2.50 premium * 100 = $250 (would pass a $5000 cap easily), but the
+    # real commitment is a $190 strike * 100 = $19,000 -- must be rejected.
+    payload = {
+        "symbol": "AAPL", "side": "SELL", "quantity": 1,
+        "limit_price": 2.50, "asset_type": "OPTION", "strike": 190.0,
+    }
+    with pytest.raises(GuardError, match="notional"):
+        guard.preview("p1", payload)
+
+
+def test_sell_to_open_option_within_strike_based_cap_passes(monkeypatch, guard):
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "25000")
+    payload = {
+        "symbol": "AAPL", "side": "SELL", "quantity": 1,
+        "limit_price": 2.50, "asset_type": "OPTION", "strike": 190.0,
+    }
+    guard.preview("p1", payload)  # should not raise
+
+
+def test_sell_to_close_option_uses_premium_not_strike(monkeypatch, guard):
+    """monitor.py's exit cascade closes an existing long option position --
+    limit_price*100*qty (the market value) is correct here, and no strike
+    should be required (a paper/legacy fill may not carry one)."""
+    monkeypatch.setenv("VESPER_TRADING", "1")
+    monkeypatch.setenv("VESPER_MAX_NOTIONAL", "5000")
+    payload = {
+        "symbol": "AAPL", "side": "SELL", "quantity": 1,
+        "limit_price": 2.50, "asset_type": "OPTION", "is_closing": True,
+    }
+    guard.preview("p1", payload)  # should not raise -- no strike needed to close

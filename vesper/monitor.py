@@ -268,6 +268,12 @@ class PositionMonitor:
             "limit_price": pos.current_price,
             "order_type": "MARKET",
             "asset_type": pos.asset_type,
+            # This SELL closes a position monitor.py already tracks as open --
+            # the market value (limit_price*100*qty) is the right notional
+            # figure here, not the strike. is_closing=True tells the guard
+            # not to apply the SELL-to-open strike-based check (see
+            # execution_guard.py) meant for a *new* short option position.
+            "is_closing": True,
         }
 
         try:

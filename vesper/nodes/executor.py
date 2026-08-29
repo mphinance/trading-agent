@@ -171,6 +171,10 @@ async def _execute_webull(prop: OrderProposal) -> ExecutionResult:
         "quantity": prop.quantity,
         "asset_type": prop.asset_type,
         "time_in_force": "DAY",
+        # execution_guard needs this for a SELL option's notional (strike,
+        # not premium, is the real capital at risk) -- harmless for
+        # everything else, guard only reads it on that one branch.
+        "strike": prop.strike,
     }
 
     # Guards run before the ticket exists at all — TradingDisabled/GuardError
@@ -206,6 +210,7 @@ async def _execute_public(prop: OrderProposal) -> ExecutionResult:
                 "order_type": prop.order_type,
                 "limit_price": prop.limit_price,
                 "asset_type": prop.asset_type,
+                "strike": prop.strike,
             }
 
             # Fetch live buying power from Public portfolio if available
