@@ -43,6 +43,13 @@ async def test_playbooks_node_generates_2x_leveraged_proposal():
                 ema_stack="BULLISH",
                 atr_14=4.0,
                 composite_score=8.5,
+                # Bounce 2.0's entry rules require all of these explicitly
+                # (see tests/test_risk_and_bounce.py) -- this fixture's job is
+                # exercising the 2x-leveraged-proxy path, which only runs once
+                # a primary proposal exists, so it needs a fully valid entry.
+                slow_k=32.0,
+                rsi_2=12.0,
+                rsi_2_prev=8.0,
             )
         },
         "options_audits": {},

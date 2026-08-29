@@ -56,10 +56,28 @@ that actually needs careful design saved for last so it doesn't get rushed:
 3. **`PublicBrokerClient` buying-power lookup (done)**: Added `get_buying_power()`
    to `PublicBrokerClient` reading portfolio cash/purchasing power and plumbed
    into `ExecutionGuard`'s `preview()` handshake in `vesper/nodes/executor.py`.
-4. **Bounce 2.0 precision (done)**: Added Slow Stochastic(8,3)≤40 pullback filter,
-   `RSI(2)` dip trigger, and true Keltner Channel math (`ta.kc` length 14, 2x ATR)
-   in `mcp_server/technicals.py`, `vesper/state.py`, `vesper/nodes/analyst.py`,
-   and `vesper/nodes/playbooks.py`.
+4. **Bounce 2.0 precision — indicators were real, the entry condition wasn't
+   using them. Fixed.** `mcp_server/technicals.py` genuinely computes Slow
+   Stochastic(8,3,3) and RSI(2) correctly (`ta.stoch(k=8,...)`, `ta.rsi(...,
+   length=2)`) and `vesper/state.py`/`analyst.py` correctly plumb them
+   through — that part of the original "done" claim was accurate. What
+   wasn't: `playbooks_node`'s actual `if` condition never read `rsi_2`/
+   `rsi_2_prev` at all (the RSI(2) dip-then-reset trigger — arguably the
+   most specific, load-bearing part of "Bounce 2.0" — simply wasn't gating
+   anything), and the Action Zone and Slow Stochastic checks were both OR'd
+   against a bare `rsi_14 > 45`/`<= 55`, which let almost any mildly bullish
+   reading through regardless of whether price had actually pulled back —
+   reintroducing the exact "trades on any bullish RSI" shape this playbook
+   was rewritten to get away from in the first place. The existing test
+   (`test_playbooks_node_synthesizes_bounce_2_proposal`) didn't catch this
+   because its fixture didn't set `rsi_2`/`slow_k`/`keltner_lower` at all —
+   it was exercising the loophole path, not the documented rules. Fixed: all
+   six rules are now required (no OR-bypass), missing `rsi_2`/`slow_k` data
+   means "don't draft" rather than "assume it passes," and 4 new regression
+   tests in `tests/test_risk_and_bounce.py` pin the exact failure this
+   caused (rejects outside the Action Zone even with bullish RSI, rejects
+   without the RSI(2) dip-reset, rejects without stochastic data, rejects
+   stochastic above the documented 40 threshold).
 5. **Module 2's inbound ingestion layer + auth — Telegram side now done and
    started; Discord and the webhook/aiohttp option remain open.**
    `create_inbound_app()` (aiohttp) with Telegram secret-token verification,

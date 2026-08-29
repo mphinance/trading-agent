@@ -102,31 +102,50 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
             continue
 
         # ── 2. TAO OF TRADING BOUNCE 2.0 & MOMENTUM PULLBACK PLAYBOOK ────────
-        # Rules:
+        # Rules (all six required — this is a mean-reversion pullback entry,
+        # not a breakout filter; an earlier version of this playbook OR'd the
+        # action-zone and stochastic-exhaustion checks against a bare
+        # `rsi_14 > 45`/`<= 55`, which let almost any mildly-bullish reading
+        # through regardless of whether price had actually pulled back or the
+        # RSI(2) dip fired — the exact "trades on any bullish RSI" shape this
+        # playbook was rewritten to get away from in the first place. Missing
+        # data (rsi_2/slow_k/keltner unavailable) means "don't draft," not
+        # "assume it passes" — this is candidate generation, not the safety
+        # gate, but a proposal Vesper can't actually justify isn't worth
+        # showing a human either):
         # 1. Bullish EMA stack (8 > 21 > 34 > 55 > 89)
         # 2. ADX(14) >= 18 (trend strength)
-        # 3. Pullback into Keltner Action Zone (between EMA 21 and Keltner lower band, or ±1.5-2.0 ATR)
+        # 3. Pullback into Keltner Action Zone (between EMA 21 and Keltner lower band, or ±1.5 ATR)
         # 4. Slow Stochastic(8,3) <= 40 (pullback oversold exhaustion)
-        # 5. RSI(2) dip trigger (rsi_2 <= 10 or rsi_2_prev <= 10)
+        # 5. RSI(2) dip trigger: dipped to <=10 (this or the prior bar), now back above 10
         # 6. Not overbought (RSI(14) <= 68)
         is_bullish_trend = (tech.ema_stack == "BULLISH") or (tech.ema_8 and tech.ema_21 and tech.ema_8 >= tech.ema_21)
         adx_valid = (tech.adx_14 is None) or (tech.adx_14 >= 18.0)
-        
+
         entry_price = tech.close
         atr = tech.atr_14 or (entry_price * 0.03)
         ema_21 = tech.ema_21 or entry_price
-        
-        # True Keltner Action Zone (length 14, 2x ATR)
+
+        # True Keltner Action Zone (length 14, 2x ATR) — required, not a fallback.
         keltner_lower = tech.keltner_lower or (ema_21 - (2.0 * atr))
-        keltner_upper = tech.keltner_upper or (ema_21 + (2.0 * atr))
         in_action_zone = (entry_price >= keltner_lower) and (entry_price <= ema_21 + (1.5 * atr))
 
-        # Slow Stochastic (8,3) <= 40 filter
-        stoch_oversold = (tech.slow_k is None) or (tech.slow_k <= 45.0) or (tech.rsi_14 <= 55.0)
+        # Slow Stochastic(8,3) <= 40 — the documented threshold, no rsi_14 escape hatch.
+        stoch_oversold = tech.slow_k is not None and tech.slow_k <= 40.0
+
+        # RSI(2) dip-then-reset: dipped to <=10 on this bar or the prior one,
+        # and has now crossed back above 10 (rsi_2 > 10). Both readings must
+        # be present -- an unavailable rsi_2 means this trigger didn't fire,
+        # not that it's assumed to have fired.
+        rsi_2_trigger = (
+            tech.rsi_2 is not None and tech.rsi_2_prev is not None
+            and tech.rsi_2 > 10.0
+            and (tech.rsi_2_prev <= 10.0 or tech.rsi_2 <= 10.0)
+        )
 
         not_overbought = tech.rsi_14 <= 68.0
 
-        if is_bullish_trend and (in_action_zone or tech.rsi_14 > 45) and not_overbought and adx_valid and stoch_oversold:
+        if is_bullish_trend and in_action_zone and rsi_2_trigger and stoch_oversold and not_overbought and adx_valid:
             # Stop loss 1.5 ATR below entry / 21 EMA
             stop_loss = round(min(entry_price - (atr * 1.5), ema_21 - (atr * 1.0)), 2)
             if stop_loss >= entry_price:
