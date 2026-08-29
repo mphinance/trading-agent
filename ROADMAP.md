@@ -767,6 +767,33 @@ research pass done on this repo:
   concentration bucket (also formerly backlog) has since landed too -- see
   two bullets down. Tested in `tests/test_circuit_breaker.py` and
   `tests/test_portfolio_governance.py`.
+- **Scoped but deliberately NOT built tonight: a live-position metadata
+  registry.** Three separate features landed 2026-08-29/30 (wheel-stock
+  bucket, underlying-keyed swing-option stops, earnings-week CSP vega
+  harvest) all hit the identical wall: Webull's own position API
+  (`wb.py`'s `_position()`) carries no strategy tag, no link back to the
+  order that created it, and no field distinguishing an option position's
+  underlying ticker from its own contract symbol — so each of these three
+  features works correctly in paper mode and silently does nothing in live
+  mode. The obvious fix — a local JSON registry (same atomic-write pattern
+  as `halt.py`/`paper_ledger.py`) that records `strategy_type`/
+  `underlying_stop_type`/`earnings_exit_date` at the moment `executor.py`
+  places a live order, keyed so `monitor.py`'s `poll_webull_positions()` can
+  look the metadata back up — was scoped and then deliberately NOT built,
+  because the lookup key can't be verified without live Webull access this
+  session doesn't have: `poll_webull_positions()`'s `sym` field for an
+  OPTION position is inferred to be some contract-style string (`len(sym) >
+  6`), not the plain ticker or a documented OCC symbol, and nothing in this
+  codebase has ever confirmed its exact format. Building the record-at-
+  order-time half would have been safe and easy; wiring the lookup half in
+  without being able to verify it actually matches real Webull position
+  data risked creating a feature that *looks* like it closes this gap but
+  silently never matches anything — worse than the current honest "always
+  None" in live mode, because it would read as fixed when it isn't. **Next
+  session, with live Webull access**: place one small real option order,
+  inspect what `wb.portfolio()`'s raw position payload actually contains
+  for `symbol`/`instrument_id` on an OPTION line, confirm the join key
+  against it, *then* build both halves of the registry together.
 - **Underlying-keyed swing-option stops (landed, paper positions only)**:
   the ADX/IV Router's LEAPS branch (Branch 3) and Synthetic Long branch
   (Branch 4) now draft `OrderProposal.underlying_stop_type="underlying_level"`
