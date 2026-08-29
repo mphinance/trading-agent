@@ -50,3 +50,13 @@ matplotlib
 mplfinance
 scipy
 yfinance       # market data in mcp_server/data.py (exercised by tests/test_backtest.py)
+
+# Transitive from vesper/nodes/__init__.py's node imports -- every playbook/
+# risk/execution test collects the whole vesper.nodes package, which pulls
+# these in even though no test calls into them directly. A prior "reconcile"
+# pass (29077a6) verified this file against a grep of direct test imports
+# but not against an actual clean-venv `pip install -r requirements-dev.txt
+# && pytest --collect-only`, which is the only check that actually catches a
+# transitive gap like this -- both failed collection outright without them.
+tradingview_screener  # mcp_server/screener.py, via vesper.nodes.regime -> mcp_server.market_top
+fastmcp               # tickertrace_mcp.py, via vesper.nodes.scanner
