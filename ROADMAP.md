@@ -573,7 +573,7 @@ kind of system.
   what `scanner_node` runs tomorrow, not just a score after the fact. Also
   worth stealing: risk-segmented playbook "personas" (maps onto the existing
   `--playbook` flag) and continuous streaming over interval polling.
-- **Hedge-vs-directional options flow classification (pure classifier landed)**:
+- **Hedge-vs-directional options flow classification (landed & wired into scanner)**:
   `vesper/flow_classifier.py` implements pure deterministic scoring (`DIRECTIONAL`,
   `HEDGE`, `AMBIGUOUS`). Confirmed TraderDaddy field schemas:
   - `get_unusual_activity`: `volume` (int), `openInterest` (int), `vsOI` (float %), `type` ("CALL"|"PUT"), `sentiment` ("Bullish"|"Bearish"), `moneynessPct` (float), `score` (int).
@@ -581,8 +581,9 @@ kind of system.
   - `get_gex_ticker` / `td.levels()`: `gammaFlipLevel` (float), `spotPrice` (float).
   Classifies large size vs OI far from gamma flip with high IV rank as `DIRECTIONAL`,
   and size clustered at gamma flip (|dist| <= 0.75%) with low/moderate IV or ATM put overlay
-  as `HEDGE`. Tested in `tests/test_flow_classifier.py`. (Integration into candidate generation
-  pipeline remains future backlog).
+  as `HEDGE`. Wired directly into `vesper/nodes/scanner.py` to promote directional flow
+  to `Candidate` (source `UNUSUAL_FLOW`) and filter out dealer hedges. Tested in
+  `tests/test_flow_classifier.py` and `tests/test_scanner_flow.py`.
 - **Vanna/Charm exposure (VEX/CHEX)**: Checked 2026-08-28. Confirmed TraderDaddy Pro
   does NOT expose Vanna or Charm exposure (checked all 30 TDPro tool schemas and live
   response payloads for `get_gex_ticker`, `get_gex_overview`, `get_edge_xray`, and

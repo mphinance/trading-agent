@@ -22,7 +22,7 @@ def classify_flow(
     open_interest: float,
     iv: float,
     iv_rank: Optional[float] = None,
-    distance_from_flip_pct: float = 0.0,
+    distance_from_flip_pct: Optional[float] = None,
     option_type: str = "CALL",
     moneyness_pct: float = 0.0,
     sentiment: Optional[str] = None,
@@ -34,8 +34,8 @@ def classify_flow(
         open_interest: Existing open interest at the strike (e.g. 1,500).
         iv: Implied volatility as a decimal (e.g. 0.45) or percentage.
         iv_rank: 0-100 IV Rank percentile if available, otherwise None.
-        distance_from_flip_pct: Percentage distance between spot price and gamma flip
-            ((spot - flip) / spot * 100.0, e.g. +2.5% or -0.2%).
+        distance_from_flip_pct: Optional percentage distance between spot price and gamma flip
+            ((spot - flip) / spot * 100.0, e.g. +2.5% or -0.2%). None if flip is unknown.
         option_type: "CALL" or "PUT".
         moneyness_pct: Percentage distance from spot ((strike - spot) / spot * 100.0).
         sentiment: Sentiment label from unusual activity feed (e.g. "Bullish", "Bearish").
@@ -52,33 +52,37 @@ def classify_flow(
     # 1. Volume vs Open Interest Multiple
     oi_multiple = trade_size / max(1.0, open_interest)
 
-    # 2. Proximity to Gamma Flip
-    abs_flip_dist = abs(distance_from_flip_pct)
+    # 2. Proximity to Gamma Flip (if available)
+    abs_flip_dist = abs(distance_from_flip_pct) if distance_from_flip_pct is not None else None
 
     # 3. Volatility willingness score
     is_high_vol = (iv_rank is not None and iv_rank >= 50.0) or (norm_iv >= 0.40)
     is_low_vol = (iv_rank is not None and iv_rank < 35.0) or (norm_iv < 0.20)
 
-    # ── Directional Rules ───────────────────────────────────────────────────
-    # Criteria: Substantial volume vs OI + far from dealer gamma flip + elevated vol pricing
-    # or aggressive OTM positioning with large size
-    if oi_multiple >= 1.5 and abs_flip_dist >= 1.0:
-        if is_high_vol or abs(moneyness_pct) >= 1.5 or (sentiment and sentiment.lower() in ("bullish", "bearish")):
-            return "DIRECTIONAL"
-
-    # Extreme size (>3x OI) far from flip
-    if oi_multiple >= 3.0 and abs_flip_dist >= 1.5:
-        return "DIRECTIONAL"
-
-    # ── Hedge Rules ────────────────────────────────────────────────────────
-    # Criteria: Size close to gamma flip (|dist| <= 0.75%) with low/moderate IV
-    if abs_flip_dist <= 0.75:
+    # ── Hedge Rules (evaluated first when flip proximity indicates delta/gamma rebalancing) ──
+    if abs_flip_dist is not None and abs_flip_dist <= 0.75:
         if is_low_vol or oi_multiple < 2.0 or abs(moneyness_pct) <= 1.0:
             return "HEDGE"
 
-    # Sizable put print near ATM with low IV rank is typical portfolio insurance / overlay
-    if option_type.upper() == "PUT" and abs(moneyness_pct) <= 2.0 and is_low_vol and abs_flip_dist <= 1.2:
-        return "HEDGE"
+    if option_type.upper() == "PUT" and abs(moneyness_pct) <= 2.0 and is_low_vol:
+        if abs_flip_dist is not None and abs_flip_dist <= 1.2:
+            return "HEDGE"
+
+    # ── Directional Rules ───────────────────────────────────────────────────
+    # Case A: Gamma flip known and trade is far from flip
+    if abs_flip_dist is not None and abs_flip_dist >= 1.0 and oi_multiple >= 1.5:
+        if is_high_vol or abs(moneyness_pct) >= 1.5 or (sentiment and sentiment.lower() in ("bullish", "bearish")):
+            return "DIRECTIONAL"
+
+    # Case B: Gamma flip unknown (general equities) — strong volume multiple and sentiment/vol/moneyness
+    if abs_flip_dist is None and oi_multiple >= 1.5:
+        if is_high_vol or abs(moneyness_pct) >= 1.5 or (sentiment and sentiment.lower() in ("bullish", "bearish")):
+            return "DIRECTIONAL"
+
+    # Extreme size (>3x OI)
+    if oi_multiple >= 3.0:
+        if abs_flip_dist is None or abs_flip_dist >= 1.0:
+            return "DIRECTIONAL"
 
     # ── Default Fallback ───────────────────────────────────────────────────
     return "AMBIGUOUS"
@@ -108,7 +112,7 @@ def classify_unusual_activity_record(
     # Estimate IV or default to neutral 0.25 if unsupplied in public feed row
     iv = float(record.get("iv") or 0.25)
 
-    dist_from_flip = 0.0
+    dist_from_flip: Optional[float] = None
     if spot_price and gamma_flip and spot_price > 0:
         dist_from_flip = ((spot_price - gamma_flip) / spot_price) * 100.0
 

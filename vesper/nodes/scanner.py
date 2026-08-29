@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List
@@ -108,7 +109,65 @@ async def scanner_node(state: TradingState) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Error scanning TickerTrace briefing: {e}")
 
-    # 4. 0DTE Core Indices
+    # 4. Unusual Options Flow (TraderDaddy Pro + Flow Classifier)
+    # Screens large anomalous options prints and filters them through classify_unusual_activity_record:
+    # Promotes DIRECTIONAL prints to Candidate; filters out HEDGE prints (dealer/institutional rebalancing).
+    if playbook in ("unusual_flow", "flow", "options_flow", "all"):
+        try:
+            from td import TDPro
+            from vesper.flow_classifier import classify_unusual_activity_record
+
+            td = TDPro()
+            if td.configured:
+                raw_flow = await asyncio.to_thread(td.cached, "get_unusual_activity", {"limit": 20, "minScore": 70})
+                flow_items = []
+                if isinstance(raw_flow, dict):
+                    flow_items = raw_flow.get("data") or raw_flow.get("items") or []
+                elif isinstance(raw_flow, list):
+                    flow_items = raw_flow
+
+                regime = state.get("regime")
+                spot_price = regime.spy_spot if regime else None
+                gamma_flip = regime.spy_gamma_flip if regime else None
+
+                for item in flow_items:
+                    ticker = item.get("ticker", "").strip().upper()
+                    if not ticker or any(c.ticker == ticker for c in candidates):
+                        continue
+
+                    t_spot = spot_price if ticker == "SPY" else None
+                    t_flip = gamma_flip if ticker == "SPY" else None
+
+                    classification = classify_unusual_activity_record(
+                        record=item,
+                        spot_price=t_spot,
+                        gamma_flip=t_flip,
+                    )
+
+                    if classification == "DIRECTIONAL":
+                        candidates.append(
+                            Candidate(
+                                ticker=ticker,
+                                source="UNUSUAL_FLOW",
+                                score=8.5,
+                                rationale=(
+                                    f"Confirmed Directional Options Flow: {item.get('sentimentLabel') or item.get('sentiment', 'Active')} "
+                                    f"({item.get('type', 'OPT')} vsOI: {item.get('vsOI', 'N/A')}%, Score: {item.get('score', 'N/A')})"
+                                ),
+                                data=item,
+                            )
+                        )
+                        audit_notes.append(
+                            f"Directional Flow Candidate: {ticker} ({item.get('type')} {item.get('sentiment')})"
+                        )
+                    elif classification == "HEDGE":
+                        audit_notes.append(
+                            f"Filtered out hedge flow for {ticker}: classified as institutional/dealer hedge"
+                        )
+        except Exception as e:
+            logger.warning(f"Error scanning unusual options flow: {e}")
+
+    # 5. 0DTE Core Indices
     if playbook in ("0dte_flow", "all"):
         for index_ticker in ("SPY", "QQQ"):
             if not any(c.ticker == index_ticker for c in candidates):
