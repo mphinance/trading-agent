@@ -256,6 +256,26 @@ that actually needs careful design saved for last so it doesn't get rushed:
   gated by `VESPER_WEBHOOK_SECRET` + bearer at the HTTP layer. 8 tests in
   `tests/test_inbound_bot.py`.
 
+**Open (minor, dry-run only) — `executor_node`'s dry-run branch bypasses the
+halt check.** Found 2026-08-29 while checking a pattern borrowed from
+Vibe-Trading's kill-switch ("halt episodes," which exist so a stale resume
+signal from before a restart can't replay through a *newer* halt). Traced
+the equivalent path here and **the live-money path is genuinely safe**:
+`execution_guard._validate` / `_validate_multileg` both call `is_halted()`
+before anything else, so a stale Telegram/Discord approval tap arriving
+after a halt gets `TradingDisabled` → `BLOCKED_BY_GUARDRAIL` and never
+reaches a broker — verified by reading both functions, and already pinned by
+`tests/test_paper_ledger_and_halt.py::test_execution_guard_blocks_when_halted`.
+What *isn't* covered: `executor_node`'s `mode == "dry_run"` branch returns a
+simulated fill and calls `record_paper_fill()` without ever touching
+`execution_guard`, so a resume that lands while halted still writes a paper
+fill. No money moves, but it's semantically wrong (a halt should mean stop)
+and it pollutes the paper ledger that `circuit_breaker` reads NLV from.
+Fix is a few lines (check `is_halted()` at the top of the dry-run branch and
+emit a `BLOCKED_BY_GUARDRAIL`-style result instead), deliberately not done
+same-session as the discovery so it gets its own reviewed change rather than
+being folded into a docs commit.
+
 ---
 
 ## 🎯 Modules
@@ -879,6 +899,45 @@ research pass done on this repo:
   distribution-tracking source (Webull dividend history or similar), not an
   approximation from `realized_pnl`.
 
+### Borrowed from the 2026-08-29 open-source survey
+
+Surveyed 8 repos (AutoHedge, Vibe-Trading, claude-ads, toprank/NotFair,
+FinceptTerminal, agentic-inbox, context-mode, camofox-browser) for ideas worth
+taking. Most were skipped — either Vesper already does the thing (often more
+carefully), or the repo isn't finance-relevant, or the idea is in direct
+tension with a deliberate design choice here. Two survived, plus one
+already-actioned finding (the dry-run halt bypass, now in Known Gaps above).
+
+**Explicitly rejected, and why it matters:** AutoHedge's "Director Agent"
+lets an LLM *generate* the strategy itself rather than narrate a
+deterministically-computed one, and FinceptTerminal's "AI Quant Lab" pushes
+ML/RL strategy discovery. Both are the opposite of this codebase's standing
+rule that an LLM may narrate, reject, or shrink — never originate a position
+or increase size. Noting them here so a future session doesn't rediscover
+them as "obvious wins" and quietly erode that property.
+
+- **Hash-chained audit ledger** (from Vibe-Trading). `audit_trail` is
+  currently an appended list of per-node dicts with no tamper-evidence: any
+  entry can be edited or dropped after the fact with nothing to detect it.
+  A post-trade hash chain (each entry carrying a SHA-256 over its own content
+  plus the previous entry's hash) makes silent modification detectable, and
+  is a small, well-scoped extension of infrastructure that already exists —
+  `execution_guard` already computes payload digests, and `halt.py` /
+  `paper_ledger.py` already establish the atomic-write persistence pattern.
+  Deliberately post-trade/append-only: this is for after-the-fact integrity,
+  NOT a new gate in the execution path.
+- **Before/after portfolio diff on the approval card** (from claude-ads,
+  whose mutation gate requires showing before/after state, not just the
+  proposed change). Today's Telegram/Discord cards render the order in
+  isolation — side, strike, quantity, price. They never show what the
+  portfolio looks like now vs. projected-after-fill. A human reviewing
+  "SELL 1x AAPL PUT $190" in isolation has a much harder time catching
+  "that's my third open tech position" or "that takes the sector bucket to
+  14.8%" than one shown the projected state. Note that the data is already
+  computed: `risk_gate_node` builds sector-notional maps and open-position
+  counts for the allocation buckets, so this is largely a matter of carrying
+  those figures onto the card rather than new calculation.
+
 ### AI agent architecture
 - **LLM-as-Bayesian-network-builder for explainable proposals.** An arXiv
   paper on the options wheel strategy has the LLM build a causal DAG (Market
@@ -1038,11 +1097,15 @@ via OpenRouter, wired into `playbooks_node` for thesis narratives. Setup and
 usage now live in `docs/OPENROUTER_PRICING_GUIDE.md` rather than here — this
 section is what's still *not* built.
 
-**Still open**: `audit_proposal_risk()` exists in `vesper/llm.py` but is
-called from nowhere — an LLM red-team check on a proposal, currently dead
-code. Whether it's worth wiring in (as an advisory signal alongside, never
-instead of, `execution_guard`'s deterministic checks) or left unused is an
-open call. Whether `playbooks_node`'s thesis-only integration is the right
+**Correction (2026-08-29):** this section used to say `audit_proposal_risk()`
+"is called from nowhere — currently dead code." That is stale and wrong: it
+is wired into `risk_gate_node` (`vesper/nodes/risk_gate.py:223`), running
+only *after* a proposal already passed the deterministic check, and able to
+REJECT or halve `quantity` but never to approve something the deterministic
+gate rejected or to increase size. See Known Gaps item 6 for the full
+description of what it can and can't do.
+
+**Still open**: whether `playbooks_node`'s thesis-only integration is the right
 ceiling, or whether an LLM should ever influence sizing/entry logic itself
 (vs. today's narrative-only, zero-influence role) — the Bayesian-network
 pattern in "AI agent architecture" below is the more rigorous version of
