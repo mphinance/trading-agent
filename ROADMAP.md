@@ -358,15 +358,22 @@ research pass done on this repo:
   a premium-recycling "free share" engine (sweep 100% of options-selling
   P&L into shares until a free 100-share block accumulates); a delta-neutral
   "Thega" volatility harvest for high-IV binary events (100 shares + 1 ATM
-  covered call + 3 ATM CSPs, net delta ≈0); and a YieldMax `$ULTY`
-  collar-following play (sell CSPs at the same put strikes `$ULTY` bought as
-  its own hedge). **No scraper needed** — confirmed 2026-08-28:
-  TickerTrace's `/api/v1/income/{fund}` endpoint ("one income fund's
-  complete book — stocks + option positions") already covers exactly this,
-  and it's already an MCP tool this session has connected
-  (`get_income_fund_detail`). This is a "call an existing tool with `fund=
-  ULTY` and parse the put strikes out of the response" task, not a new data
-  source to build — meaningfully cheaper than the other three ideas here.
+  covered call + 3 ATM CSPs, net delta ≈0); and a **collar-following play,
+  generalized across income funds, not just `$ULTY`** — sell CSPs at the
+  same put strikes an option-income ETF bought as its own hedge. **No
+  scraper needed** — confirmed 2026-08-28: TickerTrace's
+  `/api/v1/income/{fund}` endpoint ("one income fund's complete book —
+  stocks + option positions") already covers this for any fund it tracks,
+  not just YieldMax's `$ULTY`, and it's already an MCP tool this session has
+  connected (`get_income_fund_detail`). `/api/v1/income` (plural — "overview
+  of all option-income funds classified by structure type") and
+  `/api/v1/fund-effectiveness` ("option-income fund strategy execution
+  analysis") are also relevant: the latter could screen for which funds'
+  hedging is actually *worth* following before committing to one. This is a
+  "call existing tools across N funds and parse put strikes out of the
+  response" task, not a new data source to build — meaningfully cheaper than
+  the other three ideas here, and now a small screening problem (which
+  funds to follow) rather than a single hardcoded ticker.
 - **`0dte_flow` tightening**: only run weeklies where IV>70%, sell puts at
   0.30 delta or at major OI put walls, reject wide-spread chains, harvest ATM
   CSP vega on earnings week and BTC the next day.
