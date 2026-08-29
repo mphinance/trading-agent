@@ -37,7 +37,7 @@ Examples:
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen", "loop"],
+        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen", "loop", "alerts"],
         help="Action command",
     )
     parser.add_argument("ticker", nargs="?", default=None, help="Target symbol for analysis")
@@ -55,6 +55,12 @@ Examples:
     parser.add_argument("--interval", type=float, default=15.0, help="Monitor poll interval in seconds")
     parser.add_argument("--once", action="store_true", help="Run single monitor evaluation sweep and exit")
     parser.add_argument("--license-key", default=None, help="Validate Whop commercial license key")
+    parser.add_argument(
+        "--arm", nargs=3, metavar=("SYMBOL", "LEVEL", "DIRECTION"),
+        help="alerts: arm one, e.g. --arm SPY flip below (LEVEL may be a number or flip/pin/wall_above/wall_below)",
+    )
+    parser.add_argument("--disarm", default=None, metavar="ID", help="alerts: remove an alert by id")
+    parser.add_argument("--note", default=None, help="alerts: optional note attached to an armed alert")
 
     args = parser.parse_args()
 
@@ -123,6 +129,52 @@ Examples:
                 f"  • {p['ticker']} ({p['side']} {p['quantity']}x @ ${p['filled_price']:.2f}) -> "
                 f"Cur: ${p.get('current_price', p['filled_price']):.2f} | "
                 f"PnL: ${p.get('unrealized_pnl', 0.0):+,.2f} ({p.get('unrealized_pnl_pct', 0.0):+.1f}%)"
+            )
+        print("=" * 60)
+        sys.exit(0)
+
+    if args.command == "alerts":
+        # Control surface for the restored alert stack. Arming/listing/removing
+        # happens here; the alerts are actually EVALUATED by the watcher thread
+        # inside `vesper loop` (see vesper/alerts_runner.py) -- a one-shot CLI
+        # process can't watch anything after it exits.
+        import alerts as alerts_mod
+
+        store = alerts_mod.AlertStore()
+
+        if args.arm:
+            try:
+                level = args.arm[1]
+                a = alerts_mod.make_alert(
+                    symbol=args.arm[0],
+                    level=level,
+                    direction=args.arm[2],
+                    note=args.note or "",
+                )
+                store.add(a)
+                print(f"\n✅ Armed: {alerts_mod.describe(a)}")
+                print("   (evaluated by the watcher in `vesper loop` — start that if it isn't running)")
+            except alerts_mod.AlertError as e:
+                print(f"\n❌ {e}")
+                print(f"   level must be a number or one of: {', '.join(alerts_mod.DYNAMIC_LEVELS)}")
+                sys.exit(1)
+            sys.exit(0)
+
+        if args.disarm:
+            print("\n✅ Removed." if store.remove(args.disarm) else "\n❌ No alert with that id.")
+            sys.exit(0)
+
+        listed = store.list()
+        print("\n" + "=" * 60)
+        print(f"🔔 VESPER ALERTS ({len(listed)})")
+        print("=" * 60)
+        if not listed:
+            print("  (none armed — use: vesper.py alerts --arm SPY flip below)")
+        for a in listed:
+            fired = a.get("trigger_count") or 0
+            print(
+                f"  [{a['id']}] {alerts_mod.describe(a)}"
+                f"  state={a.get('state', '?')}" + (f"  fired={fired}x" if fired else "")
             )
         print("=" * 60)
         sys.exit(0)

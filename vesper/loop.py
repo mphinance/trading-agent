@@ -163,6 +163,21 @@ async def run_continuous_loop(
     print(f"🔁 VESPER CONTINUOUS LOOP (Mode: {mode.upper()} | Playbook: {playbook.upper()})")
     print(f"Scheduled scans: {', '.join(t.strftime('%H:%M') for t in scan_times)} ET (weekdays)")
     print("Position monitor: running continuously in the background")
+
+    # Alert watcher: armed dealer-gamma/price alerts are evaluated here, in the
+    # long-running process, for the same reason watcher.py's own docstring
+    # gives -- an alert that only fires while you happen to be asking about it
+    # is not an alert. Started best-effort: a broken alert stack must never
+    # take down scheduled scans or position monitoring.
+    try:
+        from vesper.alerts_runner import build_watcher
+
+        w = build_watcher(start=True)
+        print(f"Alert watcher: running ({len(w.store.symbols())} symbol(s) armed)")
+    except Exception as e:
+        logger.error(f"Alert watcher failed to start (continuing without it): {e}")
+        print(f"Alert watcher: FAILED TO START — {e}")
+
     print("=" * 76)
 
     monitor_task = asyncio.create_task(
