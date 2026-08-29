@@ -15,6 +15,35 @@ from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Per-user authorization for Telegram callbacks -- separate from (and in
+# addition to) the aiohttp webhook route's HMAC/secret-token checks below.
+# Those prove a request really came from Telegram's servers; they say
+# nothing about WHICH Telegram user tapped the button or typed /halt. Same
+# gap, same fix shape as the one found in vesper/bot/discord_gateway.py's
+# ApprovalButton/on_message (any user who could see the channel could
+# approve/reject any proposal or halt/resume trading) -- unset here defaults
+# to allow-with-a-warning rather than fail-closed, matching that module's
+# design choice for a single-operator deployment where requiring
+# configuration up front would just be friction.
+_AUTHORIZED_TELEGRAM_USER_IDS = {
+    s.strip() for s in os.getenv("TELEGRAM_AUTHORIZED_USER_IDS", "").split(",") if s.strip()
+}
+_warned_telegram_unrestricted = False
+
+
+def _is_telegram_user_authorized(user_id: Any) -> bool:
+    global _warned_telegram_unrestricted
+    if not _AUTHORIZED_TELEGRAM_USER_IDS:
+        if not _warned_telegram_unrestricted:
+            logger.warning(
+                "TELEGRAM_AUTHORIZED_USER_IDS is not set — any Telegram user who can "
+                "message this bot can approve/reject proposals and halt/resume trading. "
+                "Set it to a comma-separated list of Telegram numeric user IDs to restrict this."
+            )
+            _warned_telegram_unrestricted = True
+        return True
+    return str(user_id) in _AUTHORIZED_TELEGRAM_USER_IDS
+
 
 class ApprovalRegistry:
     """Thread-safe registry for pending order proposals awaiting human resolution."""
@@ -127,7 +156,15 @@ class ApprovalRegistry:
         if "callback_query" in payload:
             cb = payload["callback_query"]
             data_str = str(cb.get("data", ""))
-            user = cb.get("from", {}).get("username", "telegram_user")
+            from_user = cb.get("from", {})
+            user = from_user.get("username", "telegram_user")
+            user_id = from_user.get("id")
+            if not _is_telegram_user_authorized(user_id):
+                logger.warning(f"Rejected Telegram callback from unauthorized user {user} (id={user_id})")
+                return {
+                    "status": "UNAUTHORIZED",
+                    "message": f"User {user} is not authorized to resolve proposals.",
+                }
             if ":" in data_str:
                 action, prop_id = data_str.split(":", 1)
                 decision = "APPROVE" if action.lower() == "approve" else "REJECT"
@@ -136,7 +173,16 @@ class ApprovalRegistry:
         # 2. Telegram Text Message (e.g. /halt or /resume)
         if "message" in payload and "text" in payload["message"]:
             text = str(payload["message"]["text"]).strip()
-            user = payload["message"].get("from", {}).get("username", "telegram_user")
+            from_user = payload["message"].get("from", {})
+            user = from_user.get("username", "telegram_user")
+            user_id = from_user.get("id")
+            if text.startswith("/halt") or text.startswith("/resume"):
+                if not _is_telegram_user_authorized(user_id):
+                    logger.warning(f"Rejected Telegram {text.split()[0]} from unauthorized user {user} (id={user_id})")
+                    return {
+                        "status": "UNAUTHORIZED",
+                        "message": f"User {user} is not authorized to halt/resume trading.",
+                    }
             if text.startswith("/halt"):
                 from vesper.halt import halt
                 return halt(reason=f"Telegram /halt from {user}", source="telegram")

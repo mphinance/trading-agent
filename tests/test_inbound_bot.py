@@ -93,6 +93,86 @@ async def test_telegram_halt_command(clean_registry):
     assert not is_halted()[0]
 
 
+# ── Per-user authorization for Telegram callbacks/commands ──────────────────
+# Regression tests for the same vulnerability class already fixed in
+# vesper/bot/discord_gateway.py: the aiohttp webhook route's HMAC/secret
+# checks (test_auth_verifications below) prove a request came from
+# Telegram's own servers, but say nothing about WHICH Telegram user tapped
+# approve/reject or typed /halt -- without a per-user allowlist, anyone who
+# could message the bot could resolve any proposal or freeze/unfreeze trading.
+
+@pytest.mark.asyncio
+async def test_telegram_callback_rejects_unauthorized_user(clean_registry, monkeypatch):
+    import vesper.bot.inbound as inbound
+    monkeypatch.setattr(inbound, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
+
+    clean_registry.register_pending("prop-tg-unauth", "session-tg")
+    payload = {
+        "callback_query": {
+            "id": "cb-unauth",
+            "from": {"username": "stranger", "id": 999999},
+            "data": "approve:prop-tg-unauth",
+        }
+    }
+
+    res = await clean_registry.handle_callback_payload(payload)
+    assert res["status"] == "UNAUTHORIZED"
+    assert clean_registry.get_decision("prop-tg-unauth") is None
+
+
+@pytest.mark.asyncio
+async def test_telegram_callback_allows_authorized_user(clean_registry, monkeypatch):
+    import vesper.bot.inbound as inbound
+    monkeypatch.setattr(inbound, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
+
+    clean_registry.register_pending("prop-tg-auth-ok", "session-tg")
+    payload = {
+        "callback_query": {
+            "id": "cb-auth-ok",
+            "from": {"username": "michael_trader", "id": 111},
+            "data": "approve:prop-tg-auth-ok",
+        }
+    }
+
+    res = await clean_registry.handle_callback_payload(payload)
+    assert res["status"] == "RESOLVED"
+    assert clean_registry.get_decision("prop-tg-auth-ok")["decision"] == "APPROVE"
+
+
+@pytest.mark.asyncio
+async def test_telegram_halt_rejects_unauthorized_user(clean_registry, monkeypatch):
+    import vesper.bot.inbound as inbound
+    monkeypatch.setattr(inbound, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
+
+    assert not is_halted()[0]
+    payload = {
+        "message": {
+            "text": "/halt Circuit breaker",
+            "from": {"username": "stranger", "id": 999999},
+        }
+    }
+    res = await clean_registry.handle_callback_payload(payload)
+    assert res["status"] == "UNAUTHORIZED"
+    assert not is_halted()[0]
+
+
+@pytest.mark.asyncio
+async def test_telegram_halt_allows_authorized_user(clean_registry, monkeypatch):
+    import vesper.bot.inbound as inbound
+    monkeypatch.setattr(inbound, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
+
+    payload = {
+        "message": {
+            "text": "/halt Circuit breaker",
+            "from": {"username": "michael_trader", "id": 111},
+        }
+    }
+    res = await clean_registry.handle_callback_payload(payload)
+    assert res["status"] == "HALTED"
+    assert is_halted()[0]
+    resume(source="test-cleanup")
+
+
 @pytest.mark.asyncio
 async def test_human_gate_node_consumes_pre_resolved_inbound_decision(clean_registry):
     """Verify human_gate_node applies inbound decision without requiring manual interrupt."""

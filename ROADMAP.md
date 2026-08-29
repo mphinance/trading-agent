@@ -181,25 +181,42 @@ that actually needs careful design saved for last so it doesn't get rushed:
   the poller only relays Telegram's own `getUpdates` response (it never
   accepts inbound network input itself), but would matter immediately if a
   webhook route for Discord or a generic REST client is ever wired up.
-- **`PublicBrokerClient` has no live buying-power lookup.** `_execute_public`
-  in `executor.py` passes `live_buying_power=None`, so `VESPER_MAX_BP_FRACTION`
-  is a no-op on that branch — notional/quantity/allowlist/kill-switch still
-  apply. Wire `pub.get_portfolio()` into a real figure to close this.
+- ~~`PublicBrokerClient` has no live buying-power lookup~~ — fixed (item 3
+  above): `get_buying_power()` added and plumbed into `ExecutionGuard.preview()`.
 - **No node-level integration test.** `tests/test_execution_guard.py` proves
   the guard module itself is correct; nothing exercises `executor_node`/
   `risk_gate_node`'s actual wiring against a mocked broker end-to-end.
-- **`--persona traderlady` (`vesper.py`) is parsed but never plumbed into
-  session state or any node** — dead flag.
-- **`vesper/whop.py` (Whop licensing client) is never imported anywhere** —
-  not actually integrated despite the commit that introduced it.
+- ~~`--persona traderlady` is parsed but never plumbed into session state~~ —
+  fixed (item 1 above): wired through `TradingState.persona`, `runner.py`, `vesper.py`.
+- ~~`vesper/whop.py` is never imported anywhere~~ — fixed (item 1 above):
+  imported in both `vesper/runner.py` and `vesper.py` (`--license-key`).
 - ~~`requirements.txt` predates the Vesper migration~~ — fixed, now has
   `langgraph`, `pydantic>=2.0`, `python-dotenv>=1.0`, `typing_extensions>=4.0`,
   `chromadb>=0.5`.
-- **`vesper/morning.py` silently falls back to hardcoded placeholder SPY/QQQ
-  levels** if TraderDaddy is unconfigured or the fetch fails, with no
-  "STALE"/"UNAVAILABLE" label distinguishing a real number from a fallback
-  one. Read-only (no money moves) but the same failure mode the old
-  `alerts.py` was built to prevent: a fabricated number that looks real.
+- ~~`vesper/morning.py` silently falls back to hardcoded placeholder SPY/QQQ
+  levels~~ — fixed (item 1 above): fallback levels explicitly labeled
+  `STALE / UNAVAILABLE` rather than presented as live.
+- **Telegram/Discord webhook auth guarded the route, not the user (fixed
+  2026-08-28).** `verify_telegram_webhook_secret()`/`verify_discord_signature()`/
+  `verify_bearer_token()` prove a request came from Telegram/Discord's own
+  servers — they say nothing about *which* Telegram/Discord user tapped a
+  button. Found via the Discord gateway bot first (`ApprovalButton.callback()`
+  and `on_message()`'s halt/resume had no sender check at all — anyone who
+  could see the channel could approve/reject any proposal or freeze trading;
+  fixed with `DISCORD_AUTHORIZED_USER_IDS`) and the identical gap existed in
+  `vesper/bot/inbound.py`'s Telegram paths (`handle_callback_payload`'s
+  callback-query and `/halt`/`/resume` text-command branches), which is the
+  one that's actually live today via `telegram_polling.py`. Fixed with
+  `TELEGRAM_AUTHORIZED_USER_IDS` (comma-separated numeric Telegram user IDs),
+  same "unset -> allow with a one-time warning" default as the Discord fix
+  (not fail-closed — a single-operator deployment shouldn't be locked out by
+  a missing env var). Discord's legacy webhook-route interaction parser in
+  `handle_callback_payload` (item 3, currently unreachable dead code since
+  nothing starts that aiohttp server) and the generic REST webhook path
+  (item 4/5) were left as-is: the latter is already gated by
+  `VESPER_WEBHOOK_SECRET` + bearer at the HTTP layer, a shared-secret API
+  credential rather than a public chat surface, so it isn't the same
+  vulnerability class. 6 new tests in `tests/test_inbound_bot.py`.
 
 ---
 
