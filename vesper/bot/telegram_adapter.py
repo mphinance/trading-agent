@@ -20,6 +20,76 @@ logger = logging.getLogger(__name__)
 # the full text via sendMessage instead.
 _TELEGRAM_CAPTION_LIMIT = 1024
 
+# (period, interval, label) per panel, top to bottom. Daily first: it is the
+# context you read before the entry timing, so it belongs above the 5m.
+_CHART_PANELS = (
+    ("6mo", "1d", "Daily — 6mo"),
+    ("1d", "5m", "Intraday — 5m"),
+)
+
+
+async def _build_chart_image(ticker: str) -> Optional[bytes]:
+    """Render the daily and 5m charts and stack them into one PNG.
+
+    Degrades in steps rather than all-or-nothing, because a proposal card with
+    one chart is far more useful than one with none:
+      - both panels render  -> stacked image
+      - one panel renders   -> that panel alone
+      - neither renders     -> None, and the caller sends text-only
+
+    A daily chart is generally available even when the intraday one is not
+    (5m data is thin outside market hours, and empty for a symbol that has not
+    traded today), so the common weekend/overnight case still gets context.
+    """
+    from mcp_server.charts import generate_chart
+
+    pngs: list[bytes] = []
+    for period, interval, label in _CHART_PANELS:
+        try:
+            res = await generate_chart(
+                ticker=ticker, period=period, interval=interval, show_emas=True,
+            )
+            if isinstance(res, dict) and res.get("base64"):
+                import base64
+                pngs.append(base64.b64decode(res["base64"]))
+            elif isinstance(res, dict) and res.get("path") and os.path.exists(res["path"]):
+                with open(res["path"], "rb") as f:
+                    pngs.append(f.read())
+        except Exception as e:
+            logger.debug("%s chart (%s/%s) unavailable for %s: %s",
+                         label, period, interval, ticker, e)
+
+    if not pngs:
+        return None
+    if len(pngs) == 1:
+        return pngs[0]
+
+    try:
+        import io
+        from PIL import Image
+
+        imgs = [Image.open(io.BytesIO(p)).convert("RGB") for p in pngs]
+        # Normalise to a common width so a size mismatch between the two
+        # renders can't produce a lopsided composite.
+        width = min(i.width for i in imgs)
+        scaled = [
+            i if i.width == width
+            else i.resize((width, max(1, round(i.height * width / i.width))), Image.LANCZOS)
+            for i in imgs
+        ]
+        canvas = Image.new("RGB", (width, sum(i.height for i in scaled)), (0, 0, 0))
+        y = 0
+        for i in scaled:
+            canvas.paste(i, (0, y))
+            y += i.height
+        out = io.BytesIO()
+        canvas.save(out, format="PNG", optimize=True)
+        return out.getvalue()
+    except Exception as e:
+        # Compositing is a nicety; never lose the chart over it.
+        logger.debug("chart compositing failed for %s, sending the first panel alone: %s", ticker, e)
+        return pngs[0]
+
 
 class TelegramAdapter(ApprovalChannel):
     """Telegram Bot channel adapter."""
@@ -62,26 +132,18 @@ class TelegramAdapter(ApprovalChannel):
             ]
         }
 
-        # 1. Attempt 5-minute candlestick chart generation (candlestick + EMA 8/21/34/55/89)
+        # 1. Attempt chart generation: daily for trend context, 5m for entry
+        # timing, stacked into ONE image.
+        #
+        # Why composite instead of sending two photos: Telegram's
+        # sendMediaGroup (the multi-photo endpoint) does NOT support
+        # reply_markup, so an album would silently cost the approve/reject
+        # buttons -- the entire point of the card. sendPhoto takes exactly one
+        # image, so the two timeframes are stacked vertically into a single
+        # PNG and the buttons survive.
         chart_bytes: Optional[bytes] = None
         if card.ticker:
-            try:
-                from mcp_server.charts import generate_chart
-                chart_res = await generate_chart(
-                    ticker=card.ticker,
-                    period="1d",
-                    interval="5m",
-                    show_emas=True,
-                )
-                if isinstance(chart_res, dict) and chart_res.get("base64"):
-                    import base64
-                    chart_bytes = base64.b64decode(chart_res["base64"])
-                elif isinstance(chart_res, dict) and chart_res.get("path") and os.path.exists(chart_res["path"]):
-                    with open(chart_res["path"], "rb") as f:
-                        chart_bytes = f.read()
-            except Exception as e:
-                logger.debug("5m chart generation for %s unavailable: %s", card.ticker, e)
-                chart_bytes = None
+            chart_bytes = await _build_chart_image(card.ticker)
 
         if chart_bytes and len(text) > _TELEGRAM_CAPTION_LIMIT:
             logger.info(
@@ -105,7 +167,7 @@ class TelegramAdapter(ApprovalChannel):
                         "reply_markup": json.dumps(reply_markup),
                     },
                     files={
-                        "photo": (f"{card.ticker}_5m.png", chart_bytes, "image/png"),
+                        "photo": (f"{card.ticker}_daily_5m.png", chart_bytes, "image/png"),
                     },
                 )
                 data = resp.json()
