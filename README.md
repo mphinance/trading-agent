@@ -149,6 +149,11 @@ Tickets are single-use and expire in 120 seconds. Approval happens on a
 Telegram or Discord card, not a spoken or typed command — see CLAUDE.md rule
 4d for why voice specifically never confirms an order.
 
+![A Telegram proposal card: a daily+5m composite chart, ticker, action, estimated cost, max risk, stop loss, target, proposal digest, time stop, and Approve/Reject buttons](docs/screenshots/Screenshot_20260829-191404.png)
+
+*A test proposal — the chart, digest, and Approve/Reject buttons are real; the
+numbers are not a live account.*
+
 **Not exercised against a live account yet.** The order path is tested end to
 end against a stub broker, which proves the wiring, not Webull's acceptance of
 it. See the Status section of [CLAUDE.md](CLAUDE.md) for exactly what has and
