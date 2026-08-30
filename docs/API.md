@@ -1,345 +1,308 @@
-# sidecar API reference
+# Vesper — operational reference
 
-Three surfaces, one broker client behind all of them:
+This doc used to describe three surfaces: MCP tools as a thin HTTP client, a
+42-route FastAPI app (`server.py`, `:8787`), and an `/api/stream` SSE feed.
+Commit `de60d51` deleted that browser-dashboard architecture along with
+`server.py`, `static/index.html`, `chat.py` and `orders.py` — see CLAUDE.md's
+"History that will otherwise confuse you" for the full story. None of it is
+coming back. This is a from-scratch rewrite describing what is actually here
+today. See [README.md](../README.md) for setup/run instructions — this doc is
+the detailed reference for the CLI, the MCP tool inventory, and the order
+path; it doesn't repeat what the README already covers.
 
-| Surface | Who uses it | Where |
+## What exists now
+
+| Surface | What it is | Can place an order? |
 | --- | --- | --- |
-| **MCP tools** (36) | Claude Desktop, by voice | `mcp_server.py` over stdio |
-| **HTTP API** (42 endpoints across 39 paths) | the deck's UI, scripts, curl | `server.py` on `:8787` |
-| **SSE stream** | anything wanting push instead of poll | `GET /api/stream` |
+| **CLI** (`vesper.py`) | The operational surface. Scan/analyze/monitor/loop/listen/alerts/halt/status/paper/audit. | Only via the LangGraph pipeline + a human approval tap. |
+| **MCP server** (`mcp_server/`, entrypoint `mcp_server/server.py`) | Read-only quant tooling — screeners, technicals, options analytics, macro/breadth, research, backtesting — exposed to MCP hosts over stdio (FastMCP; `MCP_TRANSPORT=sse` is supported by the code but nothing in this repo starts it that way). | **No.** No broker credentials, no `wb.py` import, no order-placement tool anywhere in the directory. |
+| **Telegram / Discord bots** (`vesper/bot/`) | Outbound-only approval channels — long-poll (Telegram) / gateway connection (Discord). Render proposal cards, resolve Approve/Reject taps, accept `/halt` and `/resume`. | Indirectly — a tap resolves a paused graph node, which is the only thing that can reach `executor_node`. |
+| **HTTP** | **Nothing serves it.** `vesper/bot/inbound.py` defines `create_inbound_app()` (an aiohttp app with `/webhook/telegram`, `/webhook/discord`, `/webhook/approval`, `/health`, `/approvals`), but nothing in this repo calls it or runs `web.run_app()` on it. It exists as an alternative approval-delivery mechanism that was never wired up — see rule 1 in CLAUDE.md. | N/A — not running. |
 
-The MCP server is a thin HTTP client of the second one, so anything here is
-reachable by voice and vice versa. Nothing bypasses the guards in `orders.py`.
-
-**Rate-limit budgets are not shared.** US region: account reads (portfolio,
-orders) are **2 req / 2s**; market data is **600 req/min**; order
-place/replace/cancel is **600 req/min**. Poll quotes freely; poll positions
-gently.
+There is no SSE stream and no browser UI. Rate-limit budgets (2 req/2s
+account reads, 600/min market data and order calls) live in `wb.py` and
+`md.py` — see CLAUDE.md's gotchas section, not repeated here.
 
 ---
 
-## MCP tools
+## CLI (`vesper.py`)
 
-What Claude Desktop sees. Descriptions are written for a model to act on, so
-they carry the constraints inline — read `mcp_server.py` for the full text.
+`./.venv/bin/python vesper.py [command] [ticker] [flags]`. Default command is
+`scan` if none is given.
 
-### Account
+### Commands
 
-| Tool | Required | Returns |
-| --- | --- | --- |
-| `get_portfolio` | — | Positions, balances, totals, and the risk guardrails. Start here for "what do I own". |
-| `get_activities` | — | Fills, dividends, transfers, fees. Optional `account_id`. |
-| `get_market_calendar` | — | Trading days and session times. `market_code` defaults to `US`. |
-| `get_health` | — | Webull connectivity, account count, credential status, trading on/off, stream state. |
-
-### Market data
-
-| Tool | Required | Notes |
-| --- | --- | --- |
-| `get_quote` | `symbols` | Comma-separated. Includes extended-hours prints. |
-| `get_bars` | `symbol` | `timespan` M1/M5/M15/M30/M60/D/W/M, `count`, `sessions` RTH/PRE/ATH. |
-| `get_order_book` | `symbol` | Level 2 depth. `levels` defaults to 5. |
-| `get_time_and_sales` | `symbol` | Tick-by-tick prints. |
-| `get_order_flow` | `symbols` | Footprint: buy vs sell volume per price level. |
-| `get_auction_imbalance` | `symbol` | NASDAQ NOII. Empty outside the call auctions — that's normal, not an error. |
-
-### Options
-
-| Tool | Required | Notes |
-| --- | --- | --- |
-| `get_option_chain` | `underlying` | `expire_date` (YYYY-MM-DD, exact), `option_type` CALL/PUT, `strike_gte`/`strike_lte`, `page_size`. Use this to find option symbols before quoting or trading. |
-| `get_option_quote` | `symbols` | By option symbol, comma-separated. |
-
-### Research & screening
-
-| Tool | Required | Notes |
-| --- | --- | --- |
-| `get_research` | `kind`, `symbol` | `kind`: `profile`, `rating`, `target`, `flow`, `earnings`, `dividend`, `filings`, `eps`, `peers`, `financials`. For `financials` set `statement` to `indicators`/`income`/`cashflow`/`balance`/`alert`. |
-| `run_screener` | `kind` | `gainers`, `losers`, `active`, `sectors`, `dividend`, `52whl`. |
-| `get_signals` | — | TraderDaddy Pro: market health, put/call ratios, conviction. `configured: false` without `TD_API_KEY`. |
-| `get_gamma` | `symbol` | Dealer-gamma structure: spot, regime, flip, max-gamma pin, key levels, heaviest strikes. |
-
-**`get_gamma` is a positioning map, not a forecast.** Heavy gamma marks where
-price often *reacts* on arrival; it never means price will travel there. The flip
-is a regime boundary — above it dealer hedging dampens moves, below it amplifies
-them. If `flip_split` is true the two upstream models disagree about which side
-price is on, so the regime call is genuinely uncertain and should be reported
-that way rather than resolved silently. A cold non-index name is computed
-upstream on first call (~2-4s); `td.levels()` caches for 5 minutes.
-
-### Alerts
-
-| Tool | Required | Notes |
-| --- | --- | --- |
-| `list_alerts` | — | Every alert with its resolved level and state, plus watcher and delivery status. |
-| `create_alert` | `symbol`, `level`, `direction` | `level` is a number **or** a live dealer level: `flip`, `pin`, `wall_above`, `wall_below`. `direction` is the side price must end on. `note`, `repeat` optional. |
-| `delete_alert` | `alert_id` | Id comes from `list_alerts`. |
-| `test_alert_delivery` | — | Sends a test notification to prove the delivery path works. |
-
-A dynamic level is re-resolved from TDPro on every check, which is the point —
-native alert systems freeze a number, and dealer structure moves daily. Alerts
-fire on a **crossing**, not a comparison: one armed on the wrong side of a level
-starts `pending` and arms only once price returns, so it reports a genuine break
-instead of firing instantly. A moving level can never fire an alert on its own.
-
-**Alerts are not evaluated by MCP.** A stdio server only runs while Claude
-Desktop is talking to it; the watching is sidecar's own background thread. These
-tools arm and inspect only.
-
-### Watchlists
-
-`get_watchlists`, `get_watchlist_items(watchlist_id)`, `create_watchlist(name)`,
-`add_to_watchlist(watchlist_id, instruments)`,
-`remove_from_watchlist(watchlist_id, instruments)`.
-
-These write, but only to a list of tickers — no account impact. Changes sync to
-the Webull app.
-
-### Orders — reads
-
-| Tool | Notes |
+| Command | What it does |
 | --- | --- |
-| `get_open_orders` | Working orders across all accounts — **including ones placed in Webull Desktop**. The account is the source of truth, not this app. |
-| `get_order_history` | Filled, cancelled, rejected. `page_size` defaults to 50. |
-| `get_trading_config` | The caps currently in force. Worth checking before explaining a rejection. |
+| `scan` (default) | Runs the full LangGraph pipeline once: regime → scanner → analyst → playbooks → risk_gate → human_gate → executor → reflection. |
+| `analyze TICKER` | Same pipeline, scoped to one ticker (defaults to `SPY` if omitted). |
+| `0dte` | Same pipeline with `--playbook 0dte_flow`, ticker forced to `SPY`. |
+| `morning` | Runs `vesper.morning.generate_morning_plan()` — a standalone briefing, not the graph. |
+| `monitor` | Runs `vesper.monitor.run_monitor_loop()` — one exit-cascade sweep (or continuous, see `--interval`/`--once`) over open positions. |
+| `halt` | Emergency freeze via `vesper.halt.halt()`. **Currently broken**: it calls `halt(reason=args.reason, ...)` but `--reason` is not a registered argparse flag, so this command raises `AttributeError` on any invocation (verified by running it). |
+| `resume` | Emergency-freeze release via `vesper.halt.resume()`. |
+| `status` | Prints halt state, paper-ledger summary, health metrics written by a separately-running `vesper loop` (if any), and pending-approval ages. Report-only — never claims liveness of a process it isn't part of. |
+| `paper` | Prints the paper-trading ledger (NLV, cash, realized/unrealized P&L, open positions). The `if args.mark: mark_to_market()` branch is **also broken** — `--mark` is not a registered flag, so `vesper.py paper --mark` (or any `paper` call, since `args.mark` is read unconditionally) raises `AttributeError` the same way `halt` does. |
+| `listen` | Runs the Telegram long-poll loop and Discord gateway concurrently, feeding `ApprovalRegistry` real Approve/Reject taps and `/halt`/`/resume` commands. Outbound-only, no port opened. Builds one graph instance and reuses it for resuming paused threads. |
+| `loop` | Unattended daemon (`vesper/loop.py`): scheduled scans at fixed ET times + a continuous position monitor + the alert watcher thread, all in one process. `dry_run` by default; `--live` makes a scheduled scan draft proposals that still pause for a remote Telegram/Discord approval — run `listen` alongside it, or nothing gets approved. Skips a scheduled scan entirely while halted. No holiday calendar; weekends are skipped. |
+| `alerts` | Arm/list/remove dealer-gamma alerts (see Alerts section below). Control-plane only — alerts are *evaluated* by the watcher thread inside a running `vesper loop`, not by this one-shot process. |
+| `audit` | Verifies the hash-chained audit ledger's integrity via `vesper.audit_chain.verify_chain()`. `--verify` is accepted but currently a no-op placeholder flag (the command has only one mode today). |
 
-### Orders — writes
+### Flags
 
-| Tool | Required | Notes |
+| Flag | Applies to | Meaning |
 | --- | --- | --- |
-| `preview_order` | `symbol`, `side`, `quantity` | Stages a ticket. Does **not** send. |
-| `preview_option_order` | `legs`, `quantity` | Single or multi-leg. Stages a ticket. |
-| `place_order` | `ticket_id` | **Sends.** Real money. |
-| `discard_ticket` | `ticket_id` | Drop a staged ticket. |
-| `replace_order` | `account_id`, `client_order_id` | Amend quantity or price. Guards re-run. |
-| `cancel_order` | `account_id`, `client_order_id` | Never capped — reducing risk is always allowed. |
-| `cancel_all_orders` | — | Clears resting orders. Does *not* close positions. |
-| `place_order_now` | `symbol`, `side`, `quantity` | One-shot. Only works with `SIDECAR_ORDER_CONFIRM=0`; otherwise returns a rejection telling you to preview first. |
-
-`preview_order` parameters: `order_type` (MARKET, LIMIT, STOP_LOSS,
-STOP_LOSS_LIMIT, TRAILING_STOP_LOSS), `limit_price`, `stop_price`,
-`time_in_force` (DAY, GTC, IOC), `trading_session` (CORE, ALL, NIGHT),
-`take_profit` / `stop_loss` (either one turns it into a bracket), `algo_type`
-(TWAP, VWAP, POV — US only), `account_id`.
-
-`preview_option_order` legs: each needs `symbol` (the *underlying*, e.g. `TSLA`),
-`strike_price`, `option_expire_date`, `option_type` (CALL/PUT), `side`,
-`quantity`. `option_strategy`: SINGLE, VERTICAL, STRADDLE, STRANGLE, CALENDAR,
-DIAGONAL, BUTTERFLY, CONDOR, IRON_CONDOR.
+| `ticker` (positional) | `analyze` | Target symbol. Defaults to `SPY` for `analyze`/`0dte` if omitted. |
+| `--playbook` | scan-family commands | `all` (default), `momentum_squeeze`, `0dte_flow`, `institutional_convergence`, `collar_following`, `adx_iv_router`, `thega`, `recycle`, `tax_reserve`, `earnings_vega`. |
+| `--persona` | scan-family, `loop` | `default` or `traderlady` — response voice. |
+| `--live` | scan-family, `loop` | Enables live Webull execution *mode* — still gated by `VESPER_TRADING`, the deterministic risk gate, and a human approval tap. Does not skip anything. |
+| `--non-interactive` | scan-family | Skips human confirmation prompts (used with `AUTO_DRY_RUN` semantics). |
+| `--interval` | `monitor`, `loop` | Poll interval in seconds, default `15.0`. |
+| `--once` | `monitor` | Run a single sweep and exit instead of looping. |
+| `--license-key` | any | Validates a Whop commercial license key and exits — unrelated to trading. |
+| `--arm SYMBOL LEVEL DIRECTION` | `alerts` | Arm one alert. `LEVEL` is a number or one of `flip`/`pin`/`wall_above`/`wall_below`. |
+| `--disarm ID` | `alerts` | Remove an alert by id (id comes from `alerts`'s listing). |
+| `--note` | `alerts` (with `--arm`) | Optional note attached to the armed alert. |
+| `--verify` | `audit` | Accepted, currently a no-op. |
 
 ---
 
-## The ticket handshake
+## The order path
 
-Two steps, and the reason is the same one that makes it good for voice: no
-single call can both construct an order and fire it, and what gets confirmed out
-loud is byte-for-byte what reaches the broker.
+There is no MCP tool and no HTTP route that can place an order. The only way
+one reaches Webull is: the LangGraph pipeline drafts a proposal → the
+deterministic risk gate passes it → a human taps Approve on a Telegram or
+Discord card → `executor_node` calls `vesper/execution_guard.py`.
 
-```
-preview_order(...)  ──► { ticket_id, summary, preview, expires_in, orders }
-                          │
-                     read `summary` back to the user, wait for a yes
-                          │
-place_order(ticket_id) ──► { ok: true, orders, response }
-```
-
-The ticket holds a SHA-256 of the exact payload. `place` re-checks that digest,
-marks the ticket used, and refuses a second call. Tickets expire after **120
-seconds** — preview again rather than trying to reuse one.
-
-A broker-side rejection un-marks the ticket so the same confirmed order can be
-retried without re-confirming.
-
-Response shape from `preview`:
-
-```json
-{
-  "ticket_id": "0f3c…",
-  "kind": "equity",
-  "account_id": "…",
-  "summary": "BUY 2 ONDS @ 8.40 DAY CORE (TP 11.5 / SL 10)",
-  "origin": "ui",
-  "orders": [ { "client_order_id": "…", "combo_type": "NORMAL", … } ],
-  "preview": { "estimated_cost": "16.80", "buying_power_effect": "-16.80" },
-  "expires_in": 119,
-  "used": false
-}
-```
-
-`orders` is the literal payload that will be sent — inspect it if you want to
-know exactly what Webull receives.
-
-### Guard rejections
-
-Guards run **server-side on every path**, so MCP, HTTP and anything else get the
-same answers. A rejection comes back as an HTTP 400 with a plain message, which
-the MCP layer passes through verbatim so it can be read aloud:
+### Pipeline (`vesper/graph.py`)
 
 ```
-order notional ~$75,600.00 exceeds SIDECAR_MAX_NOTIONAL ($2,500.00).
+regime_node → scanner_node → analyst_node → playbooks_node → risk_gate_node
+    → human_gate_node → (executor_node if approved | reflection_node if not) → reflection_node → END
+```
+
+Every node is wrapped so any `audit_trail` entries it returns are committed
+immediately to a hash-chained ledger (`vesper/audit_chain.py`, inspected via
+`vesper.py audit`) — per-node, not at session end, because `human_gate_node`
+can pause the whole graph across a process restart via LangGraph's
+`interrupt()`. The graph is compiled with a disk-backed SQLite checkpointer
+(`vesper/data/checkpoints.sqlite`) so a paused approval survives a crash.
+
+- **`risk_gate_node`** (`vesper/nodes/risk_gate.py`) runs `RiskEnforcer`
+  checks (notional, capital-allocation buckets, sector concentration) against
+  live equity/buying-power reads, trips the circuit breaker on a portfolio
+  drawdown, and — only after the deterministic checks pass, only if
+  `OPENROUTER_API_KEY` is set — runs an LLM red-team audit that may REJECT a
+  proposal or halve its quantity, never approve what was rejected or raise
+  size (CLAUDE.md rule 6).
+- **`human_gate_node`** (`vesper/nodes/human_gate.py`) registers each
+  proposal in the disk-backed `ApprovalRegistry`
+  (`vesper/bot/inbound.py`), broadcasts a `ProposalCard` to every configured
+  channel (`vesper/bot/manager.py`'s `channel_manager`), then either reads
+  back an already-resolved decision or calls `interrupt()` to pause the
+  graph until one arrives. `ProposalCard` (`vesper/bot/base.py`) carries
+  ticker/side/quantity/price, stop/target, thesis, worst-case notional, a
+  proposal-time SHA-256 digest, buying-power impact, and the
+  before/after allocation-bucket numbers computed one node earlier.
+- **`executor_node`** (`vesper/nodes/executor.py`) only acts on
+  `prop.approved` proposals. In dry-run mode it writes a simulated fill to
+  the paper ledger (and still checks `halt()` explicitly, since it never
+  touches `execution_guard` and would otherwise miss the halt check). In
+  live mode it calls `execution_guard.guard.preview()` then `.place()`.
+
+### Ticket handshake (`vesper/execution_guard.py`)
+
+The only module allowed to write to a broker. **Preview, then confirm, then
+place:**
+
+1. `guard.preview(proposal_id, payload, live_buying_power)` runs the guards
+   and, if they pass, stages a `Ticket` — a `uuid4` id plus a SHA-256 digest
+   of the exact payload (`hashlib.sha256(json.dumps(payload, sort_keys=True,
+   default=str))`).
+2. `guard.place(ticket_id, payload, place_fn)` re-hashes the payload it's
+   given, refuses if it doesn't match the ticket's stored digest, marks the
+   ticket used, and only then calls the broker-specific `place_fn`.
+
+Tickets are **single-use** and **expire after 120 seconds**
+(`TICKET_TTL_SEC`); a broker-side rejection un-marks the ticket so a retry
+doesn't require re-confirming. `ExecutionGuard` is a process-lifetime
+singleton (`guard = ExecutionGuard()`) so a ticket staged by one node
+invocation is redeemable by the next.
+
+### Guards, checked on every path
+
+- **`VESPER_TRADING`** — the kill switch. Defaults **off**. Checked before
+  anything else, alongside `vesper/halt.py`'s emergency freeze.
+- **`VESPER_MAX_NOTIONAL`** (default `2500`) — a SELL-to-open option is
+  priced off `strike × 100 × quantity`, not `limit_price`; a payload missing
+  `strike` on that path is refused outright rather than under-counted.
+- **`VESPER_MAX_QUANTITY`**, **`VESPER_SYMBOL_ALLOWLIST`**,
+  **`VESPER_MAX_BP_FRACTION`** — quantity cap, optional allowlist, optional
+  buying-power fraction cap.
+- **Multi-leg combos** dispatch to a whitelist,
+  `_MULTI_LEG_RISK_FORMULAS`, keyed by `strategy_type`. Only two entries
+  exist today: `SYNTHETIC_LONG` (long call + short put, same
+  strike/expiry/quantity — risk is the put's assignment notional) and
+  `THEGA` (fixed-ratio 100 shares : 1 covered call : 3 CSPs, same
+  strike/expiry — risk is share cost + all-three-puts-assigned notional).
+  An unregistered `strategy_type` is refused outright, never approximated —
+  per CLAUDE.md's status section, this means every legged strategy other
+  than these two currently has **no reachable success path** in
+  production.
+
+A rejection is a `GuardError` (or `TradingDisabled` for the kill
+switch/halt case) with a plain-text message, e.g.:
+
+```
+order notional ~$75,600.00 exceeds VESPER_MAX_NOTIONAL ($2,500.00).
 Raise the cap deliberately if you mean it.
 ```
 
-Rejections are answers, not transport failures — relay them rather than retrying
-blindly. `replace` re-runs the guards (amending an order can raise exposure);
-`cancel` never does. Market orders are priced from the live quote before the cap
-is applied, so leaving off a limit price doesn't dodge it.
+---
+
+## Alerts
+
+`alerts.py` + `watcher.py` + `notify.py` — restored 2026-08-29 (CLAUDE.md
+rule 4c). Armed and inspected entirely through the CLI, evaluated only while
+a `vesper loop` process is running:
+
+```
+vesper.py alerts                              # list armed alerts
+vesper.py alerts --arm SPY flip below --note "watching for regime flip"
+vesper.py alerts --disarm <id>
+```
+
+- `LEVEL` is a number **or** one of `alerts.DYNAMIC_LEVELS`: `flip`, `pin`,
+  `wall_above`, `wall_below` — re-resolved from TDPro on every evaluation
+  (`alerts.resolve_level()`), not frozen at arm time.
+- Alerts fire on a **crossing**: one armed on the wrong side of its level
+  starts `pending` and only arms once price returns to the expected side. A
+  moving level (e.g. the flip drifting past a stationary price) never fires
+  on its own — both previous and current price are compared against the
+  *current* resolved level (`alerts.evaluate()`).
+- Delivery is `notify.Notifier` → ntfy and/or Telegram. The ntfy topic is
+  treated as a credential (128 bits of randomness, never surfaced by any
+  status output).
+- There is no `/api/alerts` route and no MCP alert tools — `Watcher`
+  (`watcher.py`) is a plain background thread started inside `vesper loop`
+  (`vesper/alerts_runner.py`), not an asyncio task, because the Webull SDK
+  calls it makes are blocking.
 
 ---
 
-## HTTP API
+## MCP tools (`mcp_server/`)
 
-### Account
+FastMCP server registered under the name `"momentum"`, stdio transport by
+default (`MCP_TRANSPORT` env var can switch it to SSE; nothing in this repo
+starts it that way). **52 `@mcp.tool` registrations**, all defined in
+`mcp_server/server.py` with implementations imported from the other files in
+the directory. Holds **no broker credentials**, does not import `wb.py`, and
+has **no order-placement tool** — confirmed by reading every file in the
+directory, not just the entrypoint.
 
-| Method | Path | Query |
+(The server's own internal strings are stale and disagree with each other —
+the FastMCP `instructions` text says "33 quantitative trading tools," the
+startup log line says "35 tools registered." The actual count, from the
+`@mcp.tool` decorators themselves, is 52.)
+
+### Screening
+
+| Tool | Required args | Description |
 | --- | --- | --- |
-| GET | `/api/portfolio` | `live` (default true — overlays live quotes onto positions) |
-| GET | `/api/activities` | `account_id` |
-| GET | `/api/calendar` | `market_code` |
-| GET | `/api/health` | — |
+| `run_stock_screen` | none (`preset="most_active"`, `limit=25`) | Run a TradingView scanner preset — 22 presets (most_active, new_highs/lows, overbought/oversold, gap_up/down, EMA-stack, pre/after-market movers, etc). |
+| `run_custom_screen` | `filters: list[dict]` | Build a custom screen from `{field, operator, value}` conditions over RSI/ADX/ATR/EMA/MACD/BB/Stoch/CCI/volume/etc. |
+| `screen_vcp` | none (`tickers`, `max_tickers=50`) | Screen for Volatility Contraction Pattern (Stage 2 tight-base) setups. |
+| `screen_pead` | none (`lookback_days=10`) | Screen for Post-Earnings Announcement Drift: gap-up-on-earnings names now pulling back to EMA10/20. |
+| `screen_canslim` | none (`tickers`, `max_tickers=30`) | Screen for CANSLIM growth-stock criteria near 52-week highs with institutional sponsorship. |
 
-### Market data
+### Technicals & charts
 
-| Method | Path | Query |
+| Tool | Required args | Description |
 | --- | --- | --- |
-| GET | `/api/quote` | `symbols`, `category` |
-| GET | `/api/bars` | `symbol`, `category`, `timespan`, `count`, `sessions` |
-| GET | `/api/depth` | `symbol`, `category`, `levels` |
-| GET | `/api/tick` | `symbol`, `category`, `count` |
-| GET | `/api/footprint` | `symbols`, `category`, `timespan`, `count` |
-| GET | `/api/noii` | `symbol`, `action_type` |
-| GET | `/api/instrument` | `symbols`, `category` |
-| GET | `/api/options/chain` | `underlying`, `expire_date`, `option_type`, `strike_gte`, `strike_lte`, `page_size` |
-| GET | `/api/options/quote` | `symbols` |
+| `analyze_technicals` | `ticker` | 24 indicators (EMA 8-89, SMA 50/100/200, RSI, MACD, ADX, ATR, Williams %R, Stochastic, Bollinger, CCI) with a summary. |
+| `get_tv_analysis` | `ticker` | TradingView 26-indicator consensus (STRONG_BUY…STRONG_SELL) with oscillator/MA counts. |
+| `generate_chart` | `ticker` | Candlestick chart with EMA overlays; returns base64 PNG + file path. |
+| `analyze_recent_gap` | `ticker` | Scores (0-100) the most recent overnight gap on size, volume, price hold, and fundamentals. |
+| `get_momentum_pulse` | none (`tickers`, defaults to 24 warm tickers) | Real-time 0-100 momentum score from EMA-stack alignment, RSI sweet-spot, ADX strength. |
 
-`category`: `US_STOCK` (default), `US_ETF`, `US_OPTION`, `US_CRYPTO`,
-`US_FUTURES`, `US_EVENT`.
+### Options (VoPR™ engine)
 
-### Structure & alerts
-
-| Method | Path | Query / body |
+| Tool | Required args | Description |
 | --- | --- | --- |
-| GET | `/api/gex/{symbol}` | — (symbol must match `^[A-Za-z]{1,6}$`) |
-| GET | `/api/alerts` | — |
-| POST | `/api/alerts` | `{symbol, level, direction, note?, repeat?}` |
-| DELETE | `/api/alerts/{alert_id}` | — |
-| POST | `/api/alerts/test` | — |
+| `analyze_options_setup` | `ticker` | Composite realized vol, VRP ratio, Black-Scholes delta/theta, A-F grade for a specific DTE/strike. |
+| `find_best_to_sell` | `ticker` | Auto-scans 7-45 DTE puts/calls to sell, scored on RoC/grade/theta/delta; returns top 3 each side. |
+| `find_best_to_buy` | `ticker` | Reads technicals for directional bias, scans 21-60 DTE, returns top 3 buys with rationale. |
+| `sweep_setups` | none (`tickers`, `max_tickers=10`) | Opportunity board: runs sell+buy scanners across multiple tickers in parallel. |
 
-### Research, screening, watchlists
+### Macro, breadth & regime
 
-| Method | Path | Query / body |
+| Tool | Required args | Description |
 | --- | --- | --- |
-| GET | `/api/research/{kind}` | `symbol`, `statement`, `count` |
-| GET | `/api/screener/{kind}` | `category`, `page_size`, `rank_type`, `sort_by` |
-| GET | `/api/watchlists` | — |
-| GET | `/api/watchlists/{id}` | — |
-| POST | `/api/watchlists` | `{"name": "..."}` |
-| DELETE | `/api/watchlists/{id}` | — |
-| POST | `/api/watchlists/{id}/add` | `{"instruments": [...]}` |
-| POST | `/api/watchlists/{id}/remove` | `{"instruments": [...]}` |
+| `get_exposure_recommendation` | none | Synthesizes VIX, flow, distribution days, trend into a 0-100% capital-deployment ceiling. |
+| `get_market_environment` | none | Cross-asset snapshot (equities/bonds/commodities/currencies/crypto) for macro rotation. |
+| `detect_macro_regime` | none (`lookback=90`) | Classifies Growth/Inflation/Deflation/Goldilocks regime via RSP/SPY, TLT/SHY, XLY/XLP ratios. |
+| `analyze_breadth` | none | 0-100 market breadth score from equal- vs cap-weight trends, new highs/lows, vol term structure. |
+| `analyze_uptrend_participation` | none | % of the 11 SPDR sectors + major indices trading above EMA50/EMA200. |
+| `detect_themes` | none (`lookback=20`) | Clusters thematic ETFs (AI, Biotech, Energy, …) to find what's moving together. |
+| `detect_market_top` | none | O'Neil distribution-day count + defensive-sector-rotation topping signal. |
+| `detect_ftd` | none | Detects O'Neil Follow-Through Days confirming a new bull market. |
+| `detect_bubble_risk` | none | 0-15 euphoria score from 200d-MA extension, VIX complacency, PE, speculative volume, meme fever. |
 
-### Orders
+### TraderDaddy Pro market intel
 
-| Method | Path | Body |
+| Tool | Required args | Description |
 | --- | --- | --- |
-| GET | `/api/orders/config` | — |
-| GET | `/api/orders/open` | — |
-| GET | `/api/orders/history` | `page_size` |
-| GET | `/api/orders/tickets` | — (staged, unused tickets) |
-| POST | `/api/orders/preview` | order spec |
-| POST | `/api/orders/place` | `{"ticket_id": "..."}` |
-| POST | `/api/orders/place_direct` | order spec — 400s unless `SIDECAR_ORDER_CONFIRM=0` |
-| DELETE | `/api/orders/tickets/{id}` | — |
-| POST | `/api/orders/replace` | `{account_id, client_order_id, quantity?, limit_price?, stop_price?, kind?}` |
-| POST | `/api/orders/cancel` | `{account_id, client_order_id, kind?}` |
-| POST | `/api/orders/cancel_all` | — |
+| `get_market_pulse` | none | AI-generated options-flow sentiment score, -7 (panic) to +7 (extreme bullish). |
+| `get_market_stats` | none | Market-wide put/call ratios and sentiment indicators. |
+| `get_put_call_ratios` | none (`ticker="SPY"`) | Put/call ratio for a ticker; <0.7 complacent, >1.0 elevated fear. |
+| `get_sector_flow` | none | Sector-by-sector options flow sentiment. |
+| `get_unusual_activity` | none | Unusual options flow feed — institutional trades, premium size, conviction. |
+| `get_signals` | none | Breakout/continuation signals with technical indicator data. |
+| `get_gex_overview` | none | Gamma exposure for SPY/QQQ/IWM; positive = pinning, negative = trending, flip = regime boundary. |
+| `get_earnings_calendar` | none | This week's earnings reporters. |
+| `get_earnings_flow` | none | Pre-earnings institutional options positioning — market-wide, **not** ticker-filterable (see CLAUDE.md's `get_earnings_flow` gotcha). |
+| `get_politician_trades` | none | Congressional stock-trading disclosures. |
+| `get_alpha_signals` | none (`ticker`, `signal_type`, `limit=50`) | Recent auto-detected signals (RSI/MACD crosses, volume spikes, EMA breakout, ADX entry) from a background factory scanning 24 tickers every 5-30 min. |
 
-Order spec (equity), as accepted by `/api/orders/preview` and
-`/api/orders/place_direct`:
+### Research, fundamentals & knowledge base
 
-```json
-{
-  "symbol": "ONDS",
-  "side": "BUY",
-  "quantity": 2,
-  "order_type": "LIMIT",
-  "limit_price": 8.40,
-  "time_in_force": "DAY",
-  "trading_session": "CORE",
-  "bracket": { "take_profit": 11.5, "stop_loss": 10.0 },
-  "kind": "equity"
-}
-```
-
-A `bracket` expands server-side into a Webull combo: `MASTER` +
-`STOP_PROFIT` + `STOP_LOSS`, with the children taking the opposite side and the
-same quantity as the entry.
-
-### Signals & chat
-
-| Method | Path | Notes |
+| Tool | Required args | Description |
 | --- | --- | --- |
-| GET | `/api/signals` | TraderDaddy snapshot |
-| GET | `/api/chat/status` | Credential kind and model |
-| POST | `/api/chat` | SSE stream of a chat turn. Body takes an optional `symbol` — the focused gamma name, whose levels ride along with the turn so voice questions need no ticker. |
+| `get_fundamentals` | `ticker` | P/E, EPS, revenue growth, margin, short interest, analyst targets, earnings dates, market cap. |
+| `fetch_ticker_news` | `ticker` | Recent RSS news headlines for a stock. |
+| `extract_article_text` | `url` | Full-text extraction of a news article, ads/nav stripped. |
+| `search_knowledge` | `query` | RAG search over a 139-book trading-knowledge library. |
+| `generate_alpha_card` | `ticker` | Branded HTML analysis card combining technicals + TV consensus for sharing. |
 
-The chat panel has **no order tools** — see rule 3 in [CLAUDE.md](../CLAUDE.md).
+### Backtesting
 
----
+| Tool | Required args | Description |
+| --- | --- | --- |
+| `backtest_strategy` | `ticker` | Backtest one of 6 preset strategies (ema_crossover, rsi_bounce, macd_momentum, bollinger_squeeze, golden_cross, ema_stack_breakout); returns Sharpe/win-rate/CAGR. |
+| `sweep_strategy` | `tickers: list[str]` | Runs a strategy across up to 20 tickers, ranked by Sharpe/return. |
+| `walk_forward_test` | `ticker` | Walk-forward validation across n folds to detect overfitting. |
+| `save_strategy` | `name`, `conditions: dict` | Persists a custom strategy to disk. |
+| `list_strategies` | none | Lists saved custom strategies. |
+| `get_learned_patterns` | none | Auto-extracted patterns from past backtests with win rates. |
 
-## SSE stream
+### Misc / journal / sizing
 
-`GET /api/stream` — a single event stream carrying both push feeds. On connect
-it replays the last known value per topic, so a freshly opened client renders
-immediately instead of waiting for every symbol to tick. A `: keepalive` comment
-goes out every 20s.
+| Tool | Required args | Description |
+| --- | --- | --- |
+| `get_historical_data` | `ticker` | OHLCV price bars for a ticker/period/interval. |
+| `calculate_position_size` | `ticker`, `account_size` | Risk-based sizing via Fixed Fractional, ATR, or Kelly method. |
+| `log_conviction` | `ticker`, `direction`, `conviction`, `thesis` | Logs a trade conviction (long/short, high/med/low) to a journal. |
+| `get_track_record` | none | Full conviction-journal history with win/loss stats. |
+| `analyze_pair` | `ticker_a`, `ticker_b` | Correlation, ratio, and Z-score of the spread between two tickers (stat-arb). |
+| `analyze_scenario` | `ticker`, `catalyst` | Bull/base/bear price-target scenarios for a given catalyst. |
+| `model_price_distribution` | `ticker` | Confidence-interval (68/95/99%) price targets from historical volatility. |
 
-```js
-const es = new EventSource("/api/stream");
-es.onmessage = e => {
-  const ev = JSON.parse(e.data);
-  if (ev.type === "quote") { /* ev.symbol, ev.last, ev.bid, ev.ask */ }
-  if (ev.type === "event") { /* ev.kind: order | position | option */ }
-  if (ev.type === "stream") { /* ev.feed, ev.state: connected | disconnected */ }
-};
-```
+Full tool count: **52**, verified against `mcp_server/server.py`'s
+`@mcp.tool` decorators (no discrepancy from the count above).
 
-**Quote** (MQTT, `DataStreamingClient`) — subscribed to whatever the account
-currently holds, retargeted as positions change:
+## More detail
 
-```json
-{"type":"quote","key":"quote:ONDS","symbol":"ONDS","last":8.61,
- "bid":8.60,"ask":8.62,"volume":1000,"change":0.1,"change_pct":0.01,"at":1.75e9}
-```
-
-**Trade event** (gRPC, `TradeEventsClient`) — the one worth wiring up. An order
-you place *in Webull Desktop* pushes here in about a second, so the deck stops
-being a polled approximation of what the desktop already knows:
-
-```json
-{"type":"event","kind":"order","subscribe_type":"...","payload":{...},"at":1.75e9}
-```
-
-`kind` is `order`, `position`, or `option`. Payloads are scrubbed of
-credential-shaped keys before they leave the server.
-
-`GET /api/stream/status` reports per-feed connection state, last message time,
-and subscriber count.
-
-Both feeds are optional and degrade rather than break: if MQTT can't connect,
-the REST snapshot path in `md.py` keeps prices correct, just less immediate.
-Streaming needs MQTT and gRPC egress, which a locked-down host may not have.
-
----
-
-## Notes
-
-- **Reads are cached** to fit the rate limits: quotes 1s, bars 30s, screeners
-  60s, research 15min, portfolio 8s, orders 4s. A fill invalidates the portfolio
-  and open-order caches immediately — serving a cached snapshot after an order
-  lands would misreport holdings.
-- **Market data needs a subscription** in the regional Webull app. Positions,
-  balances and the order path do not.
-- **`instrument_type` vs `category`.** Position rows use `EQUITY`/`OPTION`/
-  `CRYPTO`; market-data calls want `US_STOCK`/`US_OPTION`/`US_CRYPTO`.
-  `md.category_for()` maps between them.
+[CLAUDE.md](../CLAUDE.md) has the design rules behind all of this: the order
+path's invariants (rule 3), the LLM narrate/reject-only boundary (rule 6),
+push-vs-poll for the monitor (rule 4b), dealer-gamma alert semantics (rule
+4c), and the current verified/unverified status of each subsystem.

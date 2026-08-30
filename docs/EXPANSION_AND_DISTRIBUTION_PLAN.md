@@ -9,11 +9,17 @@
 > it reads as written against `CLAUDE.md`, which is stale on exactly this
 > point. Deleted in `de60d51` and *not* present: `orders.py` (that role is now
 > `vesper/execution_guard.py` alone), `server.py` + `static/` (no browser
-> dashboard), `chat.py` (no browser chat), `alerts.py` (no alerts subsystem —
-> so `list_alerts`/`arm_alert`/`cancel_alert` below have nothing behind them),
-> `stream.py` (no SSE). **There is no served HTTP API at all**; the only HTTP
-> server is `vesper/bot/inbound.py`'s aiohttp webhook app, which nothing
-> starts. So Phase 2's HTTP/`/api/v1` work is net-new build, not preservation.
+> dashboard), `chat.py` (no browser chat). **There is no served HTTP API at
+> all**; the only HTTP server is `vesper/bot/inbound.py`'s aiohttp webhook
+> app, which nothing starts. So Phase 2's HTTP/`/api/v1` work is net-new
+> build, not preservation.
+>
+> **Correction (same day, later):** `alerts.py`, `quotes.py`, `notify.py`,
+> `watcher.py` and `stream.py` were restored later on 2026-08-29 and are live
+> again — `list_alerts`/`arm_alert`/`cancel_alert` now have a real CLI/loop
+> path behind them (`vesper.py alerts --arm ...`, evaluated by the watcher
+> thread inside `vesper.py loop`), just not an HTTP one. See CLAUDE.md rules
+> 4c/4d.
 > See ROADMAP.md → Ideas Backlog → "From `docs/EXPANSION_AND_DISTRIBUTION_PLAN.md`"
 > for the vetted subset and its priority order.
 
