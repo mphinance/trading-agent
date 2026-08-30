@@ -287,6 +287,8 @@ wb.py              Webull client — credentials, account/position/order reads,
                    caching and the scarce 2-req/2s bucket
 md.py              Market data, research, screeners, watchlists (600/min bucket)
 td.py              TraderDaddy Pro client + td.levels() dealer-gamma compaction
+edgar.py           SEC EDGAR client — filings, XBRL financials, shares
+                   outstanding, AS-FILER 13D/13G stakes. Needs SEC_USER_AGENT.
 alerts.py          Alert store + crossing logic (a level can BE dealer structure)
 watcher.py         Background thread evaluating alerts
 quotes.py          Last price w/ fallback chain: md snapshot -> portfolio -> TDPro

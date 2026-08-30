@@ -45,6 +45,12 @@ from mcp_server.options import (
 )
 from mcp_server.tv_analysis import get_tv_analysis as _get_tv_analysis
 from mcp_server.fundamentals import get_fundamentals as _get_fundamentals
+from mcp_server.edgar_tools import (
+    get_sec_filings as _get_sec_filings,
+    get_sec_financials as _get_sec_financials,
+    get_shares_outstanding as _get_shares_outstanding,
+    get_stakes_held as _get_stakes_held,
+)
 from mcp_server.knowledge import search_knowledge as _search_knowledge
 from mcp_server.conviction import (
     log_conviction as _log_conviction,
@@ -327,6 +333,40 @@ async def get_fundamentals(ticker: str) -> dict[str, Any]:
     """Get fundamental data: P/E, EPS, revenue growth, profit margin,
     short interest, analyst targets, earnings dates, market cap."""
     return _out(_out(await _get_fundamentals(ticker=ticker)))
+
+
+@mcp.tool()
+async def get_sec_filings(
+    ticker: str, months: int = 12, forms: list[str] | None = None
+) -> dict[str, Any]:
+    """SEC EDGAR filing index straight from the primary source: the
+    recent-events sweep. `forms` narrows to types like ["8-K", "10-Q"]."""
+    return _out(await _get_sec_filings(ticker=ticker, months=months, forms=forms))
+
+
+@mcp.tool()
+async def get_sec_financials(
+    ticker: str, periods: int = 8, annual: bool = True
+) -> dict[str, Any]:
+    """Multi-period financials from SEC XBRL, including the accrual gap
+    (net income minus operating cash flow: positive means earnings are
+    accrual-driven rather than cash-backed)."""
+    return _out(await _get_sec_financials(ticker=ticker, periods=periods, annual=annual))
+
+
+@mcp.tool()
+async def get_shares_outstanding(ticker: str) -> dict[str, Any]:
+    """Cover-page share count straight from the 10-Q/10-K filing, not an
+    aggregator's derived figure. Flags an implausible diluted count instead
+    of silently returning it."""
+    return _out(await _get_shares_outstanding(ticker=ticker))
+
+
+@mcp.tool()
+async def get_stakes_held(ticker: str, months: int = 24) -> dict[str, Any]:
+    """AS-FILER 13D/13G: stakes this company holds in OTHER public companies
+    (e.g. GME's 9.8% stake in eBay), not who owns this ticker."""
+    return _out(await _get_stakes_held(ticker=ticker, months=months))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
