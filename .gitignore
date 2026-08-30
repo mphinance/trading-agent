@@ -30,6 +30,9 @@ charts/
 # quantities, prices) -- rule 5 says that does not get committed. The hash
 # chain is its own tamper evidence; it does not need git for that.
 data/audit_chain.jsonl
+# Was tracked until 2026-08-30; untracked because every run rewrites it,
+# and it records real conviction/trade history (rule 5).
+data/conviction_journal.json
 data/paper_ledger.json
 data/halt_state.json
 data/circuit_breaker_state.json

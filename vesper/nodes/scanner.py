@@ -14,6 +14,11 @@ from tickertrace_mcp import get_briefing
 
 logger = logging.getLogger(__name__)
 
+# Cap per screener preset. The point is a workable shortlist, not every row --
+# analyst_node runs real technicals on each candidate, so an unbounded screener
+# would blow up the analysis pass and the 2-req/2s account bucket behind it.
+SCREENER_MAX_PER_PRESET = 8
+
 
 async def scanner_node(state: TradingState) -> Dict[str, Any]:
     """Discovers high-probability setups from multiple uncorrelated sources."""
@@ -167,7 +172,128 @@ async def scanner_node(state: TradingState) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Error scanning unusual options flow: {e}")
 
-    # 5. 0DTE Core Indices
+    # 5. TraderDaddy screeners — the point of the scanner: it brings tickers
+    # to you rather than you curating a watchlist.
+    #
+    # The screener preset is chosen from the playbook being run, because
+    # TDPro's presets map almost 1:1 onto the playbooks: there is no reason to
+    # feed CSP-wheel candidates into a 0DTE gamma playbook. On "all", every
+    # preset below runs. Confirmed live 2026-08-30: run_screener requires a
+    # `screener` arg from a fixed enum, and returns {results: [...]} rows keyed
+    # by `symbol` with adx / rsi / stochK / atr / price / volume alongside.
+    _SCREENER_FOR_PLAYBOOK = {
+        "momentum_squeeze": ["bullish-pullback", "volatility-squeeze"],
+        "adx_iv_router": ["momentum", "csp-wheel", "leaps"],
+        "collar_following": ["csp-wheel"],
+        "thega": ["volatility-surge"],
+        "0dte_flow": ["gamma-scan"],
+        "leveraged": ["leveraged"],
+        "all": ["bullish-pullback", "volatility-squeeze", "momentum", "gamma-scan"],
+    }
+    for preset in _SCREENER_FOR_PLAYBOOK.get(playbook, []):
+        try:
+            from td import TDPro
+
+            client = TDPro()
+            if not client.configured:
+                break
+            res = await asyncio.to_thread(client.cached, "run_screener", {"screener": preset})
+            rows = res if isinstance(res, list) else next(
+                (v for v in (res or {}).values() if isinstance(v, list)), []
+            )
+            added = 0
+            for row in rows[:SCREENER_MAX_PER_PRESET]:
+                if not isinstance(row, dict):
+                    continue
+                ticker = str(row.get("symbol") or "").strip().upper()
+                if not ticker or any(c.ticker == ticker for c in candidates):
+                    continue
+                bits = [
+                    f"ADX {row['adx']:.0f}" for _ in [0] if isinstance(row.get("adx"), (int, float))
+                ] + [
+                    f"RSI {row['rsi']:.0f}" for _ in [0] if isinstance(row.get("rsi"), (int, float))
+                ]
+                candidates.append(
+                    Candidate(
+                        ticker=ticker,
+                        source="TDPRO_SCREENER",
+                        score=8.0,
+                        rationale=f"TDPro '{preset}' screener"
+                                  + (f" ({', '.join(bits)})" if bits else ""),
+                        data=row,
+                    )
+                )
+                added += 1
+            audit_notes.append(f"TDPro screener '{preset}': {added} candidate(s) from {len(rows)} row(s)")
+        except Exception as e:
+            logger.warning(f"TDPro screener '{preset}' failed: {e}")
+            audit_notes.append(f"TDPro screener '{preset}' unavailable: {e}")
+
+    # 6. Pre-market gappers — only meaningful before/around the open, and the
+    # feed says so itself via `session`, so it is not gated on a clock here.
+    if playbook in ("all", "momentum_squeeze", "gappers"):
+        try:
+            from td import TDPro
+
+            client = TDPro()
+            if client.configured:
+                res = await asyncio.to_thread(client.cached, "get_premarket_gappers", {})
+                gappers = (res or {}).get("gappers") or []
+                added = 0
+                for row in gappers[:SCREENER_MAX_PER_PRESET]:
+                    ticker = str(row.get("symbol") or "").strip().upper()
+                    if not ticker or any(c.ticker == ticker for c in candidates):
+                        continue
+                    # `cleared` is the feed's own verdict on whether the gap
+                    # passed its pillar checks; failed ones are noise here.
+                    if row.get("cleared") is False:
+                        continue
+                    chg = row.get("changePct")
+                    candidates.append(
+                        Candidate(
+                            ticker=ticker,
+                            source="PREMARKET_GAPPER",
+                            score=8.5,
+                            rationale="Pre-market gapper"
+                                      + (f" {chg:+.1f}%" if isinstance(chg, (int, float)) else "")
+                                      + (" with news" if row.get("hasNews") else ""),
+                            data=row,
+                        )
+                    )
+                    added += 1
+                audit_notes.append(f"Pre-market gappers: {added} candidate(s) from {len(gappers)}")
+        except Exception as e:
+            logger.warning(f"Pre-market gappers failed: {e}")
+
+    # 7. Bounce signals — TDPro's own detector, keyed `ticker` not `symbol`.
+    if playbook in ("all", "momentum_squeeze", "bounce"):
+        try:
+            from td import TDPro
+
+            client = TDPro()
+            if client.configured:
+                res = await asyncio.to_thread(client.cached, "get_bounce_signals", {})
+                signals = (res or {}).get("signals") or []
+                added = 0
+                for row in signals[:SCREENER_MAX_PER_PRESET]:
+                    ticker = str(row.get("ticker") or "").strip().upper()
+                    if not ticker or any(c.ticker == ticker for c in candidates):
+                        continue
+                    candidates.append(
+                        Candidate(
+                            ticker=ticker,
+                            source="TDPRO_BOUNCE",
+                            score=8.5,
+                            rationale=f"TDPro bounce signal ({row.get('signalType') or 'detected'})",
+                            data=row,
+                        )
+                    )
+                    added += 1
+                audit_notes.append(f"Bounce signals: {added} candidate(s) from {len(signals)}")
+        except Exception as e:
+            logger.warning(f"Bounce signals failed: {e}")
+
+    # 8. 0DTE Core Indices
     if playbook in ("0dte_flow", "all"):
         for index_ticker in ("SPY", "QQQ"):
             if not any(c.ticker == index_ticker for c in candidates):
