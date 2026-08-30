@@ -39,10 +39,10 @@ account reads, 600/min market data and order calls) live in `wb.py` and
 | `0dte` | Same pipeline with `--playbook 0dte_flow`, ticker forced to `SPY`. |
 | `morning` | Runs `vesper.morning.generate_morning_plan()` — a standalone briefing, not the graph. |
 | `monitor` | Runs `vesper.monitor.run_monitor_loop()` — one exit-cascade sweep (or continuous, see `--interval`/`--once`) over open positions. |
-| `halt` | Emergency freeze via `vesper.halt.halt()`. **Currently broken**: it calls `halt(reason=args.reason, ...)` but `--reason` is not a registered argparse flag, so this command raises `AttributeError` on any invocation (verified by running it). |
+| `halt` | Emergency freeze via `vesper.halt.halt()`. Takes an optional `--reason`; omitted, it falls back to `halt()`'s own default message. |
 | `resume` | Emergency-freeze release via `vesper.halt.resume()`. |
 | `status` | Prints halt state, paper-ledger summary, health metrics written by a separately-running `vesper loop` (if any), and pending-approval ages. Report-only — never claims liveness of a process it isn't part of. |
-| `paper` | Prints the paper-trading ledger (NLV, cash, realized/unrealized P&L, open positions). The `if args.mark: mark_to_market()` branch is **also broken** — `--mark` is not a registered flag, so `vesper.py paper --mark` (or any `paper` call, since `args.mark` is read unconditionally) raises `AttributeError` the same way `halt` does. |
+| `paper` | Prints the paper-trading ledger (NLV, cash, realized/unrealized P&L, open positions). `--mark` runs `mark_to_market()` first. |
 | `listen` | Runs the Telegram long-poll loop and Discord gateway concurrently, feeding `ApprovalRegistry` real Approve/Reject taps and `/halt`/`/resume` commands. Outbound-only, no port opened. Builds one graph instance and reuses it for resuming paused threads. |
 | `loop` | Unattended daemon (`vesper/loop.py`): scheduled scans at fixed ET times + a continuous position monitor + the alert watcher thread, all in one process. `dry_run` by default; `--live` makes a scheduled scan draft proposals that still pause for a remote Telegram/Discord approval — run `listen` alongside it, or nothing gets approved. Skips a scheduled scan entirely while halted. No holiday calendar; weekends are skipped. |
 | `alerts` | Arm/list/remove dealer-gamma alerts (see Alerts section below). Control-plane only — alerts are *evaluated* by the watcher thread inside a running `vesper loop`, not by this one-shot process. |
@@ -64,6 +64,8 @@ account reads, 600/min market data and order calls) live in `wb.py` and
 | `--disarm ID` | `alerts` | Remove an alert by id (id comes from `alerts`'s listing). |
 | `--note` | `alerts` (with `--arm`) | Optional note attached to the armed alert. |
 | `--verify` | `audit` | Accepted, currently a no-op. |
+| `--reason` | `halt` | Optional reason recorded in the halt state; defaults to `halt()`'s own message when omitted. |
+| `--mark` | `paper` | Mark open paper positions to market before printing the ledger. |
 
 ---
 

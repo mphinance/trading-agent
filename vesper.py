@@ -62,6 +62,8 @@ Examples:
     parser.add_argument("--disarm", default=None, metavar="ID", help="alerts: remove an alert by id")
     parser.add_argument("--note", default=None, help="alerts: optional note attached to an armed alert")
     parser.add_argument("--verify", action="store_true", help="audit: verify the hash chain's integrity")
+    parser.add_argument("--reason", default=None, help="halt: optional reason recorded in the halt state")
+    parser.add_argument("--mark", action="store_true", help="paper: mark open positions to market before printing the ledger")
 
     args = parser.parse_args()
 
@@ -77,7 +79,7 @@ Examples:
 
     if args.command == "halt":
         from vesper.halt import halt
-        res = halt(reason=args.reason, source="cli")
+        res = halt(reason=args.reason, source="cli") if args.reason else halt(source="cli")
         print(f"\n🛑 {res['message']}")
         sys.exit(0)
 
