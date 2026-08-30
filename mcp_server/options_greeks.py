@@ -61,6 +61,108 @@ def bs_theta(S: float, K: float, T: float, r: float, sigma: float, is_put: bool 
     return float(annual_theta / 365)
 
 
+def bs_gamma(S: float, K: float, T: float, r: float, sigma: float) -> float | None:
+    """Gamma — how fast delta itself changes per $1 move. Same for call and put."""
+    d1, _ = _d1_d2(S, K, T, r, sigma)
+    if d1 is None:
+        return None
+    return float(norm.pdf(d1) / (S * sigma * math.sqrt(T)))
+
+
+def bs_vega(S: float, K: float, T: float, r: float, sigma: float) -> float | None:
+    """Vega — $ gained per 1 point of implied vol (e.g. 30% -> 31%). Same for call and put."""
+    d1, _ = _d1_d2(S, K, T, r, sigma)
+    if d1 is None:
+        return None
+    return float(S * norm.pdf(d1) * math.sqrt(T) / 100.0)
+
+
+def bs_rho(S: float, K: float, T: float, r: float, sigma: float, is_put: bool = True) -> float | None:
+    """Rho — $ gained per 1 percentage point of the risk-free rate."""
+    d1, d2 = _d1_d2(S, K, T, r, sigma)
+    if d1 is None:
+        return None
+    disc = math.exp(-r * T)
+    if is_put:
+        return float(-K * T * disc * norm.cdf(-d2) / 100.0)
+    return float(K * T * disc * norm.cdf(d2) / 100.0)
+
+
+def bs_vanna(S: float, K: float, T: float, r: float, sigma: float) -> float | None:
+    """Vanna — how delta shifts as vol moves (part of why dealer hedging flows push spot).
+
+    Same for call and put at the same strike.
+    """
+    d1, d2 = _d1_d2(S, K, T, r, sigma)
+    if d1 is None:
+        return None
+    return float(-norm.pdf(d1) * d2 / sigma)
+
+
+def bs_vomma(S: float, K: float, T: float, r: float, sigma: float) -> float | None:
+    """Vomma — how `bs_vega` (already scaled per vol-point) itself changes per further vol
+    point. Same for call and put at the same strike.
+    """
+    d1, d2 = _d1_d2(S, K, T, r, sigma)
+    if d1 is None:
+        return None
+    vega = S * norm.pdf(d1) * math.sqrt(T)
+    return float(vega * d1 * d2 / sigma / 100.0)
+
+
+def bs_charm(S: float, K: float, T: float, r: float, sigma: float) -> float | None:
+    """Charm — delta decay PER DAY purely from time passing. Why a position that "should"
+    work stops working into Friday.
+
+    Identical for call and put at q=0 (no dividend yield): the dividend term that would split
+    them vanishes. This module carries no dividend yield anywhere else, so there is no `is_put`
+    branch here — don't add one without also adding `q` to every other function in this file.
+    """
+    d1, d2 = _d1_d2(S, K, T, r, sigma)
+    if d1 is None:
+        return None
+    sqrt_T = math.sqrt(T)
+    tail = norm.pdf(d1) * (2.0 * r * T - d2 * sigma * sqrt_T) / (2.0 * T * sigma * sqrt_T)
+    return float(-tail / 365.0)
+
+
+def implied_vol(
+    market_price: float,
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    is_put: bool = True,
+    low: float = 1e-6,
+    high: float = 10.0,
+    iterations: int = 100,
+) -> float | None:
+    """Volatility implied by an observed market price, via bisection.
+
+    Returns ``None`` rather than a wrong number when the quote is unusable — below intrinsic,
+    above the no-arbitrage ceiling, non-positive, or expired. A wrong IV propagates into every
+    greek computed from it, so refusing to answer beats guessing.
+    """
+    if market_price is None or market_price <= 0 or T <= 0 or S <= 0 or K <= 0:
+        return None
+    price_fn = bs_put_price if is_put else bs_call_price
+
+    lo_price = price_fn(S, K, T, r, low)
+    hi_price = price_fn(S, K, T, r, high)
+    if lo_price is None or hi_price is None or not (lo_price <= market_price <= hi_price):
+        return None
+
+    lo, hi = low, high
+    for _ in range(iterations):
+        mid = 0.5 * (lo + hi)
+        mid_price = price_fn(S, K, T, r, mid)
+        if mid_price is not None and mid_price < market_price:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 # ---------------------------------------------------------------------------
 # Composite Realized Volatility (4-model ensemble)
 # ---------------------------------------------------------------------------
