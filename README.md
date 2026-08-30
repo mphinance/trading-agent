@@ -1,21 +1,119 @@
 # Vesper
 
-A LangGraph-based autonomous trading agent for **Webull**. Vesper scans for
-setups, analyses them against TraderDaddy Pro dealer-gamma structure, drafts an
-order, runs it through a deterministic risk gate, asks a human for approval
-over **Telegram or Discord**, executes, and then monitors the open position for
-an exit.
+**A LangGraph trading agent for Webull that speaks MCP.** It scans for
+setups, reads dealer-gamma structure off TraderDaddy Pro, drafts and
+risk-gates an order, then asks you to approve it over **Telegram or
+Discord** — chart attached — before anything touches your account.
 
-It is a **single-operator personal tool**, not a hosted product. There is no
-authentication, no multi-tenancy, and no browser UI or HTTP API — everything
-runs as a local CLI plus two outbound-only bot connections. See
-[CLAUDE.md](CLAUDE.md) for the full design rules; this file is the "how do I
-run it" version.
+- 🔌 **MCP server built in** — 52 read-only quant tools. Plug it into
+  **Claude Desktop**, **Claude Code**, **Codex CLI**, or anything else that
+  speaks MCP.
+- 🧩 **64 Claude Code skills** ship in `skills/` — VCP/CANSLIM screens,
+  gamma/breadth/regime detectors, backtesting, a full edge-research
+  pipeline, dividend SOPs, and more. Picked up automatically, zero setup.
+- 🤖 **LangGraph pipeline** drafts the trade; a **deterministic risk gate**
+  (not an LLM) enforces notional/quantity/buying-power caps before a human
+  ever sees it.
+- ✅ **Telegram/Discord approval** — preview → confirm ticket handshake,
+  SHA-256'd payload, single-use, 120s TTL. Nothing reaches the broker
+  without a human tap.
 
-**This app can place real orders.** The kill switch defaults **off**
-(`VESPER_TRADING`, unset or `0` = no order reaches the broker), and every
-proposal still has to clear a deterministic risk gate and a human tap on an
-approval card before it does.
+> **This is a single-operator personal tool, not a hosted product.** No
+> authentication, no multi-tenancy, no browser UI or HTTP API — a local CLI
+> plus two outbound-only bot connections. **It can place real orders**; the
+> kill switch (`VESPER_TRADING`) defaults **off**, and every proposal still
+> needs a deterministic risk-gate pass and a human approval tap. See
+> [CLAUDE.md](CLAUDE.md) for the full design rules.
+
+## Contents
+
+- [Connecting an MCP host](#connecting-an-mcp-host-claude-desktop-claude-code-codex-)
+- [Skills](#skills)
+- [Run](#run)
+  - [Credentials](#credentials)
+  - [Getting started on a new machine](#getting-started-on-a-new-machine)
+  - [Key environment variables](#key-environment-variables)
+- [Layout](#layout)
+- [Tests](#tests)
+- [The order path](#the-order-path)
+- [Deploy](#deploy)
+- [More detail](#more-detail)
+
+## Connecting an MCP host (Claude Desktop, Claude Code, Codex, ...)
+
+`mcp_server/` is a real MCP server — 52 read-only tools (screeners, technical
+indicators, options/VoPR analytics, macro & breadth detectors, TraderDaddy
+intel, backtesting, a knowledge-base search) — and it talks stdio by default,
+so any MCP-compatible host can spawn it as a subprocess. It reads the same
+`./.env` as everything else; most tools need no extra key at all (yfinance,
+TradingView), a few want `TRADERDADDY_API_URL`/`_EMAIL`/`_PASSWORD` or
+`OPENROUTER_API_KEY`/`GEMINI_API_KEY`. It is safe to hand to any of these —
+it never touches `vesper/execution_guard.py` and cannot place an order.
+
+**Claude Desktop** — Settings → Developer → Edit Config:
+
+```json
+{
+  "mcpServers": {
+    "momentum": {
+      "command": "/path/to/webull-sidecar/.venv/bin/python",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "/path/to/webull-sidecar"
+    }
+  }
+}
+```
+
+**Claude Code** — from the repo root:
+
+```bash
+claude mcp add momentum --scope project -- /path/to/webull-sidecar/.venv/bin/python -m mcp_server.server
+```
+
+`--scope project` writes it to a `.mcp.json` at the repo root. That file isn't
+gitignored here, so either commit it (absolute paths won't match a
+collaborator's clone, so they'd need `--scope local` instead) or leave it
+uncommitted and let each person run the command for themselves.
+
+**Codex CLI** — in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.momentum]
+command = "/path/to/webull-sidecar/.venv/bin/python"
+args = ["-m", "mcp_server.server"]
+```
+
+`MCP_TRANSPORT=sse` is also supported (`mcp_server/server.py` will bind
+`MCP_HOST`/`MCP_PORT` instead of stdio) for a host that needs a remote
+connection rather than a local subprocess — nothing in this repo starts it
+that way by default, and the code's allowed-hosts list is hardcoded to one
+specific domain, so treat SSE mode as something to adapt, not use as-is.
+
+## Skills
+
+The repo ships 64 Claude Code skills under `skills/` — project-scoped, so
+they're picked up automatically by any Claude Code session opened in this
+directory, no registration step needed. A sample of what's in there:
+
+| Skill | What it does |
+| --- | --- |
+| `stock-recap` | Runs every screener, pulls the biggest options flow and 13F activity, finds the names multiple independent sources agree on |
+| `vcp-screener` / `canslim-screener` | Minervini VCP and O'Neil CANSLIM growth-stock screens |
+| `momentum-squeeze` | Coiled-volatility scan → confirmed-uptrend pullback entries |
+| `0dte-flow` | Same-day XSP/SPX decision support with hard risk guardrails |
+| `market-breadth-analyzer` / `market-top-detector` / `ftd-detector` | Breadth health, distribution-day risk, follow-through-day bottom confirmation |
+| `macro-regime-detector` | Cross-asset regime shifts (concentration, broadening, contraction, inflationary) |
+| `institutional-flow-tracker` / `sector-analyst` / `theme-detector` | 13F flow, sector rotation, thematic lifecycle |
+| `options-strategy-advisor` | Black-Scholes pricing, Greeks, strategy P/L simulation |
+| `backtest-expert` | Parameter robustness, slippage modeling, bias prevention for strategy validation |
+| `edge-*` (7 skills) | A full pipeline from raw observation → hint → concept → strategy draft → adversarial review → export |
+| `kanchi-dividend-*` (3 skills) | Dividend-growth screening, forced-review triggers, US tax/account-placement rules |
+| `breakout-trade-planner` / `position-sizer` | Entry/stop/target levels and portfolio-heat-aware sizing |
+
+Every skill has its own `SKILL.md` describing what it's for and when to use
+it — that's the full, current list; this table is a sample, not an index.
+Invoke one by name (`/vcp-screener`, `/stock-recap`, ...) or just describe
+what you want and Claude picks the matching skill.
 
 ## Run
 
@@ -121,82 +219,6 @@ of this repo had those, and they were deliberately removed rather than kept
 around unused. `mcp_server/` is a separate thing: it exposes quant tooling
 (screeners, technicals, backtests) to MCP hosts, not a bridge to the broker —
 it holds no credentials and cannot place an order.
-
-## Connecting an MCP host (Claude Desktop, Claude Code, Codex, ...)
-
-`mcp_server/` is a real MCP server — 52 read-only tools (screeners, technical
-indicators, options/VoPR analytics, macro & breadth detectors, TraderDaddy
-intel, backtesting, a knowledge-base search) — and it talks stdio by default,
-so any MCP-compatible host can spawn it as a subprocess. It reads the same
-`./.env` as everything else; most tools need no extra key at all (yfinance,
-TradingView), a few want `TRADERDADDY_API_URL`/`_EMAIL`/`_PASSWORD` or
-`OPENROUTER_API_KEY`/`GEMINI_API_KEY`. It is safe to hand to any of these —
-it never touches `vesper/execution_guard.py` and cannot place an order.
-
-**Claude Desktop** — Settings → Developer → Edit Config:
-
-```json
-{
-  "mcpServers": {
-    "momentum": {
-      "command": "/path/to/webull-sidecar/.venv/bin/python",
-      "args": ["-m", "mcp_server.server"],
-      "cwd": "/path/to/webull-sidecar"
-    }
-  }
-}
-```
-
-**Claude Code** — from the repo root:
-
-```bash
-claude mcp add momentum --scope project -- /path/to/webull-sidecar/.venv/bin/python -m mcp_server.server
-```
-
-`--scope project` writes it to a `.mcp.json` at the repo root. That file isn't
-gitignored here, so either commit it (absolute paths won't match a
-collaborator's clone, so they'd need `--scope local` instead) or leave it
-uncommitted and let each person run the command for themselves.
-
-**Codex CLI** — in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.momentum]
-command = "/path/to/webull-sidecar/.venv/bin/python"
-args = ["-m", "mcp_server.server"]
-```
-
-`MCP_TRANSPORT=sse` is also supported (`mcp_server/server.py` will bind
-`MCP_HOST`/`MCP_PORT` instead of stdio) for a host that needs a remote
-connection rather than a local subprocess — nothing in this repo starts it
-that way by default, and the code's allowed-hosts list is hardcoded to one
-specific domain, so treat SSE mode as something to adapt, not use as-is.
-
-## Skills
-
-The repo ships 64 Claude Code skills under `skills/` — project-scoped, so
-they're picked up automatically by any Claude Code session opened in this
-directory, no registration step needed. A sample of what's in there:
-
-| Skill | What it does |
-| --- | --- |
-| `stock-recap` | Runs every screener, pulls the biggest options flow and 13F activity, finds the names multiple independent sources agree on |
-| `vcp-screener` / `canslim-screener` | Minervini VCP and O'Neil CANSLIM growth-stock screens |
-| `momentum-squeeze` | Coiled-volatility scan → confirmed-uptrend pullback entries |
-| `0dte-flow` | Same-day XSP/SPX decision support with hard risk guardrails |
-| `market-breadth-analyzer` / `market-top-detector` / `ftd-detector` | Breadth health, distribution-day risk, follow-through-day bottom confirmation |
-| `macro-regime-detector` | Cross-asset regime shifts (concentration, broadening, contraction, inflationary) |
-| `institutional-flow-tracker` / `sector-analyst` / `theme-detector` | 13F flow, sector rotation, thematic lifecycle |
-| `options-strategy-advisor` | Black-Scholes pricing, Greeks, strategy P/L simulation |
-| `backtest-expert` | Parameter robustness, slippage modeling, bias prevention for strategy validation |
-| `edge-*` (7 skills) | A full pipeline from raw observation → hint → concept → strategy draft → adversarial review → export |
-| `kanchi-dividend-*` (3 skills) | Dividend-growth screening, forced-review triggers, US tax/account-placement rules |
-| `breakout-trade-planner` / `position-sizer` | Entry/stop/target levels and portfolio-heat-aware sizing |
-
-Every skill has its own `SKILL.md` describing what it's for and when to use
-it — that's the full, current list; this table is a sample, not an index.
-Invoke one by name (`/vcp-screener`, `/stock-recap`, ...) or just describe
-what you want and Claude picks the matching skill.
 
 ## Tests
 
