@@ -31,10 +31,13 @@ claude-agent-sdk
 # Claude Desktop, which may not be the machine running sidecar. httpx is the
 # HTTP client it uses to reach sidecar.
 #
-# Pinned to >=2 because 2.0 renamed FastMCP to MCPServer and dropped
-# mcp.server.fastmcp. mcp_server.py targets the 2.x API, so an older install
-# fails at import — this is the one dependency where the floor is load-bearing.
-mcp>=2
+# Pinned BELOW 2.0: 2.0 renamed FastMCP to MCPServer and dropped
+# mcp.server.fastmcp. mcp_server/server.py imports `from mcp.server.fastmcp
+# import FastMCP` (the pre-2.0 API) and nothing in this repo uses the 2.x
+# MCPServer API, so mcp>=2 breaks the import instead of fixing it — verified
+# by installing mcp 2.1.1 fresh and reproducing the crash. If mcp_server/ is
+# ever migrated to the 2.x API, flip this back and update the comment.
+mcp<2
 httpx
 
 # Optional. Powers `notify.py --qr`, which puts the ntfy subscribe URL on screen
@@ -74,4 +77,28 @@ yfinance
 # Black-Scholes delta for 0DTE Flow strike selection — see
 # vesper/nodes/playbooks.py's _select_0dte_delta_strike.
 py_vollib
+
+# mcp_server/ (the MCP tool surface — screeners, technicals, backtests,
+# options analytics, macro/breadth detectors, news, a knowledge-base search).
+# These were declared in pyproject.toml (the momentum-mcp package) but never
+# actually installed by this file, so `pip install -r requirements.txt` alone
+# used to leave mcp_server/server.py unable to import. fastmcp is the
+# standalone package (mcp.server.fastmcp above is a different thing, bundled
+# in the `mcp` package itself).
+fastmcp
+tradingview-screener
+tradingview-ta
+pandas
+matplotlib
+feedparser
+trafilatura
+scipy
+
+# pandas-ta and mplfinance have never published a non-prerelease version on
+# PyPI, so a plain `>=` floor finds nothing and pip fails outright. The
+# floors below opt pip into considering prereleases for just these two
+# packages (no --pre flag needed, and --pre on the whole tree blows up
+# chromadb's resolver with "resolution-too-deep" — don't do that).
+pandas-ta>=0.4.0b0
+mplfinance>=0.12.0a0
 

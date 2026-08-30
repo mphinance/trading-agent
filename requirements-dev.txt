@@ -26,7 +26,7 @@ fastapi
 uvicorn
 httpx          # starlette's TestClient & async client
 requests
-mcp>=2         # mcp_server.py tool surface; 2.0 renamed FastMCP -> MCPServer
+mcp<2          # mcp_server/ tool surface uses the pre-2.0 FastMCP API; see requirements.txt for why >=2 was wrong
 qrcode         # notify.py --qr
 
 # Vesper LangGraph Quant Agent, State, & Outcome Memory

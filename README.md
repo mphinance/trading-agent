@@ -53,9 +53,14 @@ plan) — see [Credentials](#credentials).
 `mcp_server/` is a real MCP server — 52 read-only tools (screeners, technical
 indicators, options/VoPR analytics, macro & breadth detectors, TraderDaddy
 intel, backtesting, a knowledge-base search) — and it talks stdio by default,
-so any MCP-compatible host can spawn it as a subprocess. It reads the same
-`./.env` as everything else; most tools need no extra key at all (yfinance,
-TradingView), a few want `TRADERDADDY_API_URL`/`_EMAIL`/`_PASSWORD` or
+so any MCP-compatible host can spawn it as a subprocess. `pip install -r
+requirements.txt` is enough on its own — no separate `pip install -e .` step
+needed, that used to be a real gap (`mcp_server/`'s own deps were declared in
+`pyproject.toml` but never actually installed by `requirements.txt`, and
+`mcp>=2` broke the pre-2.0 FastMCP API the code actually uses; both fixed).
+It reads the same `./.env` as everything else; most tools need no extra key
+at all (yfinance, TradingView), a few want
+`TRADERDADDY_API_URL`/`_EMAIL`/`_PASSWORD` or
 `OPENROUTER_API_KEY`/`GEMINI_API_KEY`. It is safe to hand to any of these —
 it never touches `vesper/execution_guard.py` and cannot place an order.
 
