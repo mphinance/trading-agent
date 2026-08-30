@@ -81,6 +81,30 @@ def _isolated_state(tmp_path, monkeypatch):
     monkeypatch.delenv("NTFY_SERVER", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+    # Per-user approval allowlists. Two things have to be neutralised, not one:
+    # the env vars AND the module-level sets, because vesper/bot/inbound.py and
+    # vesper/bot/discord_gateway.py compute theirs ONCE at import time. Clearing
+    # only the env var is useless if the module was already imported with it set.
+    #
+    # This became load-bearing the moment real credentials landed in ./.env: a
+    # real TELEGRAM_AUTHORIZED_USER_IDS made every approval test see an
+    # allowlist that excluded its fixture user, and only in the full suite --
+    # tests passed alone and failed together, the order-dependent shape this
+    # file exists to prevent. Tests that DO want an allowlist monkeypatch these
+    # same names explicitly, which still works on top of this reset.
+    monkeypatch.delenv("TELEGRAM_AUTHORIZED_USER_IDS", raising=False)
+    monkeypatch.delenv("DISCORD_AUTHORIZED_USER_IDS", raising=False)
+    monkeypatch.setattr("vesper.bot.inbound._AUTHORIZED_TELEGRAM_USER_IDS", set())
+    monkeypatch.setattr("vesper.bot.inbound._AUTHORIZED_DISCORD_USER_IDS", set())
+    try:
+        monkeypatch.setattr("vesper.bot.discord_gateway._AUTHORIZED_USER_IDS", set())
+    except (ImportError, AttributeError):
+        pass  # discord.py may not be importable in every environment
+
+    # notify.py reads ./.env directly from disk (not just os.environ), so the
+    # delenv calls above do not hide a real token from it. Point it at nothing.
+    monkeypatch.setattr("notify.ENV_PATHS", ())
     yield
 
 
