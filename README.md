@@ -25,6 +25,15 @@ Discord** — chart attached — before anything touches your account.
 > needs a deterministic risk-gate pass and a human approval tap. See
 > [CLAUDE.md](CLAUDE.md) for the full design rules.
 
+**Needs a [TraderDaddy Pro](https://www.traderdaddy.pro) Developer API key.**
+Dealer-gamma structure, most of the scanner's discovery (screeners, unusual
+options flow, pre-market gappers, bounce signals), and the 0DTE playbook all
+read live TDPro data — without `TD_API_KEY` set, those sources degrade
+silently to nothing rather than crashing, and you're left with the free
+yfinance/TradingView-backed VCP and squeeze screens. It's a standalone
+subscription ($49.99/mo, or $29.99/mo alongside a TraderDaddy Pro platform
+plan) — see [Credentials](#credentials).
+
 ## Contents
 
 - [Connecting an MCP host](#connecting-an-mcp-host-claude-desktop-claude-code-codex-)
@@ -144,7 +153,7 @@ Two places, both gitignored:
 
 | File | Contents |
 | --- | --- |
-| `./.env` (repo root) | `WEBULL_APP_KEY`, `WEBULL_APP_SECRET`, `WEBULL_REGION_ID`, `WEBULL_ENVIRONMENT` (or `WEBULL_KEY`/`WEBULL_SECRET`); `TD_API_KEY`/`TDPRO_API_KEY`; `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` + `TELEGRAM_AUTHORIZED_USER_IDS`; `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` + `DISCORD_AUTHORIZED_USER_IDS`; `OPENROUTER_API_KEY` (optional — narrative + risk audit only, see below) |
+| `./.env` (repo root) | `WEBULL_APP_KEY`, `WEBULL_APP_SECRET`, `WEBULL_REGION_ID`, `WEBULL_ENVIRONMENT` (or `WEBULL_KEY`/`WEBULL_SECRET`) — **required**; `TD_API_KEY`/`TDPRO_API_KEY` — technically optional, but dealer-gamma reads and most scanner discovery need it, see above; `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` + `TELEGRAM_AUTHORIZED_USER_IDS` and/or `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` + `DISCORD_AUTHORIZED_USER_IDS` — at least one needed to approve anything; `OPENROUTER_API_KEY` (optional — narrative + risk audit only, see below) |
 | `../.env.*` (one directory up) | the original per-service convention (`.env.notify`, `.env.telegram`, ...) — `notify.py` still reads both this and `./.env`, so either layout works |
 
 `vesper.py` calls `load_dotenv()` on `./.env` at startup, which is why every
