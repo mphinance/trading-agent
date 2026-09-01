@@ -21,6 +21,7 @@ Related repos, and why this isn't merged into them:
   library. Its adapters take injected payload dicts, not credentials;
   `preview_order` echoes the request back; nothing in it can place an order;
   zero Webull. Do not try to host this there.
+- `supermcp` — the live remote hub on Vultr (`ssh coolify` -> `cd supermcp`).
 - `alpha-command-center` — someone else's production algo system. We don't own
   its UI. Not a home for this.
 
@@ -48,8 +49,23 @@ Related repos, and why this isn't merged into them:
 - **LLM:** OpenRouter via `vesper/llm.py`. Narrative and red-team only — see
   rule 6.
 - **MCP:** `mcp_server/` exposes the quant tooling to MCP hosts (FastMCP,
-  stdio by default).
-- **Deploy:** systemd **user** service (see rule 1).
+  stdio by default). `trading_mcp/` is a second, separate MCP process — an
+  owner-only, READ-ONLY view over that plus Vesper's own state (account,
+  halt, alerts, pending approvals, audit chain, conviction/trade-memory
+  recall). Neither server holds broker credentials or an order path; see
+  rule 3.
+- **Trade memory:** `mcp_server/conviction.py`'s `log_conviction()` /
+  `resolve_convictions()` also call `mcp_server/knowledge.py`'s
+  `ingest_trade_memory()`, which embeds each entry into a ChromaDB
+  `trade_memory` collection (separate from that file's book/strategy
+  knowledge-base collection). `recall_similar_setups()` does the semantic
+  read side — "what happened last time a setup like this one showed up" —
+  and is exposed as the `recall_similar_setups` MCP tool via
+  `trading_mcp/vesper_tools.py`. `chromadb` is imported at module level in
+  `knowledge.py`, so an environment without it fails to import that whole
+  module; every caller (including the MCP tool) catches that and degrades to
+  `{"available": False, ...}` rather than crashing.
+- **Deploy:** systemd **user** service (see rule 1). Remote supermcp instance is on Vultr via `ssh coolify` (`cd supermcp`).
 
 ## Critical design rules
 
@@ -109,6 +125,11 @@ Properties that hold it together, none decorative:
 **Only `mcp_server` and the approval bots reach the agent; none of them holds
 broker credentials or implements its own risk checks.** Any adapter that grows
 its own order path is a new threat model, not a small addition.
+
+`trading_mcp/` (below) is a third MCP surface, but it doesn't reach the agent
+at all — it's a read-only owner-only viewer, and `tests/test_trading_mcp.py`
+mechanically pins that `guard.preview()`/`guard.place()` never appear under
+it (or under `mcp_server/`) via AST, not just a docstring promise.
 
 ### 4. Inject live state; never make the model fetch it
 `vesper/llm.py` formats portfolio + signals + dealer gamma into the turn.
@@ -295,7 +316,25 @@ quotes.py          Last price w/ fallback chain: md snapshot -> portfolio -> TDP
 notify.py          Alert delivery: ntfy and/or Telegram
 stream.py          MQTT quote push + gRPC trade-event push onto one bus
 tickertrace_mcp.py / momentum_mcp.py   Data-source MCP clients
-mcp_server/        Quant tooling exposed over MCP (FastMCP, stdio)
+mcp_server/        Quant tooling exposed over MCP (FastMCP, stdio). registry.py's
+                   register_momentum_tools() registers tiers 1-3 (47 tools) onto
+                   any FastMCP instance in-process — used by both server.py here
+                   and trading_mcp/server.py below. conviction.py is the
+                   conviction journal; knowledge.py is the Chroma-backed
+                   knowledge base AND the trade-memory layer — see below.
+trading_mcp/       PHASE 0: owner-only, READ-ONLY MCP server (separate process
+                   from mcp_server/server.py and from supermcp). server.py wires
+                   registry.py's tiers 1-3 plus vesper_tools.py's 13 read-only
+                   Vesper tools (account/halt/drawdown/paper/alerts/pending-
+                   approvals/audit-chain/playbook-calibration/trade-memory-recall/
+                   position-monitor-preview) onto one FastMCP("trading-agent").
+                   Auth is StaticTokenVerifier off TRADING_AGENT_TOKEN for the
+                   optional http transport (loopback-only, refuses to start
+                   without a token — rule 1); stdio (the default) needs none.
+                   No tool here may call guard.preview()/guard.place(),
+                   halt()/resume(), or ApprovalRegistry.submit_decision() — see
+                   rule 3's note above and tests/test_trading_mcp.py's AST-based
+                   pin.
 tests/             pytest, hermetic — Webull and Agent SDKs stubbed in conftest
 deploy/            systemd unit + Tailscale-gated installer (STALE, see rule 1)
 docs/              API.md, expansion plan, OpenRouter pricing, voice stack
@@ -325,8 +364,20 @@ must not depend on TDPro or ntfy.sh being up.
   strike-vs-premium rule; `test_alerts.py` pins both crossing properties;
   `test_notify.py` asserts the ntfy topic never reaches `status()`;
   `test_stream_runner.py` catches reverting the monitor's push wake-up back to
-  a plain sleep. If a rule here changes, the test is the other half of the
-  change.
+  a plain sleep; `test_trading_mcp.py` pins rule 3 mechanically, so a new MCP
+  tool that quietly grows its own order path fails a test, not just a review.
+  If a rule here changes, the test is the other half of the change.
+- **That rule-3 pin matches attribute *access*, not just invocation, and it
+  has to.** The live order path passes the bound method rather than calling
+  it inline — `asyncio.to_thread(guard.place, …)` at `executor.py:262` and
+  `monitor.py:404`. The first version of this test only matched AST `Call`
+  nodes shaped `guard.place(...)`, so a new tool copying that `to_thread`
+  idiom — the one it would most plausibly copy, since it's what the existing
+  path does — would have added a working order path and still passed. It now
+  resolves import aliases (`import guard as g`) and dotted access
+  (`vesper.execution_guard.guard.place`) too, and
+  `test_guard_pin_catches_indirect_call_shapes` asserts each of those four
+  shapes is caught. Don't narrow it back to `ast.Call`.
 - **Faking `vesper/llm.py`'s OpenRouter calls has one pattern, not several.**
   `tests/llm_fakes.py`'s `DeterministicProvider` is a small async-callable
   test double matching `call_openrouter`'s signature, backed by a response
