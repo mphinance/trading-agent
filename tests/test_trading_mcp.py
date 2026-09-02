@@ -1002,6 +1002,147 @@ async def test_refresh_token_cannot_escalate_scope_beyond_original_grant():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# M2-07: the permanently forbidden actions (guard.preview/place,
+# submit_decision, resume) have no MCP tool registered at all, under any
+# OAuth scope. This is a narrower, stronger claim than "a scope this token
+# lacks blocks the call" -- it says there is no tool named after these
+# actions to call in the first place, so even a maximally-scoped token
+# can't reach them. Testable today against the 60 tools M0-M2 already
+# registered; the scope-TIERING enforcement half (proving a *lesser*-scoped
+# token is refused a *real* write tool) is M8-14, deferred until M8 adds
+# any write tool for a scope check to be meaningful against.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Names a client might plausibly try for each permanently forbidden action.
+# Deliberately not exhaustive by hand-listing alone --
+# test_forbidden_actions_absent_from_full_tool_list below also checks every
+# one of the 60 registered names against these verbs as substrings, so a
+# namespaced or synonymous variant ("orders.place", "proposal.submit_decision")
+# would be caught too, not just an exact-string miss.
+_FORBIDDEN_TOOL_NAME_GUESSES = (
+    "guard.preview", "guard.place", "preview_order", "preview_option",
+    "place_order", "place_option", "preview", "place",
+    "submit_decision", "resolve_proposal", "approve_proposal",
+    "resume",
+)
+
+
+async def test_forbidden_actions_absent_from_full_tool_list():
+    """None of the 60 registered tools (47 momentum + 13 Vesper) is named
+    after guard.preview/place, submit_decision, or resume -- not a
+    scoped-down version, not an alias, no tool at all."""
+    import trading_mcp.server as srv
+
+    tools = await srv.mcp.list_tools()
+    names = {t.name for t in tools}
+    assert len(names) == 60, f"expected 60 registered tools, got {len(names)}"
+
+    for guess in _FORBIDDEN_TOOL_NAME_GUESSES:
+        assert guess not in names, f"forbidden action {guess!r} is registered as a tool"
+
+    forbidden_substrings = ("preview", "place_", "submit_decision", "resume")
+    offenders = [
+        n for n in names if any(sub in n.lower() for sub in forbidden_substrings)
+    ]
+    assert offenders == [], f"tool name(s) resembling a forbidden action: {offenders}"
+
+
+async def test_oauth_scope_absence_of_forbidden_tools(monkeypatch):
+    """Mint a real OAuth access token carrying every scope this server
+    defines today (just "read" -- see `ClientRegistrationOptions` in
+    oauth_provider.py; there is no elevated tier yet, that's M8-14's job
+    once M8 adds a write tool for one to gate), then call each forbidden
+    action BY NAME through the live MCP dispatcher with that token. The
+    response must be a "no such tool" dispatch failure, not a
+    permission-denied one -- proving these actions are absent from the tool
+    set itself, not merely gated behind a scope this particular token lacks.
+
+    Contrast with `test_http_request_with_no_credential_is_rejected`: a
+    request with no credential never reaches the dispatcher at all -- the
+    auth MIDDLEWARE rejects it with 401 before routing. Here the token is
+    genuinely valid and fully scoped, so the request reaches the
+    dispatcher and fails there instead, with an "Unknown tool" JSON-RPC
+    error -- because there is nothing registered under that name for any
+    scope to unlock.
+    """
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth-scope-absence", auth=srv._build_auth()).http_app(path="/mcp")
+
+    client_info = await _register_client(app)
+    client_id = client_info["client_id"]
+    client_secret = client_info["client_secret"]
+    redirect_uri = client_info["redirect_uris"][0]
+
+    verifier, challenge = _pkce_pair()
+    auth_response = await _authorize(
+        app, client_id=client_id, redirect_uri=redirect_uri,
+        code_challenge=challenge, operator_key=_OAUTH_ENV["TRADING_AGENT_TOKEN"],
+        scope="read",  # every scope this server defines today
+    )
+    assert auth_response.status_code == 302, auth_response.text
+    from urllib.parse import parse_qs, urlsplit
+
+    query = parse_qs(urlsplit(auth_response.headers["location"]).query)
+    code = query["code"][0]
+
+    token_response = await _token_from_code(
+        app, client_id=client_id, client_secret=client_secret, code=code,
+        redirect_uri=redirect_uri, code_verifier=verifier,
+    )
+    assert token_response.status_code == 200, token_response.text
+    token_payload = token_response.json()
+    access_token = token_payload["access_token"]
+    assert set(token_payload["scope"].split()) == {"read"}, (
+        "sanity check: this token really does carry every scope the server "
+        "defines today -- if a new scope tier is ever added, this test must "
+        "be updated to mint a token carrying it too, not silently pass "
+        "against a now-partial grant"
+    )
+
+    headers = {**_MCP_HEADERS, "Authorization": f"Bearer {access_token}"}
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            init_response = await client.post("/mcp", json=_INIT_PAYLOAD, headers=headers)
+            assert init_response.status_code == 200, init_response.text
+            session_id = init_response.headers.get("mcp-session-id")
+            call_headers = dict(headers)
+            if session_id:
+                call_headers["mcp-session-id"] = session_id
+            await client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                headers=call_headers,
+            )
+
+            for i, name in enumerate(_FORBIDDEN_TOOL_NAME_GUESSES, start=2):
+                call_payload = {
+                    "jsonrpc": "2.0", "id": i, "method": "tools/call",
+                    "params": {"name": name, "arguments": {}},
+                }
+                response = await client.post("/mcp", json=call_payload, headers=call_headers)
+
+                # Not blocked at the auth layer -- this token is valid and
+                # fully scoped, so the request must reach the dispatcher
+                # rather than being turned away as unauthenticated/forbidden.
+                assert response.status_code not in (401, 403), (
+                    f"call to {name!r} was rejected at the auth layer "
+                    f"({response.status_code}) instead of reaching the "
+                    f"dispatcher with this fully-scoped token"
+                )
+                assert response.status_code == 200, (
+                    f"unexpected status calling {name!r}: "
+                    f"{response.status_code} {response.text[:300]}"
+                )
+                assert "Unknown tool" in response.text, (
+                    f"expected a not-found dispatch failure calling {name!r}, "
+                    f"got: {response.text[:300]}"
+                )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Rule 3 pin: the order path stays in exactly one place
 # ═══════════════════════════════════════════════════════════════════════════
 
