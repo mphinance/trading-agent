@@ -10,8 +10,8 @@ import logging
 from typing import Any
 import pandas as pd
 
-from mcp_server.cache import smart_cache
-from mcp_server.schema import SignalResult
+from core.cache import smart_cache
+from core.schema import SignalResult
 from mcp_server.fundamentals import get_fundamentals
 from core.screener import run_stock_screen
 from core.market_top import detect_market_top

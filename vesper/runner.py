@@ -9,7 +9,7 @@ import uuid
 import logging
 from typing import Optional, Dict, Any
 
-from vesper.metrics import metrics
+from core.metrics import metrics
 from vesper.state import TradingState
 from vesper.graph import build_trading_graph
 

@@ -24,9 +24,9 @@ import numpy as np
 import pandas as pd
 
 from core.data import get_historical_data, get_live_price, get_option_expirations
-from mcp_server.risk import check_risk_flags
-from mcp_server.schema import SignalResult
-from mcp_server.options_greeks import (
+from core.risk import check_risk_flags
+from core.schema import SignalResult
+from core.options_greeks import (
     bs_put_price, bs_call_price, bs_delta, bs_theta,
     composite_rv
 )

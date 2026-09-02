@@ -17,7 +17,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from mcp_server.knowledge import _get_chroma, _embed_texts, _embed_query
+from core.knowledge import _get_chroma, _embed_texts, _embed_query
 
 logger = logging.getLogger(__name__)
 

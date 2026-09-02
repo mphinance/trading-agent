@@ -76,7 +76,7 @@ async def check_risk_flags(
 
     # --- 5. Institutional flow sentiment (TraderDaddy) ---
     try:
-        from mcp_server.traderdaddy import get_ticker_flow
+        from core.traderdaddy import get_ticker_flow
         flow = await get_ticker_flow(ticker, limit=5)
         if isinstance(flow, dict):
             trades = flow.get("trades", flow if isinstance(flow, list) else [])
@@ -94,7 +94,7 @@ async def check_risk_flags(
 
     # --- 6. GEX regime (TraderDaddy) ---
     try:
-        from mcp_server.traderdaddy import get_ticker_gex
+        from core.traderdaddy import get_ticker_gex
         gex = await get_ticker_gex(ticker)
         if isinstance(gex, dict) and not gex.get("error"):
             regime = gex.get("regime", "")
@@ -105,7 +105,7 @@ async def check_risk_flags(
 
     # --- 7. Pre-earnings institutional positioning (TraderDaddy) ---
     try:
-        from mcp_server.traderdaddy import get_ticker_earnings_flow
+        from core.traderdaddy import get_ticker_earnings_flow
         ef = await get_ticker_earnings_flow(ticker)
         if isinstance(ef, dict) and not ef.get("error"):
             flows = ef.get("flows", [])

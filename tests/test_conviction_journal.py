@@ -348,13 +348,13 @@ async def test_reflection_node_auto_resolves_mature_convictions(temp_journal, mo
 async def test_trade_memory_ingest_and_recall_similar_setups(temp_journal, tmp_path, monkeypatch):
     """Verify ChromaDB trade_memory ingestion and semantic setup recall."""
     import chromadb
-    from mcp_server.knowledge import ingest_trade_memory, recall_similar_setups
+    from core.knowledge import ingest_trade_memory, recall_similar_setups
 
     # Isolate ChromaDB storage to temp dir
     chroma_dir = tmp_path / "chromadb"
     chroma_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("mcp_server.knowledge.CHROMADB_PATH", chroma_dir)
-    monkeypatch.setattr("mcp_server.knowledge._chroma_client", None)
+    monkeypatch.setattr("core.knowledge.CHROMADB_PATH", chroma_dir)
+    monkeypatch.setattr("core.knowledge._chroma_client", None)
 
     entry1 = {
         "id": "NVDA:20260828100000_abc123",

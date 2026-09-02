@@ -92,7 +92,7 @@ Examples:
     if args.command == "status":
         from core.halt import get_halt_status
         from core.paper_ledger import get_paper_summary
-        from vesper.metrics import read_snapshot, bucket_approval_ages
+        from core.metrics import read_snapshot, bucket_approval_ages
         hs = get_halt_status()
         ps = get_paper_summary()
         print("\n" + "=" * 60)

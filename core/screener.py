@@ -16,7 +16,7 @@ from tradingview_screener import Query, col
 
 logger = logging.getLogger(__name__)
 
-from mcp_server.cache import smart_cache
+from core.cache import smart_cache
 
 # ---------------------------------------------------------------------------
 # Preset filter definitions

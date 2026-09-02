@@ -22,8 +22,8 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-from mcp_server.cache import smart_cache
-from mcp_server.schema import SignalResult
+from core.cache import smart_cache
+from core.schema import SignalResult
 
 # ---------------------------------------------------------------------------
 # Singleton HTTP Client

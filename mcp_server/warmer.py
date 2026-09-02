@@ -287,7 +287,7 @@ async def warm_yfinance_session() -> None:
 
 async def _warm_loop() -> None:
     """Periodically pre-fetch technicals for popular tickers + check alpha signals."""
-    from mcp_server.cache import is_market_open
+    from core.cache import is_market_open
     from core.technicals import analyze_technicals
 
     # Wait a bit after startup before first warm cycle

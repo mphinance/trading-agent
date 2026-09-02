@@ -101,7 +101,7 @@ class Metrics:
     def reset(self) -> None:
         """Testing hook: clear all accumulated state in place. Re-running
         __init__ rather than replacing the module-level `metrics` object
-        preserves identity -- every caller does `from vesper.metrics import
+        preserves identity -- every caller does `from core.metrics import
         metrics`, so a fresh object here would leave their references
         pointing at stale state instead."""
         self.__init__()

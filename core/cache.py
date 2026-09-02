@@ -14,7 +14,7 @@ where 10 users asking for AAPL technicals simultaneously trigger 10
 redundant yfinance downloads.
 
 Usage:
-    from mcp_server.cache import smart_cache
+    from core.cache import smart_cache
 
     @smart_cache(open_ttl=300, closed_ttl=3600)
     async def get_historical_data(ticker, period="3mo", interval="1d"):

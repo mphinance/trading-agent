@@ -29,7 +29,7 @@ def _out(res: Any) -> Any:
 
 def register_tier1_tools(mcp: Any) -> list[str]:
     """Register lightweight REST, SEC, News, TDPro Flow, and Sizing tools."""
-    from mcp_server.traderdaddy import (
+    from core.traderdaddy import (
         get_market_pulse as _get_market_pulse,
         get_unusual_activity as _get_unusual_activity,
         get_sector_flow as _get_sector_flow,

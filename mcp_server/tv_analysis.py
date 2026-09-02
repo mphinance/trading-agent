@@ -17,7 +17,7 @@ from tradingview_ta import TA_Handler, Interval
 
 logger = logging.getLogger(__name__)
 
-from mcp_server.cache import smart_cache
+from core.cache import smart_cache
 
 # Map user-friendly interval names to tradingview-ta constants
 INTERVAL_MAP = {

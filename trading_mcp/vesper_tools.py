@@ -318,7 +318,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         origin: str | None = None,
     ) -> dict[str, Any]:
         """Semantic recall of similar historical setups and their outcomes
-        from the trade-memory chroma collection (`mcp_server/knowledge.py`).
+        from the trade-memory chroma collection (`core/knowledge.py`).
 
         `chromadb` is an optional, sometimes-heavy dependency (embeddings
         client, on-disk vector index) -- imported here lazily, inside the
@@ -327,7 +327,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         tool registered alongside it) failing to import.
         """
         try:
-            from mcp_server.knowledge import recall_similar_setups as _recall
+            from core.knowledge import recall_similar_setups as _recall
         except Exception as e:
             return {"available": False, "reason": f"trade memory unavailable: {e}"}
         try:

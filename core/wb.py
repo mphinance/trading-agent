@@ -31,7 +31,7 @@ from webull.core.client import ApiClient
 from webull.data.data_client import DataClient
 from webull.trade.trade_client import TradeClient
 
-from vesper.metrics import metrics
+from core.metrics import metrics
 
 LOCAL_ENV = Path(__file__).resolve().parent / ".env"
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env.webull"

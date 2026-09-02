@@ -206,7 +206,7 @@
       "Assert trading_mcp's vesper.* imports match the allowlist from M0-06",
       "Run pytest -q tests/test_import_direction.py and confirm it passes"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-08",

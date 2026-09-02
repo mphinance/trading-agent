@@ -201,7 +201,7 @@ async def run_continuous_loop(
             # atomic write pattern halt.py's _save_state uses). Best-effort --
             # a metrics-write failure must never take down the loop itself.
             try:
-                from vesper.metrics import write_snapshot
+                from core.metrics import write_snapshot
                 write_snapshot()
             except Exception as e:
                 logger.warning(f"Metrics snapshot write failed (continuing): {e}")

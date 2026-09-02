@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from vesper.monitor import PositionMonitor, MonitoredPosition, ExitTrigger
 from vesper.state import OrderProposal, ExecutionResult
-from vesper.metrics import metrics
+from core.metrics import metrics
 
 
 @pytest.fixture(autouse=True)

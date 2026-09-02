@@ -13,7 +13,7 @@ import logging
 import time
 from typing import Any
 
-from mcp_server.cache import smart_cache
+from core.cache import smart_cache
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +242,7 @@ async def _fetch_vix() -> dict:
 
 async def _fetch_pulse() -> dict:
     try:
-        from mcp_server.traderdaddy import get_market_pulse
+        from core.traderdaddy import get_market_pulse
         pulse = await get_market_pulse()
         if isinstance(pulse, dict):
             return {
@@ -257,7 +257,7 @@ async def _fetch_pulse() -> dict:
 
 async def _fetch_gex() -> dict:
     try:
-        from mcp_server.traderdaddy import get_gex_overview
+        from core.traderdaddy import get_gex_overview
         gex = await get_gex_overview()
         if isinstance(gex, dict):
             return {
@@ -272,7 +272,7 @@ async def _fetch_gex() -> dict:
 
 async def _fetch_pcr() -> dict:
     try:
-        from mcp_server.traderdaddy import get_put_call_ratios
+        from core.traderdaddy import get_put_call_ratios
         pcr = await get_put_call_ratios()
         if isinstance(pcr, dict):
             spy = pcr.get("SPY") or pcr.get("spy") or pcr
@@ -287,7 +287,7 @@ async def _fetch_pcr() -> dict:
 
 async def _fetch_alerts_summary() -> dict:
     try:
-        from mcp_server.traderdaddy import get_alerts_summary
+        from core.traderdaddy import get_alerts_summary
         data = await get_alerts_summary()
         if isinstance(data, dict):
             # Extract counts and top alert

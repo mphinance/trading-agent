@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from vesper.execution_guard import guard, GuardError, TradingDisabled
 from vesper.bot.manager import channel_manager
-from vesper.metrics import metrics
+from core.metrics import metrics
 from vesper.state import OrderProposal, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -90,7 +90,7 @@ class PositionMonitor:
         self.time_stop_minute_et = time_stop_minute_et
         self.tracked_positions: Dict[str, MonitoredPosition] = {}
         # Cycle-timing for status() -- kept local to this instance rather than
-        # in vesper/metrics.py, same separation-of-concerns watcher.py's own
+        # in core/metrics.py, same separation-of-concerns watcher.py's own
         # status() (ticks/last_tick/last_error, local to Watcher) models: this
         # is monitor-cycle-specific state, not a cross-cutting broker/LLM/
         # order signal.
@@ -101,7 +101,7 @@ class PositionMonitor:
 
     def status(self) -> Dict[str, Any]:
         """Cycle count/timing + currently-tracked position count. Report-only,
-        same as everything in vesper/metrics.py -- nothing here gates."""
+        same as everything in core/metrics.py -- nothing here gates."""
         durations = list(self._cycle_durations)
         return {
             "cycles": self._cycles,
@@ -455,7 +455,7 @@ class PositionMonitor:
 
         Thin timing wrapper around _run_monitoring_cycle_impl -- see status()
         for why cycle count/duration lives on this instance rather than in
-        vesper/metrics.py."""
+        core/metrics.py."""
         start = _monotonic()
         try:
             results = await self._run_monitoring_cycle_impl(live=live)

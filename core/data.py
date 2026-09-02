@@ -18,7 +18,7 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-from mcp_server.cache import smart_cache
+from core.cache import smart_cache
 
 # yfinance is NOT thread-safe — concurrent downloads corrupt column dtypes
 # (causes 'ufunc isnan not supported' errors). Serialize all downloads.

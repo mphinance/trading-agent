@@ -191,7 +191,7 @@ async def log_conviction(
 
     # Sync to ChromaDB trade_memory for semantic recall
     try:
-        from mcp_server.knowledge import ingest_trade_memory
+        from core.knowledge import ingest_trade_memory
         ingest_trade_memory(entry)
     except Exception as e:
         logger.debug("Trade memory auto-sync skipped: %s", e)
@@ -316,7 +316,7 @@ async def resolve_convictions() -> dict[str, Any]:
 
     # Sync resolved entries to ChromaDB trade_memory
     try:
-        from mcp_server.knowledge import ingest_trade_memory
+        from core.knowledge import ingest_trade_memory
         for entry in journal:
             if entry.get("resolutions"):
                 ingest_trade_memory(entry)

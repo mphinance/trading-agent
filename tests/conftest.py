@@ -166,11 +166,11 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     monkeypatch.setattr("core.approval_registry._DATA_DIR", vesper_data_dir)
     monkeypatch.setattr("core.approval_registry._APPROVAL_STATE_PATH", vesper_data_dir / "approval_registry_state.json")
 
-    # vesper/metrics.py's cross-process snapshot file (Health/observability
+    # core/metrics.py's cross-process snapshot file (Health/observability
     # metrics module) -- same reasoning as the state files above: a
     # hardcoded module-level _DATA_DIR that would otherwise read/write the
     # developer's real vesper/data/metrics_snapshot.json.
-    import vesper.metrics as _metrics_module
+    import core.metrics as _metrics_module
     monkeypatch.setattr(_metrics_module, "_DATA_DIR", vesper_data_dir)
     monkeypatch.setattr(_metrics_module, "_SNAPSHOT_PATH", vesper_data_dir / "metrics_snapshot.json")
 
@@ -188,12 +188,12 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolated_metrics_state():
-    """Reset vesper/metrics.py's process-wide `metrics` singleton before
+    """Reset core/metrics.py's process-wide `metrics` singleton before
     every test.
 
     Unlike the disk-backed state above, this is in-memory and NOT redirected
     by tmp_path -- every module that instruments itself does `from
-    vesper.metrics import metrics`, binding its own reference to the one
+    core.metrics import metrics`, binding its own reference to the one
     object, so a test-order leak here (one test's record_broker_call calls
     showing up in another test's snapshot() assertions) would be exactly the
     kind of order-dependent failure _isolated_vesper_state's own docstring
@@ -201,7 +201,7 @@ def _isolated_metrics_state():
     object rather than replacing it, which is what keeps every already-bound
     reference in sync -- see reset()'s own docstring.
     """
-    from vesper.metrics import metrics as _metrics_singleton
+    from core.metrics import metrics as _metrics_singleton
     _metrics_singleton.reset()
     yield
     _metrics_singleton.reset()

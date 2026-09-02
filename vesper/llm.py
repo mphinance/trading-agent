@@ -14,7 +14,7 @@ import time
 from typing import Any, Dict, List, Optional
 import httpx
 
-from vesper.metrics import metrics
+from core.metrics import metrics
 
 logger = logging.getLogger(__name__)
 

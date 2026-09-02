@@ -18,7 +18,7 @@ from typing import Any
 
 from webull.data.common.category import Category
 
-from vesper.metrics import metrics
+from core.metrics import metrics
 
 # Snapshots are cheap; a 1s TTL still leaves ~540 req/min of headroom for
 # research calls even if the UI polls hard.

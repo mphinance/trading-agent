@@ -13,7 +13,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from mcp_server.cache import smart_cache
+from core.cache import smart_cache
 
 
 @smart_cache(open_ttl=3600, closed_ttl=86400)  # Fundamentals change slowly — 1hr/24hr

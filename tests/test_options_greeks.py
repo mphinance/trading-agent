@@ -1,4 +1,4 @@
-"""Tests for mcp_server/options_greeks.py's Black-Scholes greeks.
+"""Tests for core/options_greeks.py's Black-Scholes greeks.
 
 Ported from a friend's discount-bloomberg repo (analytics/greeks.py), whose test suite caught
 two real sign bugs in the reference implementation it was modeled on. The finite-difference
@@ -13,7 +13,7 @@ import math
 
 import pytest
 
-from mcp_server import options_greeks as g
+from core import options_greeks as g
 
 # At-the-money, one year, 5% rates. Values from any standard BSM reference (Hull's worked
 # examples).

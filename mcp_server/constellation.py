@@ -36,7 +36,7 @@ from typing import Any, Literal
 import httpx
 from dotenv import load_dotenv
 
-from mcp_server.schema import SignalResult
+from core.schema import SignalResult
 
 load_dotenv()
 logger = logging.getLogger(__name__)

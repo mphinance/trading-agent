@@ -51,7 +51,7 @@ from mcp_server.edgar_tools import (
     get_shares_outstanding as _get_shares_outstanding,
     get_stakes_held as _get_stakes_held,
 )
-from mcp_server.knowledge import search_knowledge as _search_knowledge
+from core.knowledge import search_knowledge as _search_knowledge
 from core.conviction import (
     log_conviction as _log_conviction,
     get_track_record as _get_track_record,
@@ -64,7 +64,7 @@ from mcp_server.backtest import (
     sweep_strategy as _sweep_strategy,
     walk_forward_test as _walk_forward_test,
 )
-from mcp_server.traderdaddy import (
+from core.traderdaddy import (
     get_market_pulse as _get_market_pulse,
     get_unusual_activity as _get_unusual_activity,
     get_sector_flow as _get_sector_flow,

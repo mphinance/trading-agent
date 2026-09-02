@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
-from mcp_server.schema import SignalResult
+from core.schema import SignalResult
 from mcp_server.macro import get_macro_context
 from core.market_top import detect_market_top
 from mcp_server.ftd_detector import detect_ftd

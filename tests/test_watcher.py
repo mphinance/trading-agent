@@ -1,4 +1,4 @@
-"""watcher.py's _tick() wiring to vesper/metrics.py.
+"""watcher.py's _tick() wiring to core/metrics.py.
 
 Only the metrics side-effect of a tick is pinned here -- the alert-firing
 behaviour itself (crossing properties, pending re-arm) is watcher.py's
@@ -8,7 +8,7 @@ caller, alerts.AlertStore.sweep(), already covered by tests/test_alerts.py.
 from __future__ import annotations
 
 import watcher as W
-from vesper.metrics import metrics
+from core.metrics import metrics
 
 
 class _StubStore:

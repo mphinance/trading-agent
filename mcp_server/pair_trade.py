@@ -11,8 +11,8 @@ from typing import Any
 import pandas as pd
 import numpy as np
 
-from mcp_server.cache import smart_cache
-from mcp_server.schema import SignalResult
+from core.cache import smart_cache
+from core.schema import SignalResult
 from core.data import get_historical_data
 
 logger = logging.getLogger(__name__)

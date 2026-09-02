@@ -452,7 +452,7 @@ def test_calling_every_vesper_tool_never_imports_execution_guard():
     interpreter) so this reads empty/no state rather than the developer's
     real `data/` files, and `SIDECAR_STATE_DIR` is pointed at an empty temp
     dir so `list_alerts` sees zero armed alerts and never calls out to
-    TDPro. `mcp_server.knowledge` (the chromadb-backed trade-memory module)
+    TDPro. `core.knowledge` (the chromadb-backed trade-memory module)
     is forced unavailable via the same `sys.modules[...] = None` technique
     `test_recall_similar_setups_degrades_without_chromadb` above uses, so
     `recall_similar_setups` degrades cleanly instead of touching the real
@@ -478,7 +478,7 @@ os.environ["SIDECAR_STATE_DIR"] = str(tmp / "alert_state")
 # Force the chromadb-backed trade-memory module unavailable, same technique
 # tests/test_trading_mcp.py's test_recall_similar_setups_degrades_without_chromadb
 # uses -- keeps this hermetic without needing the real on-disk chroma index.
-sys.modules["mcp_server.knowledge"] = None
+sys.modules["core.knowledge"] = None
 
 import core.halt as _halt
 _halt._DATA_DIR = data_dir
@@ -739,14 +739,14 @@ def test_get_playbook_calibration_degrades_on_error(vtools, monkeypatch):
 
 
 async def test_recall_similar_setups_degrades_without_chromadb(vtools, monkeypatch):
-    """Simulates a chromadb-less environment: `mcp_server/knowledge.py`
+    """Simulates a chromadb-less environment: `core/knowledge.py`
     imports `chromadb` at module level (an optional, sometimes-heavy dep --
     see vesper_tools.py's own docstring), so an environment without it would
     fail to import that whole module. Setting the module to None in
     sys.modules is the standard way to force that ImportError without
     actually uninstalling chromadb from this test environment, where it IS
     present."""
-    monkeypatch.setitem(sys.modules, "mcp_server.knowledge", None)
+    monkeypatch.setitem(sys.modules, "core.knowledge", None)
     result = await vtools["recall_similar_setups"](query_thesis="oversold bounce off the 200dma")
     assert result["available"] is False
     assert "trade memory" in result["reason"]

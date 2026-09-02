@@ -9,7 +9,7 @@ import logging
 import math
 from typing import Any
 
-from mcp_server.schema import SignalResult
+from core.schema import SignalResult
 from core.data import get_live_price
 from core.technicals import analyze_technicals
 

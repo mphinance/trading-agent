@@ -18,7 +18,7 @@ import time
 
 import alerts as alerts_mod
 import notify
-from vesper.metrics import metrics
+from core.metrics import metrics
 
 # Fast enough that a break is caught within a candle on any timeframe worth
 # alerting on, slow enough to stay far from Webull's limits. The snapshot call

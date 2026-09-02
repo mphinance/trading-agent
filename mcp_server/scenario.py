@@ -6,7 +6,7 @@ import asyncio
 import logging
 import pandas as pd
 from typing import Any
-from mcp_server.schema import SignalResult
+from core.schema import SignalResult
 from core.technicals import analyze_technicals
 from mcp_server.fundamentals import get_fundamentals
 

@@ -1,4 +1,4 @@
-"""Unit tests for vesper/metrics.py -- the Health/observability metrics module.
+"""Unit tests for core/metrics.py -- the Health/observability metrics module.
 
 Covers the working path (counters/timings accumulate and aggregate
 correctly), the bounding discipline (rolling windows stay bounded), the
@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from vesper.metrics import (
+from core.metrics import (
     Metrics,
     bucket_approval_ages,
     metrics as metrics_singleton,
@@ -200,7 +200,7 @@ def test_record_order_outcome_never_accepts_a_payload_parameter():
 
 # -- cross-process snapshot file (write_snapshot / read_snapshot) -------------
 # The _isolated_vesper_state fixture in conftest.py already redirects
-# vesper.metrics._DATA_DIR/_SNAPSHOT_PATH to a tmp_path for every test.
+# core.metrics._DATA_DIR/_SNAPSHOT_PATH to a tmp_path for every test.
 
 
 def test_read_snapshot_absent_returns_none_without_raising():
@@ -217,7 +217,7 @@ def test_write_then_read_snapshot_round_trips():
 
 
 def test_read_snapshot_corrupt_file_returns_none(tmp_path, monkeypatch):
-    import vesper.metrics as metrics_module
+    import core.metrics as metrics_module
 
     bad_path = tmp_path / "corrupt_snapshot.json"
     bad_path.write_text("{not valid json")
@@ -321,7 +321,7 @@ def _build_webull(monkeypatch):
 
 
 def test_retrying_records_ok_broker_call_on_success(monkeypatch):
-    from vesper.metrics import metrics as ms
+    from core.metrics import metrics as ms
 
     w = _build_webull(monkeypatch)
     result = w._retrying(lambda: "fine", endpoint="get_account_balance")
@@ -331,7 +331,7 @@ def test_retrying_records_ok_broker_call_on_success(monkeypatch):
 
 
 def test_retrying_records_error_broker_call_on_non_429_failure(monkeypatch):
-    from vesper.metrics import metrics as ms
+    from core.metrics import metrics as ms
 
     w = _build_webull(monkeypatch)
 
@@ -351,7 +351,7 @@ def test_retrying_records_error_broker_call_on_non_429_failure(monkeypatch):
 def test_retrying_records_rate_limited_on_429_then_ok_on_eventual_success(monkeypatch):
     """A 429 that gets retried away must still show up as a rate_limited
     attempt, even though _retrying() itself returns successfully."""
-    from vesper.metrics import metrics as ms
+    from core.metrics import metrics as ms
 
     w = _build_webull(monkeypatch)
     calls = {"n": 0}
@@ -375,7 +375,7 @@ def test_retrying_records_rate_limited_on_429_then_ok_on_eventual_success(monkey
 
 def test_market_cached_records_market_data_broker_call_on_miss_and_hit(monkeypatch):
     import core.md as md
-    from vesper.metrics import metrics as ms
+    from core.metrics import metrics as ms
 
     market = md.Market.__new__(md.Market)  # skip __init__'s webull-client wiring
     market._cache = {}
@@ -399,7 +399,7 @@ def test_market_cached_records_market_data_broker_call_on_miss_and_hit(monkeypat
 
 def test_market_cached_records_error_on_raising_fn(monkeypatch):
     import core.md as md
-    from vesper.metrics import metrics as ms
+    from core.metrics import metrics as ms
     import threading
 
     market = md.Market.__new__(md.Market)

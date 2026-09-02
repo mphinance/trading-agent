@@ -917,3 +917,141 @@ staging), never a full-file JSON round-trip.
   baseline before adding any new vesper.* import there.
 - The `feature_list.json` M8-15..M8-18 / M5 reword drift M0-05 flagged is
   **gone**, per the mistake documented above -- don't go looking for it.
+
+## M0-07 -- tests/test_import_direction.py: "core imports nothing above it" made true, not allowlisted
+
+**Checked the literal claim against the source before writing the test, per
+the standing warning.** M0-02's own progress note (see above) already
+flagged, in plain language, that `core/{technicals,options,conviction,
+vcp_screener,charts,macro_regime,market_top}.py` still imported
+`mcp_server.{cache,schema,risk,options_greeks,traderdaddy,knowledge}`, and
+`core/wb.py`/`core/md.py` still imported `vesper.metrics` -- both real
+`core -> {vesper,mcp_server}` references, the exact direction this
+feature's own step 1 says must be empty with **no allowlist exception**
+(unlike step 3's explicit allowlist permission for the reverse `vesper ->
+mcp_server` direction). Re-verified with a fresh AST walk before touching
+anything: confirmed those 9 `core/*.py -> mcp_server.*` sites and 2
+`core/*.py -> vesper.metrics` sites were still there, exactly as M0-02
+described.
+
+**Went with "move it," not "allowlist it," for both residuals** -- the same
+choice M0-06 made for its own last `vesper.*` import, and the one M0-02's
+note explicitly offered ("pull cache/schema/risk/options_greeks/
+traderdaddy/knowledge -- and maybe vesper/metrics.py -- down into core/
+too"). An allowlist was technically available for step 1 too (nothing in
+the steps forbids it outright), but step 1's wording has no allowlist
+language at all where step 3's does, and leaving 9+ files with a permanent
+"core imports mcp_server, but it's fine, see comment" carve-out reads as
+exactly the kind of doc-vs-code drift this whole M0 milestone exists to
+close. So:
+
+- `git mv`'d `mcp_server/{cache,schema,risk,options_greeks,traderdaddy,
+  knowledge}.py` into `core/`. Verified first (by reading every one of
+  their import lines) that none of the six import anything from `vesper`
+  or any *other* `mcp_server` module outside this group -- they only
+  reference each other and `core.data` (already in `core/`), so the move
+  is self-contained, not the start of a longer chain.
+- `git mv`'d `vesper/metrics.py` into `core/metrics.py`. This one is used
+  far more widely than the six above (11 non-core importers: `vesper.py`,
+  `watcher.py`, `vesper/{llm,loop,runner,monitor}.py`, and 6 test files) --
+  moving it is a bigger blast radius than the leaf modules, which is
+  probably why M0-02's note hedged with "maybe." Went with the move anyway
+  because the alternative (an allowlist for `core/wb.py`+`core/md.py`) is
+  the one step 1 doesn't offer, and `vesper/metrics.py` itself has zero
+  imports of anything else in `vesper/` (confirmed by reading it) -- it was
+  never actually vesper-coupled, just vesper-*located*.
+- Repointed every reference across the repo with `sed -E
+  's/mcp_server\.(cache|schema|risk|options_greeks|traderdaddy|knowledge)\b/core.\1/g'`
+  and the equivalent for `vesper\.metrics\b` -> `core.metrics`, run against
+  the exact file list a prior grep produced (not a blind repo-wide sed) --
+  same discipline M0-02 used. Caught two forms the dotted-name sed doesn't
+  match: `tests/test_options_greeks.py`'s `from mcp_server import
+  options_greeks as g` (the bare `from package import module` form, fixed
+  by hand) and its docstring's file-path reference. Also hand-fixed
+  lingering `vesper/metrics.py` / `mcp_server/knowledge.py` *path* mentions
+  in docstrings/comments (`tests/test_metrics.py`, `tests/conftest.py`,
+  `tests/test_watcher.py`, `vesper/monitor.py`, `tests/test_trading_mcp.py`,
+  `trading_mcp/vesper_tools.py`) so the prose matches where the file
+  actually lives now, not just the import statements.
+- String-literal `sys.modules["mcp_server.knowledge"] = None` /
+  `monkeypatch.setattr("mcp_server.knowledge...", ...)` targets in
+  `tests/test_trading_mcp.py` and `tests/test_conviction_journal.py` were
+  caught by the same sed (it operates on raw text, quotes included) --
+  verified by re-grepping for the old string afterward, not assumed.
+- Verified with a fresh AST walk (the same style this file's own new test
+  uses) that all three forbidden directions are now genuinely empty:
+  `core -> {vesper,mcp_server,trading_mcp}` = `{}`, `vesper -> {trading_mcp,
+  mcp_server}` = `{}`, `mcp_server -> {vesper,trading_mcp}` = `{}`. No
+  allowlist constant needed for any of them in the end -- all three of
+  `tests/test_import_direction.py`'s directional assertions are unconditional
+  `assert found == {}`, and mean it.
+
+**`tests/test_import_direction.py`** (new file): five tests --
+`test_core_imports_nothing_above_it` (unconditional, no allowlist, per the
+above), `test_mcp_server_never_imports_vesper_or_trading_mcp`,
+`test_vesper_never_imports_trading_mcp`, and two allowlist-shaped tests for
+the two directions the milestone treats as migrations-in-progress rather
+than flat bans: `test_vesper_to_mcp_server_allowlist_never_grows`
+(`VESPER_TO_MCP_SERVER_ALLOWLIST = {}`, re-derived independently of
+`tests/test_import_boundaries.py`'s own copy of this fact so a regression
+trips both files, not just one) and
+`test_trading_mcp_vesper_imports_match_m0_06_allowlist`
+(`TRADING_MCP_TO_VESPER_ALLOWLIST = {}`, same independent-re-derivation
+reasoning against M0-06's baseline). AST-based throughout, walking every
+`Import`/`ImportFrom` node (module-level and function-local both) rather
+than grepping the top of the file -- several modules in this repo
+deliberately defer imports (`trading_mcp/vesper_tools.py`'s old vesper
+imports were function-local for exactly this reason before M0-06 closed
+them), so a top-of-file-only check would have been a false negative
+waiting to happen.
+
+**No new on-disk state.** Every moved module (`core/metrics.py` included)
+keeps the exact on-disk paths it had before the move (e.g.
+`core/knowledge.py`'s `CHROMADB_PATH = PROJECT_ROOT / "data" / "chromadb"`,
+`core/metrics.py`'s snapshot path) -- only the Python import path changed,
+never a filesystem path. `tests/conftest.py`'s existing metrics-isolation
+block (`_metrics_module._DATA_DIR` / `_SNAPSHOT_PATH` patching) needed only
+its own import line repointed at `core.metrics`, not a new fixture.
+
+**Full suite: 592 passed** (`.venv/bin/python -m pytest -q`) -- 587 before
+this feature + 5 new tests in `tests/test_import_direction.py`. Floor is
+580.
+
+**Staging discipline:** `git status --short` before staging showed two
+pieces of pre-existing, unrelated dirty state already present at session
+start -- `autonomous/feature_list.seed.json` (modified) and
+`trading_mcp/server.py` (modified: OAuth-provider work, `MultiAuth` /
+`SingleOperatorOAuthProvider` wiring, noted by every prior M0 session as
+not theirs to resolve). Diffed `trading_mcp/server.py` by hand to confirm
+none of my sed commands touched it (it doesn't import any of the six moved
+`mcp_server` modules, so it was never in my sed target list) before
+deliberately leaving both files unstaged. `feature_list.json`'s `passes`
+flip was a single targeted `Edit` on the exact line, verified with `git
+diff --stat feature_list.json` showing `1 file changed, 1 insertion(+), 1
+deletion(-)` before staging -- never a full-file JSON round-trip, per the
+mistake M0-06 documented and fixed going forward.
+
+### For the next agent
+
+- `core/` now holds 28 modules: the 21 from M0-02 through M0-06, plus this
+  feature's `cache.py`, `schema.py`, `risk.py`, `options_greeks.py`,
+  `traderdaddy.py`, `knowledge.py` and `metrics.py`. It is now a genuine
+  leaf package -- `tests/test_import_direction.py`'s
+  `test_core_imports_nothing_above_it` enforces that mechanically, not just
+  by convention, and it has zero allowlist to quietly widen later.
+- `mcp_server/risk.py` (now `core/risk.py`) is a *different* module from
+  `vesper/risk.py` (`RiskEnforcer`, untouched, still in `vesper/`) -- same
+  filename, different package, both still exist. Don't confuse the two
+  when reading `core/options.py`'s `from core.risk import
+  check_risk_flags` import.
+- `vesper/metrics.py` is gone; every former importer (`vesper.py`,
+  `watcher.py`, `vesper/{llm,loop,runner,monitor}.py`, and the test files)
+  now reads `from core.metrics import ...`. If a *new* vesper module wants
+  metrics later, import `core.metrics`, not `vesper.metrics` -- the latter
+  path no longer exists.
+- The two remaining allowlist constants
+  (`VESPER_TO_MCP_SERVER_ALLOWLIST` and `TRADING_MCP_TO_VESPER_ALLOWLIST`
+  in `tests/test_import_direction.py`) are both empty. Keep them that way --
+  if a future feature needs to add an entry, the bar per this feature's own
+  reasoning is "couldn't reasonably be moved into core/ instead," not
+  "moving it felt like more work than adding a line here."

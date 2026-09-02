@@ -18,7 +18,7 @@ from typing import Any
 
 import pandas as pd
 
-from mcp_server.cache import smart_cache
+from core.cache import smart_cache
 
 logger = logging.getLogger(__name__)
 

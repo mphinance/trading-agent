@@ -10,7 +10,7 @@ from vesper.llm import (
     generate_candidate_thesis,
     audit_proposal_risk,
 )
-from vesper.metrics import metrics
+from core.metrics import metrics
 from llm_fakes import DeterministicProvider
 
 
