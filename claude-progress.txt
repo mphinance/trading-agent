@@ -240,3 +240,91 @@ The fix is not to relax the rule. `mcp_server` is currently two things in one
 package: a library of quant analytics, and the MCP registration layer over it.
 Move the analytics down beside core/ so both vesper and the MCP server import
 DOWNWARD, and leave mcp_server/registry.py as the thin MCP surface.
+
+## M0-01 — tests/test_import_boundaries.py (characterization test)
+
+Implemented as specified, with one deliberate, documented deviation from
+step 3's literal wording, verified against the source before writing
+anything (per the standing warning above: checking two docs against each
+other is not checking either against the code).
+
+**What step 3 says:** "Assert vesper/**/*.py contains zero references to
+trading_mcp or mcp_server."
+
+**What the AST walk actually finds today**, run directly against the tree,
+not inferred from any doc: zero references to `trading_mcp` from `vesper/`
+(true, and asserted) — but 13 real, unconditional `from mcp_server.X import
+Y` references to `mcp_server` across 10 files under `vesper/`
+(vesper/agents/technical.py, vesper/bot/discord_adapter.py,
+vesper/bot/telegram_adapter.py, vesper/monitor.py, vesper/nodes/analyst.py
+x2, vesper/nodes/playbooks.py, vesper/nodes/reflection.py,
+vesper/nodes/regime.py x2, vesper/nodes/scanner.py x2,
+vesper/paper_ledger.py). These are real imports (module-level in most
+files, function-local in a few) that vesper currently and legitimately
+depends on for analytics (technicals, options, conviction, screener,
+vcp_screener, charts, data, macro_regime, market_top) — the same 13 sites
+already named in this file's own "PLAN CORRECTION" note above, which is why
+M0-02's description already reads "PLUS the mcp_server modules vesper
+imports" and M0-07's own steps read "For vesper -> mcp_server: after M0-02
+this should be empty. If any site remains, put it in a named allowlist
+constant" in a NEW file, tests/test_import_direction.py — M0-07 already owns
+this exact assertion, post-split.
+
+Asserting "zero references to mcp_server" here would therefore be a false
+claim about today's tree, and — per this run's explicit instructions — I
+will not force a step to pass by writing an assertion I know is false, nor
+by quietly weakening it without saying so. Instead: I implemented step 3 as
+two things, both true and both mechanically verified (see
+tests/test_import_boundaries.py):
+  1. `test_vesper_never_imports_trading_mcp` — the literal "zero
+     trading_mcp" half of step 3, which holds today.
+  2. `test_vesper_to_mcp_server_baseline_is_pinned_not_growing` — pins the
+     real 13-site baseline by name (not "zero") so any *new* vesper ->
+     mcp_server import shows up as a diff to THIS test too, before M0-07's
+     test_import_direction.py exists to catch it. The docstring at the top
+     of the test file explains this scope decision in full, including the
+     cross-reference to M0-07's steps that back it up.
+
+Steps 1, 2, 4, 5 were implemented and verified exactly as written:
+- `test_trading_mcp_vesper_imports_match_baseline` / `test_mcp_server_never
+  _imports_vesper` — full-AST walk (ast.walk, not just module-level
+  ast.Module.body) over every .py under trading_mcp/ and mcp_server/,
+  because trading_mcp/vesper_tools.py's 10 vesper imports are all
+  function-local. Confirmed by direct AST scan (not grep) that these 10
+  import statements, normalizing to 7 distinct `vesper.X` references
+  (vesper.halt, vesper.circuit_breaker, vesper.paper_ledger,
+  vesper.alerts_runner, vesper.bot.inbound, vesper.audit_chain — both the
+  `from vesper import audit_chain` and `from vesper.audit_chain import
+  verify_chain` forms normalize to the same string — and vesper.monitor),
+  are the ONLY vesper references anywhere under trading_mcp/ or mcp_server/.
+  Matches feature_list.json's step 2 baseline exactly.
+- `pytest -q tests/test_import_boundaries.py` → 4 passed, against today's
+  tree, unmodified.
+- Committed the test alone (plus feature_list.json's passes flip) — no
+  file move touched in this change.
+
+No new on-disk state — pure AST analysis of source files, nothing to add to
+conftest.py's `_isolated_vesper_state` fixture.
+
+**Full suite: 584 passed** (`.venv/bin/python -m pytest -q`), floor was 580,
++4 from this file. Pre-existing dirty files noted by the prior session
+(trading_mcp/server.py, trading_mcp/oauth_provider.py,
+feature_list.json.bak, docs/HANDOFF_2026-09-01.md,
+HKUDS_REPOSITORY_REVIEW.md, supermcp_CLAUDE_remote.md,
+scripts/package_for_supermcp.py) were left untouched and unstaged again —
+still worth a look by whoever picks up M0-02, still not this session's to
+resolve.
+
+### For the next agent (M0-02)
+
+- The vesper -> mcp_server baseline is now pinned in
+  tests/test_import_boundaries.py's `EXPECTED_VESPER_TO_MCP_SERVER_BASELINE`
+  (10 files, 13 import sites, 12 distinct module targets after dedup within
+  files). When M0-02 moves those analytics modules into core/, this
+  baseline test will fail by design — update it (ideally to `{}`) in the
+  same commit, per M0-06's own instruction to update this file's
+  allowlists as the split progresses.
+- Don't re-litigate the "zero" question by trying to make mcp_server empty
+  as part of M0-02 without moving the modules — the modules have to
+  actually move for that assertion to become true; M0-02's steps already
+  say so.
