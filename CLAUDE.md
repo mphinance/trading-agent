@@ -128,7 +128,8 @@ broker credentials or implements its own risk checks.** Any adapter that grows
 its own order path is a new threat model, not a small addition.
 
 `trading_mcp/` (below) is a third MCP surface, owner-only and exposure-bounded
-rather than strictly read-only: `halt()` is MCP-reachable from it, but
+rather than strictly read-only: `halt()` is *permitted* to become
+MCP-reachable from it — freezing can only reduce exposure — but
 `guard.preview`, `guard.place`, `resume()`, and
 `ApprovalRegistry.submit_decision()` remain forbidden from every module under
 it (and under `mcp_server/`) — including by passing a bound method. See
@@ -335,7 +336,9 @@ trading_mcp/       PHASE 0: owner-only, READ-ONLY MCP server (separate process
                    Auth is StaticTokenVerifier off TRADING_AGENT_TOKEN for the
                    optional http transport (loopback-only, refuses to start
                    without a token — rule 1); stdio (the default) needs none.
-                   halt() is MCP-reachable from here; no tool here may call
+                   halt() may become reachable here (M8-08); until that tool
+                   exists the AST pin still forbids importing it. No tool here
+                   may call
                    guard.preview()/guard.place(), resume(), or
                    ApprovalRegistry.submit_decision() — see rule 3's note above,
                    app_spec.txt's A3, and tests/test_trading_mcp.py's AST-based

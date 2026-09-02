@@ -129,13 +129,14 @@
     "id": "M0-02",
     "milestone": "M0",
     "category": "repo",
-    "description": "wb.py, md.py, td.py, edgar.py and quotes.py are relocated into a new core/ package with zero behavior change and no upward import",
+    "description": "The quant analytics and data layer move into core/: wb, md, td, edgar, quotes PLUS the mcp_server modules vesper imports (technicals, options, conviction, screener, vcp_screener, charts, data, macro_regime, market_top), leaving mcp_server/ a thin MCP registration layer",
     "steps": [
-      "Create core/ with an __init__.py; git mv wb.py md.py td.py edgar.py quotes.py into it",
-      "Update every importer across vesper/, mcp_server/, trading_mcp/ and tests/ to import from core.wb / core.md / core.td / core.edgar / core.quotes",
-      "Run: grep -rln 'langgraph\\|fastmcp' core/*.py and confirm no match",
-      "Run the full local suite and confirm the exact same pass count as before the move",
-      "Land this as one self-contained, independently revertible commit"
+      "Confirm the reverse dependency first: grep -rn 'from mcp_server' --include='*.py' vesper/ | wc -l (expect 13 sites across regime, analyst, reflection, scanner, playbooks, monitor, paper_ledger, agents/technical and both bot adapters)",
+      "Create core/ and git mv wb.py md.py td.py edgar.py quotes.py into it",
+      "git mv the analytics modules vesper imports out of mcp_server/ into core/, leaving registry.py and server.py as the MCP surface that registers tools over them",
+      "Update every importer in vesper/, mcp_server/, trading_mcp/ and tests/ to the new paths",
+      "Run: grep -rlE 'langgraph|fastmcp' core/ and confirm no match \u2014 core must not know about either",
+      "Run the full suite with .venv/bin/python -m pytest -q and confirm the same 580 pass count"
     ],
     "passes": false
   },
@@ -197,13 +198,13 @@
     "id": "M0-07",
     "milestone": "M0",
     "category": "safety",
-    "description": "A discovery-based AST test enforces the layering for all four packages: core has zero upward dependency, vesper never imports trading_mcp/mcp_server, and mcp_server never imports vesper or trading_mcp",
+    "description": "A discovery-based AST test enforces the layering: core imports nothing above it, vesper never imports trading_mcp, and mcp_server never imports vesper or trading_mcp \u2014 with vesper's imports of mcp_server either eliminated by M0-02 or listed in an explicit, shrinking allowlist",
     "steps": [
-      "Add tests/test_import_direction.py asserting no file under core/ imports vesper, mcp_server, or trading_mcp",
-      "Assert no file under vesper/ imports mcp_server or trading_mcp",
-      "Assert no file under mcp_server/ imports vesper.* or trading_mcp.*",
-      "Assert trading_mcp/'s vesper.* imports match exactly the allowlist maintained in test_import_boundaries.py from M0-06",
-      "Run pytest -q tests/test_import_direction.py and confirm all assertions pass"
+      "Add tests/test_import_direction.py asserting no file under core/ imports vesper, mcp_server or trading_mcp",
+      "Assert no file under vesper/ imports trading_mcp, and no file under mcp_server/ imports vesper or trading_mcp",
+      "For vesper -> mcp_server: after M0-02 this should be empty. If any site remains, put it in a named allowlist constant with a comment saying why, and assert the set never grows",
+      "Assert trading_mcp's vesper.* imports match the allowlist from M0-06",
+      "Run pytest -q tests/test_import_direction.py and confirm it passes"
     ],
     "passes": false
   },

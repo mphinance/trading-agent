@@ -207,3 +207,36 @@ floor — this was a docs-only edit, no test was expected to move.
 - M0-01 is a characterization test (`tests/test_import_boundaries.py`) that
   must land *before* any file moves in M0-02/M0-03 — read its `steps` in
   `feature_list.json` closely, the baseline import list is specified exactly.
+
+
+## CORRECTION (main session, 2026-09-02) — read this before trusting M0-00's note
+
+M0-00's commit message and the note above claim `halt()` is called from
+`trading_mcp/vesper_tools.py` today and that this was "verified". **That is
+false.** `vesper_tools.py` calls only `get_halt_status()` — a read. The mutating
+`halt()` appears nowhere under trading_mcp/ or mcp_server/ except in docstrings.
+The check that was run (grepping the two doc files) only compared the docs to
+each other; it never compared them to the code.
+
+The amendment itself stands — voice may halt, because freezing can only reduce
+exposure — but it is a PERMISSION FOR FUTURE WORK, not a description of today.
+M8-08 builds the halt tool and updates the AST pin in the same change. Until
+then `tests/test_trading_mcp.py::test_no_vesper_tool_can_reach_halt_or_resume`
+is correct to forbid the import, and must not be "fixed" to match the docs.
+
+Do not repeat this shape of error: verifying that two documents agree with each
+other is not verifying either against the code.
+
+## PLAN CORRECTION — M0-02 and M0-07 were under-scoped
+
+`vesper/` imports `mcp_server` at 13 sites (regime, analyst, reflection,
+scanner, playbooks, monitor, paper_ledger, agents/technical, bot adapters),
+pulling in technicals, options, conviction, screener, vcp_screener, charts and
+data. The layering M0-07 is meant to enforce (vesper -> core only) therefore
+fails immediately as written, and M0-02's move list (wb/md/td/edgar/quotes)
+does not cover any of those modules.
+
+The fix is not to relax the rule. `mcp_server` is currently two things in one
+package: a library of quant analytics, and the MCP registration layer over it.
+Move the analytics down beside core/ so both vesper and the MCP server import
+DOWNWARD, and leave mcp_server/registry.py as the thin MCP surface.

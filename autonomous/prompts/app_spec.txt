@@ -113,8 +113,8 @@ guards and stages a ticket carrying a SHA-256 of the exact payload; `place()`
 takes a `ticket_id`, never an order. No single call may both construct and fire.
 Tickets are single-use, 120 s expiry.
 
-**I3. No MCP tool may reach the order path.** (see A3) `halt()` is MCP-reachable
-from `trading_mcp/`; no module under `trading_mcp/` or `mcp_server/` may
+**I3. No MCP tool may reach the order path.** (see A3) `halt()` is *permitted*
+to be reached from `trading_mcp/` once a halt tool exists; no module under `trading_mcp/` or `mcp_server/` may
 reference `guard.preview`, `guard.place`, `resume()`, or
 `ApprovalRegistry.submit_decision()` — including by passing a bound method
 (`asyncio.to_thread(guard.place, …)`). `tests/test_trading_mcp.py` pins this with
@@ -180,7 +180,10 @@ per-user authorised and restart-safe.
 Also update: the Status section (order path, deployment), the Layout tree, the
 test count, and the `deploy/` description once M7 lands.
 
-**A3 -- I3 is amended:** halt() is MCP-reachable from trading_mcp/;
+**A3 -- I3 is amended:** halt() is PERMITTED to become reachable from
+trading_mcp/, because freezing can only reduce exposure. No halt tool exists
+yet: M8-08 builds it and updates the pin in the same change. Until then the pin
+correctly still forbids the import, and docs claiming otherwise are wrong.
 guard.preview, guard.place, resume(), and ApprovalRegistry.submit_decision()
 remain forbidden from every module under trading_mcp/ and mcp_server/,
 including by passing a bound method. tests/test_trading_mcp.py's AST pin is
