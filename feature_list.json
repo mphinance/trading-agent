@@ -12,7 +12,7 @@
       "Re-run the clone check and confirm a clean import",
       "Delete the scratch clone"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M1-02",
@@ -28,7 +28,7 @@
       "Whichever you choose, the tree must import cleanly and the full suite must stay green",
       "Record the decision and its reason in claude-progress.txt"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M1-03",
@@ -41,7 +41,7 @@
       "Confirm neither the CSV nor the screenshot appears as untracked or staged",
       "Confirm neither file has ever been committed: git log --all --oneline -- '*.csv' '*.png'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M1-04",
