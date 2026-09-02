@@ -1162,3 +1162,77 @@ feature's to resolve):** `autonomous/feature_list.seed.json`,
 by diff that none of this feature's changes touch `trading_mcp/server.py`'s
 actual OAuth logic -- the new test only *imports* it inside its subprocess
 script, never edits it.
+
+## M0-09: exposure-boundary pin -- halt permitted, resume/submit_decision forbidden
+
+**What changed.** `tests/test_trading_mcp.py`'s `test_no_vesper_tool_can_reach_halt_or_resume`
+was previously a naive `ast.ImportFrom`-name check against
+`{"halt", "resume", "submit_decision"}`, scoped to `trading_mcp/vesper_tools.py` only. Per
+M0-00's A3 amendment (widening the exposure boundary ahead of M8-08's halt tool), rewrote it to:
+
+- Drop `halt` from the forbidden set entirely -- it is now a *permitted* import (nothing in this
+  repo yet imports it; this feature only removes the pin that would have blocked M8-08 from
+  adding a halt tool later). `resume` and `submit_decision` stay forbidden forever.
+- Match both with the same four-shape robustness `_guard_call_sites`/`_guard_names` already prove
+  for `guard.preview`/`guard.place` (direct import, aliased import, bound-method/reference via
+  `asyncio.to_thread`, dotted-module access) -- via two new parallel matcher pairs:
+  `_module_func_names`/`_module_func_ref_sites` (module-level function, e.g. `core.halt.resume`;
+  a `resume` reference is caught uniformly whether it's a direct call, an aliased call, or merely
+  *passed* as a callable, since any `Name` node resolving to the imported/aliased name is flagged
+  regardless of call-vs-reference context) and `_approval_registry_names`/
+  `_submit_decision_call_sites` (singleton bound method, e.g. `approval_registry.submit_decision`
+  -- textually identical strategy to `_guard_call_sites`, just parameterized for a different
+  singleton/module/method).
+- Widened the scan from `vesper_tools.py` alone to the whole `trading_mcp/` package (rglob), to
+  match the sibling guard pins (`test_trading_mcp_never_calls_execution_guard`) and to make the
+  new mirrored regression test meaningful (see below) -- a file dropped anywhere under
+  `trading_mcp/` referencing `resume(` must be caught, not just one inside `vesper_tools.py`.
+- Added `test_halt_resume_pin_catches_indirect_call_shapes` and
+  `test_submit_decision_pin_catches_indirect_call_shapes` (tmp_path, all four bypass shapes each,
+  plus a prose-is-not-a-violation check and a permitted-sibling-is-not-flagged check --
+  `get_halt_status`/`list_pending` respectively).
+- Added `test_halt_import_is_now_permitted`: positive proof the widening actually took effect --
+  `from core.halt import halt; halt(reason='test')` must trip neither matcher. Without this test,
+  a pin that still (accidentally) forbade `halt` would look identical from the other tests' point
+  of view, since none of them exercise `halt` at all.
+- Added `test_forbidden_resume_pin_catches_a_real_throwaway_module_under_trading_mcp`: writes a
+  real file (not tmp_path) to `trading_mcp/_pin_regression_probe.py` containing `resume()`,
+  confirms the scanner catches it, deletes it in a `finally` (pass or fail) -- per the feature's
+  own step 3. Confirmed via `ls trading_mcp/_pin_regression_probe.py` after the run that nothing
+  was left behind.
+- Confirmed (per step 4, and the standing warning about checking claims against source, not other
+  docs) that **no test here asserts a registered tool actually reaches `halt()`**. Grepped
+  `trading_mcp/vesper_tools.py` directly: it imports `get_halt_status` (a plain read), never
+  `halt`. `test_no_vesper_tool_can_reach_halt_or_resume`'s docstring says as much explicitly, and
+  `test_halt_import_is_now_permitted`'s docstring repeats it -- that positive reachability proof
+  is M8-08's job.
+
+**Gotcha for the next agent (M8-08): the new `resume` matcher over-flags on purpose.**
+`_module_func_names` always includes the bare literal `"resume"` in its match set, even with zero
+imports of `core.halt` in the file -- same over-flagging bias `_guard_names` documents for
+`"guard"`. If M8-08 (or anything else) ever needs a local variable or parameter literally named
+`resume` inside `trading_mcp/`, this pin will flag it as a false positive. That's deliberate
+(false positive costs nothing here; a false negative is a missed un-halt path) -- rename the
+local, don't weaken the matcher.
+
+**`pytest -q tests/test_trading_mcp.py -k "halt or resume or submit_decision or guard_pin"`: 7
+passed, 32 deselected.**
+**`pytest -q tests/test_trading_mcp.py`: 39 passed** (was 38 before this feature: 4 new tests,
+minus... actually 593->597 file-relative: +4 net, since `test_no_vesper_tool_can_reach_halt_or_resume`
+was rewritten in place, not added).
+**Full suite: 597 passed** (`.venv/bin/python -m pytest -q`) -- 593 before this feature + 4 new
+tests (`test_halt_resume_pin_catches_indirect_call_shapes`,
+`test_submit_decision_pin_catches_indirect_call_shapes`, `test_halt_import_is_now_permitted`,
+`test_forbidden_resume_pin_catches_a_real_throwaway_module_under_trading_mcp`). Floor is 580.
+
+**No new on-disk state.** The regression test's throwaway file lives under `trading_mcp/` (not
+`data/` or any state directory) only for the duration of the test, inside a `try/finally` that
+unlinks it even on assertion failure -- nothing for `tests/conftest.py`'s
+`_isolated_vesper_state` fixture to redirect.
+
+**Staging discipline:** `git status --short` before staging showed the same pre-existing,
+unrelated dirty state M0-08 documented and left alone (`autonomous/feature_list.seed.json`,
+`trading_mcp/server.py`'s OAuth-provider work, `feature_list.json.bak`,
+`trading_mcp/oauth_provider.py`, and several untracked docs). Staged only `tests/test_trading_mcp.py`
+and `feature_list.json`; confirmed the latter's diff with `git diff --stat feature_list.json`
+showed exactly `1 file changed, 1 insertion(+), 1 deletion(-)` before committing.

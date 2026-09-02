@@ -761,25 +761,240 @@ async def test_get_position_monitor_status_degrades_on_poll_failure(vtools, monk
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# No tool here can act -- only read
+# M0-09: the exposure boundary, mechanically -- halt permitted, resume and
+# submit_decision permanently forbidden
+#
+# M0-00's A3 amendment widened the pin from "strictly read-only" to an
+# explicit exposure boundary: `halt()` (freezing the account) is now a
+# PERMITTED import, because M8-08 is going to build a halt tool on top of
+# it. `resume()` (un-freezing) and `ApprovalRegistry.submit_decision()`
+# (approving a pending order) stay forbidden forever -- those are the two
+# calls that could move the state from "safe" to "an order can go out."
+#
+# This section proves the PIN MECHANISM only: that the AST scanner catches
+# every shape a `resume`/`submit_decision` reference could take, and that it
+# no longer flags a bare `halt` import. It does NOT assert that any
+# registered tool actually calls or can reach `halt()` -- that positive
+# reachability proof is M8-08's job, when the halt tool is actually built.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_no_vesper_tool_can_reach_halt_or_resume():
-    """halt() and resume() (the MUTATING pair in core/halt.py) and
-    ApprovalRegistry.submit_decision() must never be imported by this
-    module -- only their read counterparts (get_halt_status,
-    list_pending/get_pending/get_decision)."""
-    import trading_mcp.vesper_tools as module
-
-    src = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-    imported_names = set()
-    for node in ast.walk(src):
-        if isinstance(node, ast.ImportFrom):
+def _module_func_names(tree: ast.AST, module_suffix: str, func_name: str) -> set[str]:
+    """Local names bound to `func_name` imported from a module whose dotted
+    path ends with `module_suffix` (e.g. "core.halt" / "resume"). Always
+    includes the literal `func_name`, same over-flagging bias as
+    `_guard_names`: a false positive costs nothing (don't name an unrelated
+    function `resume`), a false negative is a missed mutating call."""
+    names = {func_name}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith(module_suffix):
             for alias in node.names:
-                imported_names.add(alias.name)
+                if alias.name == func_name:
+                    names.add(alias.asname or alias.name)
+    return names
 
-    forbidden = {"halt", "resume", "submit_decision"}
-    assert not (imported_names & forbidden), f"forbidden mutating import(s) found: {imported_names & forbidden}"
+
+def _dotted(node: ast.AST) -> str | None:
+    """Render a Name/Attribute chain back to its dotted source text, e.g.
+    `Attribute(attr='halt', value=Name('core'))` -> "core.halt"."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted(node.value)
+        return f"{base}.{node.attr}" if base else None
+    return None
+
+
+def _module_func_ref_sites(pyfile: Path, module_suffix: str, func_name: str) -> list[str]:
+    """Every reference to a module-level function (e.g. `core.halt.resume`)
+    in `pyfile`: a plain call, an aliased import, a bound reference passed
+    elsewhere (`asyncio.to_thread(resume, ...)`), or `import core.halt;
+    core.halt.resume(...)`-style dotted access.
+
+    Mirrors `_guard_call_sites`'s four-shape coverage
+    (`test_guard_pin_catches_indirect_call_shapes`), adapted for a plain
+    module-level function rather than a singleton's bound method: any Name
+    node whose id resolves to the (possibly aliased) imported function
+    catches the first three shapes uniformly, since it doesn't matter
+    whether that Name is being called directly or merely passed as a
+    reference. Dotted access is matched separately because it never goes
+    through an import-bound local name at all.
+    """
+    try:
+        tree = ast.parse(pyfile.read_text(encoding="utf-8"), filename=str(pyfile))
+    except (SyntaxError, UnicodeDecodeError):
+        return []
+    names = _module_func_names(tree, module_suffix, func_name)
+    module_aliases = {module_suffix}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.endswith(module_suffix) and alias.asname:
+                    module_aliases.add(alias.asname)
+
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in names and not isinstance(node.ctx, ast.Store):
+            found.append(f"{func_name}(reference)")
+        elif isinstance(node, ast.Attribute) and node.attr == func_name:
+            base_dotted = _dotted(node.value)
+            if base_dotted in module_aliases:
+                found.append(f"{func_name}(dotted)")
+    return found
+
+
+def _approval_registry_names(tree: ast.AST) -> set[str]:
+    """Local names bound to `core.approval_registry`'s `approval_registry`
+    singleton. Same over-flagging bias as `_guard_names`."""
+    names = {"approval_registry"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("approval_registry"):
+            for alias in node.names:
+                if alias.name == "approval_registry":
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _submit_decision_call_sites(pyfile: Path) -> list[str]:
+    """`ApprovalRegistry.submit_decision()` reference sites in `pyfile`.
+
+    Identical shape to `_guard_call_sites` (a singleton's bound method), so
+    it reuses that exact matching strategy: direct/aliased import, bound
+    reference (`asyncio.to_thread(approval_registry.submit_decision, ...)`),
+    and dotted-module access (`core.approval_registry.approval_registry
+    .submit_decision(...)`)."""
+    try:
+        tree = ast.parse(pyfile.read_text(encoding="utf-8"), filename=str(pyfile))
+    except (SyntaxError, UnicodeDecodeError):
+        return []
+    names = _approval_registry_names(tree)
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute) or node.attr != "submit_decision":
+            continue
+        base = node.value
+        if isinstance(base, ast.Name) and base.id in names:
+            found.append(node.attr)
+        elif isinstance(base, ast.Attribute) and base.attr == "approval_registry":
+            found.append(node.attr)
+    return found
+
+
+def test_halt_resume_pin_catches_indirect_call_shapes(tmp_path):
+    """Same four-shape coverage for `resume()` as
+    `test_guard_pin_catches_indirect_call_shapes` proves for `guard.place`."""
+    bypasses = {
+        "direct": "from core.halt import resume\nresume()\n",
+        "renamed_import": "from core.halt import resume as r\nr()\n",
+        "bound_reference": (
+            "import asyncio\nfrom core.halt import resume\nasyncio.to_thread(resume)\n"
+        ),
+        "dotted_module": "import core.halt\ncore.halt.resume()\n",
+        "aliased_module": "import core.halt as ch\nch.resume()\n",
+    }
+    for label, src in bypasses.items():
+        f = tmp_path / f"{label}.py"
+        f.write_text(src, encoding="utf-8")
+        assert _module_func_ref_sites(f, "core.halt", "resume"), f"pin failed to catch bypass shape: {label}"
+
+    # ...prose describing the rule is still not a violation...
+    clean = tmp_path / "prose.py"
+    clean.write_text('"""No tool here may call resume(."""\n', encoding="utf-8")
+    assert _module_func_ref_sites(clean, "core.halt", "resume") == []
+
+    # ...and the permitted read-only sibling must never be flagged by the
+    # `resume` matcher.
+    permitted = tmp_path / "permitted.py"
+    permitted.write_text("from core.halt import get_halt_status\nget_halt_status()\n", encoding="utf-8")
+    assert _module_func_ref_sites(permitted, "core.halt", "resume") == []
+
+
+def test_submit_decision_pin_catches_indirect_call_shapes(tmp_path):
+    """Same four-shape coverage for `ApprovalRegistry.submit_decision()` as
+    `test_guard_pin_catches_indirect_call_shapes` proves for `guard.place`."""
+    bypasses = {
+        "direct": (
+            "from core.approval_registry import approval_registry\n"
+            "approval_registry.submit_decision(1)\n"
+        ),
+        "renamed_import": (
+            "from core.approval_registry import approval_registry as ar\nar.submit_decision(1)\n"
+        ),
+        "bound_method": (
+            "import asyncio\n"
+            "from core.approval_registry import approval_registry\n"
+            "asyncio.to_thread(approval_registry.submit_decision, 1)\n"
+        ),
+        "dotted_module": (
+            "import core.approval_registry\n"
+            "core.approval_registry.approval_registry.submit_decision(1)\n"
+        ),
+    }
+    for label, src in bypasses.items():
+        f = tmp_path / f"{label}.py"
+        f.write_text(src, encoding="utf-8")
+        assert _submit_decision_call_sites(f), f"pin failed to catch bypass shape: {label}"
+
+    clean = tmp_path / "prose.py"
+    clean.write_text('"""No tool here may call submit_decision(."""\n', encoding="utf-8")
+    assert _submit_decision_call_sites(clean) == []
+
+    permitted = tmp_path / "permitted.py"
+    permitted.write_text(
+        "from core.approval_registry import approval_registry\napproval_registry.list_pending()\n",
+        encoding="utf-8",
+    )
+    assert _submit_decision_call_sites(permitted) == []
+
+
+def test_halt_import_is_now_permitted(tmp_path):
+    """Positive proof the M0-00/A3 widening actually took effect: merely
+    importing (not calling) `halt` from `core.halt` must no longer trip
+    either matcher -- only `resume` and `submit_decision` remain forbidden.
+    Whether any real tool reaches `halt()` is M8-08's concern, not this
+    test's; this only proves the scanner stopped objecting to it."""
+    f = tmp_path / "would_import_halt.py"
+    f.write_text("from core.halt import halt\nhalt(reason='test')\n", encoding="utf-8")
+    assert _module_func_ref_sites(f, "core.halt", "resume") == []
+    assert _submit_decision_call_sites(f) == []
+
+
+def test_no_vesper_tool_can_reach_halt_or_resume():
+    """The exposure boundary, scanned across the whole `trading_mcp/`
+    package (not just `vesper_tools.py`) the same way the sibling guard pins
+    (`test_trading_mcp_never_calls_execution_guard`) already do: `resume()`
+    and `ApprovalRegistry.submit_decision()` must never be reachable from
+    anywhere in this package, in any of the four shapes the matchers above
+    prove they catch. `halt()` itself is unchecked here -- it is now a
+    permitted import (see `test_halt_import_is_now_permitted`); nothing in
+    this test asserts a tool actually reaches it."""
+    offenders: dict[str, list[str]] = {}
+    for pyfile in (REPO_ROOT / "trading_mcp").rglob("*.py"):
+        hits = _module_func_ref_sites(pyfile, "core.halt", "resume") + _submit_decision_call_sites(pyfile)
+        if hits:
+            offenders[str(pyfile)] = hits
+    assert offenders == {}, f"forbidden mutating call/reference found: {offenders}"
+
+
+def test_forbidden_resume_pin_catches_a_real_throwaway_module_under_trading_mcp():
+    """Regression proof that the widened pin actually walks the whole
+    `trading_mcp/` package, not just `vesper_tools.py`: drops a real
+    throwaway module directly under `trading_mcp/` referencing `resume(`,
+    confirms the same scan `test_no_vesper_tool_can_reach_halt_or_resume`
+    runs would catch it, then deletes the file so nothing is left behind
+    (pass or fail)."""
+    probe_path = REPO_ROOT / "trading_mcp" / "_pin_regression_probe.py"
+    assert not probe_path.exists(), "leftover probe file from a prior run -- remove it before re-running"
+    probe_path.write_text(
+        '"""Throwaway module for M0-09\'s pin regression test. Deleted immediately after."""\n'
+        "resume()\n",
+        encoding="utf-8",
+    )
+    try:
+        hits = _module_func_ref_sites(probe_path, "core.halt", "resume")
+        assert hits, "widened pin failed to catch a bare `resume()` reference in a real trading_mcp/ file"
+    finally:
+        probe_path.unlink()
+    assert not probe_path.exists()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

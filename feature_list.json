@@ -234,7 +234,7 @@
       "Confirm this test file does NOT assert that any registered tool actually calls or can reach halt -- that positive reachability proof belongs to M8-08, not here",
       "Run pytest -q tests/test_trading_mcp.py and confirm both the widened (halt permitted) and still-forbidden (resume/submit_decision) halves pass"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-01",
