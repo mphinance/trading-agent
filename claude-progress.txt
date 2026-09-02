@@ -1384,3 +1384,99 @@ uncommitted diff, unchanged by this session -- reviewed and kept as-is),
 `trading_mcp/oauth_provider.py` (pre-existing uncommitted file, fixed this
 session), `tests/test_trading_mcp.py` (new tests). Did not stage
 `feature_list.json` -- the orchestrator records `passes`, not this session.
+
+## M2-04 — OAuth 2.1 authorization server mounted, discovery endpoints verified
+
+**Finding: the code to satisfy this feature was already in place after
+M2-03.** `SingleOperatorOAuthProvider` (`trading_mcp/oauth_provider.py`)
+subclasses fastmcp 3.4.7's `fastmcp.server.auth.auth.OAuthProvider`, and
+`_build_auth()` in `trading_mcp/server.py` already wires it into a
+`MultiAuth` alongside the static bearer verifier whenever `MCP_PUBLIC_URL`
+is set. What M2-04 actually needed was **verification that mounting really
+happens and the metadata is well-formed**, plus the tests to pin it -- step
+5 of the feature's own steps was the only genuinely undone work.
+
+**Confirmed against the installed fastmcp 3.4.7 source** (not assumed):
+`OAuthProvider.get_routes()` builds `/.well-known/oauth-authorization-server`,
+`/authorize`, `/token`, `/register`, `/revoke` via the `mcp` SDK's
+`create_auth_routes()`, and separately appends RFC 9728 protected-resource
+routes (`/.well-known/oauth-protected-resource/mcp`) once `set_mcp_path()`
+computes `_resource_url` -- this happens automatically at
+`FastMCP(...).http_app(path="/mcp")` construction time, no server.py change
+needed. `MultiAuth.get_routes()`/`get_well_known_routes()` delegate straight
+to the wrapped `server`, so the composition already built for the bearer
+fallback carries the OAuth routes through unmodified.
+
+One thing NOT true that a docstring in `fastmcp.server.auth.auth` implies:
+`get_well_known_routes()` (which would add a `/.well-known/openid-configuration`
+alias) is never actually called anywhere in `fastmcp.server.http` for the
+streamable-http app -- only `get_routes()` is. So the OIDC alias path in
+that method is currently dead code in this fastmcp version; not something
+this repo's code can fix, and not required by M2-04's steps (which name the
+*standard* discovery endpoints, i.e. RFC 8414 + RFC 9728, both of which do
+mount). Noting it here so a future session doesn't assume that alias works
+without checking.
+
+**Verified live, in-process, via a real ASGI request/response cycle**
+(`httpx.ASGITransport`, ASGI lifespan run manually -- same pattern as the
+M2-01 block) with `TRADING_AGENT_TOKEN` + `MCP_PUBLIC_URL=https://agent.mphinance.test`
+set:
+- `GET /.well-known/oauth-authorization-server` -> 200, JSON with `issuer`,
+  `authorization_endpoint`, `token_endpoint`, `registration_endpoint`,
+  `response_types_supported: ["code"]`, `grant_types_supported` including
+  both `authorization_code` and `refresh_token`, and
+  `code_challenge_methods_supported: ["S256"]` -- OAuth 2.1's mandatory PKCE
+  advertised, not merely implemented.
+- `GET /.well-known/oauth-protected-resource/mcp` -> 200, JSON with
+  `resource` pointing at this server's own `/mcp` and `authorization_servers`
+  naming the issuer -- the document a CIMD/DCR client reads first.
+- An unauthenticated `POST /mcp` -> 401 with
+  `WWW-Authenticate: Bearer resource_metadata="https://.../.well-known/
+  oauth-protected-resource/mcp"` -- this is the fix for the exact gap
+  app_spec.txt named ("every OAuth endpoint 404s ... verified by curl
+  against the live host"; today it's a live-server config gap
+  (`MCP_PUBLIC_URL` unset there), not a code gap).
+- With `MCP_PUBLIC_URL` unset (bearer-only, unchanged from M2-01/02):
+  `_build_auth()` still returns the bare `HmacStaticTokenVerifier`, both
+  discovery paths 404, confirming OAuth mounting is strictly additive and
+  opt-in by env var -- a box with no public URL configured (rule 1: loopback/
+  Tailscale) never advertises a public authorization server.
+
+**No user model added, confirmed at runtime, not just by reading:** the
+constructed provider has exactly one `_operator_secret` (equal to
+`TRADING_AGENT_TOKEN`) and no `users`/`accounts`/`tenants` attribute of any
+kind.
+
+**Tests added** (`tests/test_trading_mcp.py`, new "M2-04" section, 7 tests):
+`test_build_auth_is_multiauth_when_public_url_set`,
+`test_build_auth_stays_bearer_only_without_public_url`,
+`test_discovery_endpoints_404_without_public_url`,
+`test_oauth_authorization_server_metadata_is_well_formed`,
+`test_oauth_protected_resource_metadata_is_well_formed`,
+`test_unauthenticated_request_advertises_resource_metadata`,
+`test_oauth_mount_still_no_user_model`.
+
+**Deliberately out of scope for this feature** (left for the milestones
+that name them): the full DCR + authorization-code exchange round trip
+against a live client (M2-05); scope-escalation proof (M2-06); the
+forbidden-tool-under-OAuth-scope check (M2-07); disk-backed token storage
+(M2-09); the live-coolify 4xx + Traefik check (M2-11). This feature's own
+steps asked only for the discovery endpoints to be mounted and well-formed,
+which is now true and pinned by tests, not just asserted.
+
+**No changes to `trading_mcp/server.py` or `trading_mcp/oauth_provider.py`**
+-- both were already correct from M2-03; this feature was purely
+verification plus test coverage of behavior that already existed.
+
+**Verified:** `.venv/bin/python -m pytest -q tests/test_trading_mcp.py -k
+"oauth or discovery or resource_metadata or bearer_only or user_model"` ->
+9 passed. **Full suite: 607 passed** (`.venv/bin/python -m pytest -q`) -- 600
+before this feature + 7 new tests. Floor was 597. One pre-existing,
+unrelated `PytestUnhandledThreadExceptionWarning` ("Event loop is closed")
+fires during teardown from an aiosqlite background thread in an unrelated
+checkpointer test; it is a warning, not a failure, and the run is otherwise
+clean.
+
+**Staged for this feature's commit:** `tests/test_trading_mcp.py` only. Did
+not stage `feature_list.json` -- the orchestrator records `passes`, not this
+session.

@@ -412,6 +412,183 @@ async def test_oauth_lookup_constant_time_correctness():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# M2-04: the OAuth 2.1 authorization server is actually MOUNTED on the MCP
+# app, and its discovery endpoints return well-formed metadata -- not just
+# that `SingleOperatorOAuthProvider` (M2-03) has the right methods in
+# isolation. Every test below builds a real ASGI app from the production
+# `_build_auth()` (same reasoning as the M2-01 block above: the module-level
+# `trading_mcp.server.mcp` singleton is built once at import time and can't
+# be retargeted by a test-time env monkeypatch) and drives it through
+# `httpx.ASGITransport`, no real socket.
+#
+# `_build_auth()` only wires OAuth in when `MCP_PUBLIC_URL` is set (see its
+# docstring) -- both states are tested: OAuth mounted when configured, and
+# the pre-M2-03 bearer-only shape completely unchanged when it isn't, since
+# CLAUDE.md rule 1 (loopback/Tailscale) means a box with no public URL
+# configured has no business advertising a public authorization server.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_OAUTH_ENV = {
+    "TRADING_AGENT_TOKEN": "m2-04-operator-key",
+    "MCP_PUBLIC_URL": "https://agent.mphinance.test",
+}
+
+
+def _set_oauth_env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
+    env = {**_OAUTH_ENV, **overrides}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+
+async def _get(app, path: str) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(path)
+
+
+def test_build_auth_is_multiauth_when_public_url_set(monkeypatch):
+    """With both TRADING_AGENT_TOKEN and MCP_PUBLIC_URL set, `_build_auth()`
+    must return the composed MultiAuth (OAuth server + bearer fallback), not
+    the bare bearer verifier M2-01 built."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+    from fastmcp.server.auth import MultiAuth
+
+    from trading_mcp.oauth_provider import SingleOperatorOAuthProvider
+
+    auth = srv._build_auth()
+    assert isinstance(auth, MultiAuth)
+    assert isinstance(auth.server, SingleOperatorOAuthProvider)
+    assert any(
+        isinstance(v, srv.HmacStaticTokenVerifier) for v in auth.verifiers
+    ), "the static-bearer fallback must still be one of the verifiers"
+
+
+def test_build_auth_stays_bearer_only_without_public_url(monkeypatch):
+    """No MCP_PUBLIC_URL -> no OAuth server mounted, unchanged from M2-01/02.
+    A box that hasn't declared a public URL (rule 1: loopback/Tailscale by
+    default) must not start advertising a public authorization server."""
+    monkeypatch.setenv("TRADING_AGENT_TOKEN", "m2-04-operator-key")
+    monkeypatch.delenv("MCP_PUBLIC_URL", raising=False)
+    import trading_mcp.server as srv
+
+    auth = srv._build_auth()
+    assert isinstance(auth, srv.HmacStaticTokenVerifier)
+
+
+async def test_discovery_endpoints_404_without_public_url(monkeypatch):
+    monkeypatch.setenv("TRADING_AGENT_TOKEN", "m2-04-operator-key")
+    monkeypatch.delenv("MCP_PUBLIC_URL", raising=False)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-bearer-only", auth=srv._build_auth()).http_app(path="/mcp")
+    for path in (
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource/mcp",
+    ):
+        response = await _get(app, path)
+        assert response.status_code == 404, (
+            f"{path} must not be mounted when MCP_PUBLIC_URL is unset"
+        )
+
+
+async def test_oauth_authorization_server_metadata_is_well_formed(monkeypatch):
+    """RFC 8414: /.well-known/oauth-authorization-server must resolve and
+    carry every field a real client (claude.ai's connector, via CIMD or DCR)
+    needs to drive the code+PKCE flow -- issuer, the three operational
+    endpoints, and S256 PKCE support, which OAuth 2.1 makes mandatory."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+    response = await _get(app, "/.well-known/oauth-authorization-server")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+
+    metadata = response.json()
+    base = "https://agent.mphinance.test"
+    assert metadata["issuer"].rstrip("/") == base
+    assert metadata["authorization_endpoint"] == f"{base}/authorize"
+    assert metadata["token_endpoint"] == f"{base}/token"
+    assert metadata["registration_endpoint"] == f"{base}/register"
+    assert "code" in metadata["response_types_supported"]
+    assert "authorization_code" in metadata["grant_types_supported"]
+    assert "refresh_token" in metadata["grant_types_supported"]
+    assert "S256" in metadata["code_challenge_methods_supported"], (
+        "OAuth 2.1 requires PKCE; a client with no code_challenge_methods "
+        "to offer would fall back to a bare code flow"
+    )
+    assert "read" in metadata["scopes_supported"]
+
+
+async def test_oauth_protected_resource_metadata_is_well_formed(monkeypatch):
+    """RFC 9728: /.well-known/oauth-protected-resource/mcp must point back
+    at this server's own /mcp endpoint and name the authorization server
+    that issues tokens for it -- this is the document a CIMD/DCR client
+    reads first, from the 401's WWW-Authenticate challenge, to find the
+    authorization server at all."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+    response = await _get(app, "/.well-known/oauth-protected-resource/mcp")
+    assert response.status_code == 200
+
+    metadata = response.json()
+    assert metadata["resource"] == "https://agent.mphinance.test/mcp"
+    assert metadata["authorization_servers"] == ["https://agent.mphinance.test/"]
+    assert "read" in metadata["scopes_supported"]
+
+
+async def test_unauthenticated_request_advertises_resource_metadata(monkeypatch):
+    """The whole point of mounting an AS: a client that shows up with no
+    credential at all must be told, in the 401 itself, where to go find out
+    how to get one -- not just get a bare `WWW-Authenticate: Bearer` with no
+    way to discover /authorize, which was the state M2-04 was written to fix
+    (see app_spec: 'every OAuth endpoint 404s ... verified by curl against
+    the live host')."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    payload = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "clientInfo": {"name": "test-client", "version": "0"},
+        },
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/mcp", json=payload, headers=headers)
+
+    assert response.status_code == 401
+    challenge = response.headers.get("www-authenticate", "")
+    assert challenge.startswith("Bearer")
+    assert (
+        'resource_metadata="https://agent.mphinance.test/.well-known/'
+        'oauth-protected-resource/mcp"' in challenge
+    )
+
+
+def test_oauth_mount_still_no_user_model(monkeypatch):
+    """Mounting the AS must not have grown a user table, a per-user client
+    concept, or a second secret -- still exactly one operator_secret, reused
+    from TRADING_AGENT_TOKEN, per CLAUDE.md's single-operator premise."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    auth = srv._build_auth()
+    provider = auth.server
+    assert provider._operator_secret == "m2-04-operator-key"
+    for attr in ("users", "user_store", "accounts", "tenants"):
+        assert not hasattr(provider, attr), f"unexpected user-model attribute: {attr}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Rule 3 pin: the order path stays in exactly one place
 # ═══════════════════════════════════════════════════════════════════════════
 
