@@ -276,7 +276,7 @@
       "Run pytest -q and confirm the tree is green either way",
       "Record the decision and reasoning in claude-progress.txt, matching the pattern the M1-02 multi-agent-work decision used"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-04",
@@ -290,7 +290,7 @@
       "Confirm no user model was added -- authorization means 'carries a credential Michael provisioned', nothing more",
       "Add tests covering the discovery endpoints returning well-formed metadata"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-05",
@@ -303,7 +303,7 @@
       "Confirm the resulting access token is accepted by the MCP endpoint",
       "Confirm an unregistered client cannot obtain a token"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-06",
@@ -317,7 +317,7 @@
       "Write the reasoning into a comment at the decision function, since this is the exact shape that went wrong once already",
       "Run pytest -q and confirm pass"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-07",
@@ -330,7 +330,7 @@
       "Confirm this test requires no new tool implementation -- it only asserts absence against today's already-registered tool set (the scope-tiering enforcement half of this check is M8-14, which needs M8's tools to exist)",
       "Run pytest -q -k oauth_scope_absence and confirm pass"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-08",
@@ -342,7 +342,7 @@
       "Confirm all still pass with the OAuth provider mounted alongside",
       "Add a test that a request carrying the static bearer is accepted even while OAuth is configured"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-09",
@@ -355,7 +355,7 @@
       "Implement revocation and add a test: issue a token, use it successfully, revoke it, confirm it is then rejected",
       "Register the new state file in tests/conftest.py's _isolated_vesper_state autouse fixture"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-10",
@@ -368,7 +368,7 @@
       "Confirm token storage lives under core/ or trading_mcp's own state dir, never inside vesper/'s state directory",
       "Run pytest -q tests/test_trading_mcp.py and confirm it passes with oauth_provider.py present"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-11",
