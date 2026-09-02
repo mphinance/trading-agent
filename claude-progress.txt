@@ -1055,3 +1055,110 @@ mistake M0-06 documented and fixed going forward.
   if a future feature needs to add an entry, the bar per this feature's own
   reasoning is "couldn't reasonably be moved into core/ instead," not
   "moving it felt like more work than adding a line here."
+
+## M0-08: process-independence proof (trading_mcp.server survives vesper.graph/langgraph being unimportable)
+
+**What it verifies.** `trading_mcp/vesper_tools.py` was already repointed at
+`core/` for every stateful tool by M0-06/M0-07 -- this feature adds the
+mechanical proof that pays off. New test in `tests/test_trading_mcp.py`:
+`test_process_independence_server_survives_vesper_graph_import_failure`.
+Runs as a subprocess (fresh interpreter, `subprocess.run([sys.executable,
+"-c", script], ...)`), same reasoning as the sibling
+`test_calling_every_vesper_tool_never_imports_execution_guard` probe just
+above it in the file -- other test modules in the same pytest session have
+already imported `vesper.graph`/`langgraph` for real by the time this test
+runs, so poisoning `sys.modules` in-process would be a no-op; only a fresh
+interpreter makes the poison bite. The script sets
+`sys.modules["vesper.graph"] = None`, `sys.modules["langgraph"] = None`, and
+blanks every already-cached `langgraph.*` submodule the same way, all
+*before* `trading_mcp.server` is ever imported -- Python raises ImportError
+for any `import` statement naming a module whose `sys.modules` entry is
+`None`. Then: imports `trading_mcp.server` (must succeed), confirms
+`srv.mcp.name == "trading-agent"` and all 60 tools list via
+`mcp.list_tools()`, then calls `get_halt_status`, `list_pending_proposals`
+(the "list_pending_approvals" the feature description names informally --
+the actual registered tool name, confirmed against
+`test_vesper_tools_registers_exactly_the_documented_thirteen`'s list),
+`get_audit_trail`, and `get_position_monitor_status` (the
+position-monitor-preview tool) through a `_CollectingMCP`-style stand-in,
+same pattern the rest of the file already uses.
+
+**Turned out empty in this repo already, by construction.** Grepped the
+whole reachable import graph from `trading_mcp/server.py` for `vesper.graph`
+/ `import langgraph` / `from langgraph` before writing the test: the only
+hits anywhere in the repo are `vesper.py`, `vesper/graph.py`,
+`vesper/runner.py`, `vesper/nodes/human_gate.py` (none reachable from
+`trading_mcp/`) and one function-local `from langgraph.types import
+Command` inside `core/approval_registry.py`'s `submit_decision()` method --
+which no read-only trading_mcp tool calls (submit_decision is one of the
+permanently-forbidden imports `test_no_vesper_tool_can_reach_halt_or_resume`
+already pins), and it's function-local besides, so it never executes at
+module-import time regardless. So this test is a real regression net for a
+property that already held -- M0-06/M0-07's `core/` extraction is exactly
+why poisoning `vesper.graph`/`langgraph` doesn't touch anything
+`trading_mcp.server` needs.
+
+**One real gotcha this test surfaced: don't let `trading_mcp.server`'s
+`load_dotenv()` load this developer's real Webull credentials into the
+probe subprocess.** `trading_mcp/server.py` calls `load_dotenv()` at import
+time, and this repo's `.env` genuinely has `WEBULL_APP_KEY`/`WEBULL_SECRET`
+etc. set (confirmed by name only, per the name-only-check rule -- never by
+value). `python-dotenv`'s `load_dotenv(override=False)` (the default) never
+overwrites an already-set env var, so the script presets `WEBULL_KEY`,
+`WEBULL_APP_KEY`, `WEBULL_SECRET`, `WEBULL_APP_SECRET` to `""` *before*
+importing `trading_mcp.server` -- `core/wb.py`'s `credentials()` then raises
+`WebullError` synchronously on the empty key/secret, before any network I/O
+could happen, so `get_position_monitor_status`'s live-broker poll can never
+reach out to the real account. This mirrors what every existing
+Webull-touching test in this file already does deliberately
+(`test_get_account_state_degrades_when_webull_unconfigured` monkeypatches
+`Webull` itself to raise the same way) -- I nearly missed it because the
+subprocess pattern this test borrows from
+(`test_calling_every_vesper_tool_never_imports_execution_guard`) never
+imports `trading_mcp.server` itself (only `trading_mcp.vesper_tools`
+directly), so it never triggers `load_dotenv()` and had no need for this
+guard.
+
+**Second gotcha, environment-specific, not a code bug: the webull SDK
+package itself isn't installed in `.venv`** (this repo's test env stubs it
+via `tests/conftest.py`'s `sys.modules` fakes for in-process pytest runs,
+but a subprocess spawned with `subprocess.run` doesn't inherit that stub).
+`core/position_preview.py`'s `poll_webull_positions()` catches the resulting
+`ModuleNotFoundError` internally and logs a warning, returning an *empty
+position list* rather than propagating -- so `get_position_monitor_status`
+came back `available: true, position_count: 0` in this environment, not
+`available: false` as I first assumed reading the feature description's
+"available:false with a reason where a genuine vesper-only surface
+remains" clause literally. Both outcomes are the same thing the feature
+actually cares about (a normal dict shape, no unhandled exception) --
+whichever one shows up depends on whether the real webull package happens
+to be importable, which is an environment detail, not this feature's
+concern. The test now asserts `isinstance(pm["available"], bool)` and, only
+conditionally, `pm["reason"]` when `available` is `False` -- asserting a
+literal `available is False` here would have been exactly the "verifying
+two documents agree with each other, not either against the code" mistake
+the standing warning calls out, since the feature description's prose
+guessed at a specific runtime outcome that the actual code (a
+broad-except-and-degrade-to-empty pattern) doesn't guarantee.
+
+**`pytest -q -k process_independence`: 1 passed, 592 deselected.**
+**Full suite: 593 passed** (`.venv/bin/python -m pytest -q`) -- 592 before
+this feature + 1 new test. Floor is 580.
+
+**No new on-disk state** -- the test's temp `data_dir`/`SIDECAR_STATE_DIR`
+are created and used entirely inside the subprocess script (mirroring the
+sibling probe test's own pattern exactly), never touching
+`tests/conftest.py`'s `_isolated_vesper_state` fixture or any real repo-root
+state file.
+
+**Left unstaged, pre-existing from earlier in this session (not this
+feature's to resolve):** `autonomous/feature_list.seed.json`,
+`trading_mcp/server.py` (OAuth-provider changes, `MultiAuth` /
+`SingleOperatorOAuthProvider` wiring), `feature_list.json.bak`,
+`trading_mcp/oauth_provider.py`, and several untracked docs
+(`HKUDS_REPOSITORY_REVIEW.md`, `docs/COOLIFY_MAP.md`,
+`docs/DISCORD_STACK.md`, `docs/HANDOFF_2026-09-01.md`,
+`scripts/package_for_supermcp.py`, `supermcp_CLAUDE_remote.md`). Confirmed
+by diff that none of this feature's changes touch `trading_mcp/server.py`'s
+actual OAuth logic -- the new test only *imports* it inside its subprocess
+script, never edits it.

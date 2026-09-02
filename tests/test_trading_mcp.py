@@ -780,3 +780,149 @@ def test_no_vesper_tool_can_reach_halt_or_resume():
 
     forbidden = {"halt", "resume", "submit_decision"}
     assert not (imported_names & forbidden), f"forbidden mutating import(s) found: {imported_names & forbidden}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# M0-08: the MCP server survives the LangGraph agent being unimportable
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_process_independence_server_survives_vesper_graph_import_failure():
+    """`trading_mcp/server.py` reaches nothing under `vesper/` at all -- every
+    stateful tool in `trading_mcp/vesper_tools.py` was repointed at `core/`
+    by M0-06/M0-07 specifically so this server has no load-bearing dependency
+    on the LangGraph agent pipeline. This is the mechanical proof: poison
+    `sys.modules["vesper.graph"]` and `sys.modules["langgraph"]` (and every
+    `langgraph.*` submodule already cached) to `None` -- Python raises
+    ImportError for any `import` statement naming a module whose
+    `sys.modules` entry is `None` -- *before* `trading_mcp.server` is ever
+    imported, then assert the server still constructs, registers its full
+    tool set, and every probed tool still returns its normal
+    available:true/available:false shape rather than blowing up.
+
+    Run as a REAL subprocess (fresh interpreter), same reasoning as
+    `test_calling_every_vesper_tool_never_imports_execution_guard` above: by
+    the time this test runs, other files in the same pytest session
+    (test_graph.py, test_runner.py, ...) have already imported
+    `vesper.graph` and `langgraph` for real, so poisoning `sys.modules`
+    in-process would just be un-poisoned by whatever already cached them --
+    a fresh interpreter is the only way the poison actually bites.
+
+    State paths are redirected to a temp dir the same way the sibling
+    subprocess probe above does, so this reads empty state rather than the
+    developer's real `data/` files.
+    """
+    script = '''
+import asyncio
+import inspect
+import sys
+import tempfile
+from pathlib import Path
+
+# Poison vesper.graph and langgraph (and any langgraph.* submodule) so any
+# "import vesper.graph" or "import langgraph[...]" anywhere in the reachable
+# import graph raises ImportError -- simulating the LangGraph agent code
+# being flat-out unimportable, before trading_mcp.server is ever imported.
+sys.modules["vesper.graph"] = None
+sys.modules["langgraph"] = None
+for _name in list(sys.modules):
+    if _name == "langgraph" or _name.startswith("langgraph."):
+        sys.modules[_name] = None
+
+tmp = Path(tempfile.mkdtemp())
+data_dir = tmp / "data"
+data_dir.mkdir()
+
+import os
+os.environ["SIDECAR_STATE_DIR"] = str(tmp / "alert_state")
+
+# trading_mcp.server load_dotenv()s the repo .env at import time below, which
+# WOULD load this developer's real Webull credentials into os.environ (its
+# WEBULL_APP_KEY/SECRET are real, per CLAUDE.md rule 2) -- python-dotenv's
+# load_dotenv(override=False) never overwrites an already-set variable, so
+# presetting these to empty strings first keeps get_position_monitor_status's
+# live-broker poll from ever attempting a real network call: core.wb.credentials()
+# raises WebullError synchronously on an empty key/secret, before any I/O.
+for _k in ("WEBULL_KEY", "WEBULL_APP_KEY", "WEBULL_SECRET", "WEBULL_APP_SECRET"):
+    os.environ[_k] = ""
+
+sys.modules["core.knowledge"] = None
+
+import core.halt as _halt
+_halt._DATA_DIR = data_dir
+_halt._HALT_STATE_PATH = data_dir / "halt_state.json"
+
+import core.approval_registry as _ar
+_ar._DATA_DIR = data_dir
+_ar._APPROVAL_STATE_PATH = data_dir / "approval_registry_state.json"
+
+import core.audit_chain as _ac
+_ac._DATA_DIR = data_dir
+_ac._CHAIN_PATH = data_dir / "audit_chain.jsonl"
+
+# The mechanical proof itself: trading_mcp.server must import cleanly and
+# FastMCP("trading-agent") must construct, with vesper.graph/langgraph both
+# poisoned unimportable above.
+import trading_mcp.server as srv
+assert srv.mcp is not None
+assert srv.mcp.name == "trading-agent"
+
+tools = asyncio.run(srv.mcp.list_tools())
+assert len(tools) == 60, f"expected 60 registered tools, got {len(tools)}"
+
+# Confirm the four named surfaces each return their normal shape (a plain
+# dict, no unhandled exception) by calling them through the same
+# _CollectingMCP-style stand-in the rest of this file uses.
+class _Collecting:
+    def __init__(self):
+        self.tools = {}
+
+    def tool(self, *_a, **_kw):
+        def _decorator(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+        return _decorator
+
+
+from trading_mcp.vesper_tools import register_vesper_tools
+
+vmcp = _Collecting()
+register_vesper_tools(vmcp)
+assert vmcp.tools, "no vesper tools registered -- nothing to probe"
+
+probed = {}
+for name in ("get_halt_status", "list_pending_proposals", "get_audit_trail", "get_position_monitor_status"):
+    fn = vmcp.tools[name]
+    result = fn()
+    if inspect.isawaitable(result):
+        result = asyncio.run(result)
+    assert isinstance(result, dict), f"{name} returned {type(result)!r}, not a dict: {result!r}"
+    probed[name] = result
+
+# core-backed reads with real (empty) on-disk state behind them: normal
+# available:true shape, not a degrade.
+assert probed["get_halt_status"].get("available") is True, probed["get_halt_status"]
+assert probed["list_pending_proposals"].get("available") is True, probed["list_pending_proposals"]
+assert probed["get_audit_trail"].get("available") is True, probed["get_audit_trail"]
+
+# get_position_monitor_status polls live Webull state this hermetic probe
+# never configures real credentials for (WEBULL_KEY/SECRET are blanked
+# above): depending on whether the webull SDK package itself is even
+# importable in this environment it either degrades with a reason or
+# reports zero positions -- either is fine, both are the SAME thing this
+# test is actually proving: a normal dict shape, no unhandled exception,
+# whatever the specific missing dependency turns out to be.
+pm = probed["get_position_monitor_status"]
+assert isinstance(pm.get("available"), bool), pm
+if pm["available"] is False:
+    assert pm.get("reason"), pm
+
+print("OK", len(tools))
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"probe failed (rc={result.returncode})\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+    assert result.stdout.strip().startswith("OK"), result.stdout

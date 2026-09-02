@@ -220,7 +220,7 @@
       "Assert each returns its normal shape (available:true where backed only by core, available:false with a reason where a genuine vesper-only surface remains) rather than an unhandled exception",
       "Run pytest -q -k process_independence and confirm pass"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-09",
