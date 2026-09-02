@@ -34,8 +34,8 @@ M1  Repo cloneable again          7/7    done
 M0  The core/ split              10/10   done
 M2  OAuth 2.1                    11/11   done
 M8  Voice co-pilot + order path  23/23   done
-M10 Skills endpoint               0/7    NEXT
-M7  Deployment: two units         0/9
+M10 Skills endpoint               7/7    done
+M7  Deployment: two units         0/9    NEXT
 M3  Credentials on the box        0/7
 M4  Full Vesper running remotely  0/10
 M5  Discord approvals             0/9
