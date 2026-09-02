@@ -76,7 +76,28 @@ def register_vesper_tools(mcp: Any) -> list[str]:
             return {"available": False, "reason": str(e)}
 
         totals = portfolio.get("totals", {})
-        return {
+        positions_raw = portfolio.get("positions", [])
+        total_count = totals.get("position_count")
+        if total_count is None:
+            total_count = len(positions_raw)
+
+        # M8-10: Bound positions list to top 15 by notional/market value for voice clarity
+        max_positions = 15
+        if len(positions_raw) > max_positions:
+            sorted_positions = sorted(
+                positions_raw,
+                key=lambda p: abs(float(p.get("market_value") or p.get("cost") or 0.0)),
+                reverse=True,
+            )
+            capped_positions = sorted_positions[:max_positions]
+            is_truncated = True
+            note = f"Showing top {max_positions} of {len(positions_raw)} positions by market value"
+        else:
+            capped_positions = positions_raw
+            is_truncated = False
+            note = None
+
+        res = {
             "available": True,
             "stale": portfolio.get("stale", False),
             "fetch_error": portfolio.get("error"),
@@ -85,10 +106,14 @@ def register_vesper_tools(mcp: Any) -> list[str]:
             "option_buying_power": totals.get("option_buying_power"),
             "day_pl": totals.get("day_pl"),
             "unrealized_pl": totals.get("unrealized_pl"),
-            "position_count": totals.get("position_count"),
-            "positions": portfolio.get("positions", []),
+            "position_count": total_count,
+            "positions": capped_positions,
+            "positions_truncated": is_truncated,
             "fetched_at": portfolio.get("fetched_at"),
         }
+        if note:
+            res["positions_note"] = note
+        return res
 
     @mcp.tool()
     def get_halt_status() -> dict[str, Any]:
@@ -246,10 +271,14 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         }
 
     @mcp.tool()
-    def get_audit_trail(limit: int = 20) -> dict[str, Any]:
+    def get_audit_trail(limit: int = 5, summary: bool = True) -> dict[str, Any]:
         """The most recent entries in the hash-chained audit ledger
-        (`core/audit_chain.py`), newest last. `limit` <= 0 returns every
-        entry. Does not verify the chain -- see `verify_audit_chain`."""
+        (`core/audit_chain.py`), newest last.
+
+        M8-11: Defaults to a spoken-friendly compact size (limit=5, summary=True).
+        Set summary=False and adjust limit for full-detail JSON records including hash links.
+        `limit` <= 0 returns every entry. Does not verify the chain -- see `verify_audit_chain`.
+        """
         try:
             from core import audit_chain
         except Exception as e:
@@ -273,8 +302,31 @@ def register_vesper_tools(mcp: Any) -> list[str]:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue  # a corrupt line is verify_audit_chain's problem, not a crash here
 
+        if summary:
+            compact_entries = []
+            for e in entries:
+                node = e.get("node", "event")
+                ts = e.get("timestamp", "")[:19]
+                payload = e.get("entry", {})
+                detail_str = json.dumps(payload, default=str)
+                if len(detail_str) > 100:
+                    detail_str = detail_str[:97] + "..."
+                compact_entries.append({
+                    "timestamp": ts,
+                    "node": node,
+                    "summary": f"[{ts}] {node}: {detail_str}",
+                })
+            return {
+                "available": True,
+                "summary_mode": True,
+                "entry_count": len(lines),
+                "returned": len(compact_entries),
+                "entries": compact_entries,
+            }
+
         return {
             "available": True,
+            "summary_mode": False,
             "entry_count": len(lines),
             "returned": len(entries),
             "entries": entries,

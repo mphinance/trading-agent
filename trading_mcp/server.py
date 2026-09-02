@@ -134,11 +134,11 @@ mcp = FastMCP(
     "trading-agent",
     auth=_build_auth(),
     instructions=(
-        "Owner-only, read-only view into the webull-sidecar / Vesper trading "
+        "Owner-only view into the webull-sidecar / Vesper trading "
         "agent: momentum/options/screener analytics (mcp_server, tiers 1-3) "
         "plus Vesper's own account, halt, alert, approval-queue and "
         "conviction-journal state. No tool here can place, preview, or "
-        "approve an order, or touch the halt/circuit-breaker switches — "
+        "approve an order — halt is permitted as a safe risk-reducing control, while "
         "orders move only through Vesper's own Telegram/Discord approval "
         "flow. Use this server to answer questions about current state, "
         "never to act on it."

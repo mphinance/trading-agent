@@ -412,3 +412,171 @@ def test_voice_tools_has_no_execution_guard_or_submit_decision():
         if isinstance(node, ast.Attribute) and node.attr == "submit_decision":
             raise AssertionError("voice_tools must not call submit_decision")
 
+
+class _CollectingMCP:
+    def __init__(self):
+        self.tools = {}
+
+    def tool(self, *args, **kwargs):
+        def _decorator(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+        return _decorator
+
+
+def test_halt_tool_flips_halt_file(tmp_path, monkeypatch):
+    """M8-08: Calling halt() MCP tool flips halt state file and get_halt_status reflects it."""
+    import core.halt as ch
+    from trading_mcp.voice_tools import halt
+    from trading_mcp.vesper_tools import register_vesper_tools
+
+    halt_file = tmp_path / "halt_state.json"
+    monkeypatch.setattr(ch, "_HALT_STATE_PATH", halt_file)
+
+    # Initial state: not halted
+    assert not ch.is_halted()[0]
+
+    # Call halt tool
+    res = halt(reason="Voice emergency test", source="voice_copilot")
+    assert res["status"] == "HALTED"
+    assert ch.is_halted()[0]
+
+    # Check via get_halt_status MCP tool
+    mcp = _CollectingMCP()
+    register_vesper_tools(mcp)
+    status_tool = mcp.tools["get_halt_status"]
+    status = status_tool()
+    assert status.get("available") is True
+    assert status.get("is_halted") is True
+    assert status.get("details", {}).get("reason") == "Voice emergency test"
+
+
+def test_no_tool_resolves_to_resume_or_unhalt():
+    """M8-08: Enumerating registered tools confirms none resolves to resume or un-halt."""
+    from trading_mcp.voice_tools import register_voice_tools
+
+    mcp = _CollectingMCP()
+    tools = register_voice_tools(mcp)
+    for tool_name in tools:
+        assert "resume" not in tool_name.lower()
+        assert "unhalt" not in tool_name.lower()
+        assert "un_halt" not in tool_name.lower()
+
+
+def test_instructions_string_no_longer_claims_halt_forbidden():
+    """M8-08: Assert server.py instructions no longer claims halt is forbidden."""
+    import trading_mcp.server as srv
+    instructions = srv.mcp.instructions or ""
+    assert "or touch the halt/circuit-breaker switches" not in instructions
+    assert "halt is permitted" in instructions
+
+
+def test_scan_backtest_confinement():
+    """M8-09: Assert no tool named run_scan or run_backtest is in the registered set."""
+    from trading_mcp.voice_tools import register_voice_tools
+
+    mcp = _CollectingMCP()
+    names = register_voice_tools(mcp)
+    assert "run_scan" not in names
+    assert "run_backtest" not in names
+
+
+@pytest.mark.asyncio
+async def test_get_account_state_bounds_large_portfolio(monkeypatch):
+    """M8-10: Synthetic 50-position portfolio keeps response bounded to top 15."""
+    import trading_mcp.vesper_tools as vt
+    from unittest.mock import MagicMock
+
+    mcp = _CollectingMCP()
+    vt.register_vesper_tools(mcp)
+
+    # Synthetic 50 positions
+    positions = [
+        {"symbol": f"SYM{i}", "qty": 10, "market_value": float(i * 100)}
+        for i in range(1, 51)
+    ]
+    fake_portfolio = {
+        "totals": {"nlv": 100000.0, "position_count": 50, "buying_power": 50000.0},
+        "positions": positions,
+    }
+
+    mock_wb = MagicMock()
+    mock_wb.portfolio.return_value = fake_portfolio
+    monkeypatch.setattr("core.wb.Webull", lambda: mock_wb)
+
+    tool_fn = mcp.tools["get_account_state"]
+    res = await tool_fn()
+    assert res["available"] is True
+    assert res["position_count"] == 50
+    assert len(res["positions"]) == 15
+    assert res["positions_truncated"] is True
+    assert "Showing top 15 of 50" in res["positions_note"]
+    # Check that highest market value position (SYM50 = 5000.0) is present
+    assert any(p["symbol"] == "SYM50" for p in res["positions"])
+
+
+def test_get_audit_trail_summary_mode(tmp_path, monkeypatch):
+    """M8-11: get_audit_trail defaults to compact summary mode with limit=5."""
+    import core.audit_chain as ac
+    import trading_mcp.vesper_tools as vt
+
+    chain_file = tmp_path / "audit_chain.jsonl"
+    monkeypatch.setattr(ac, "_CHAIN_PATH", chain_file)
+
+    # Populate 10 entries
+    for i in range(10):
+        ac.append_entry(f"sess-{i}", f"node-{i}", {"step": i, "details": "some long detail string" * 5})
+
+    mcp = _CollectingMCP()
+    vt.register_vesper_tools(mcp)
+    get_trail = mcp.tools["get_audit_trail"]
+
+    # 1. Default call: summary_mode=True, returned=5
+    default_res = get_trail()
+    assert default_res["available"] is True
+    assert default_res["summary_mode"] is True
+    assert default_res["returned"] == 5
+    default_len = len(json.dumps(default_res))
+
+    # 2. Full detail call: summary=False, limit=10
+    full_res = get_trail(limit=10, summary=False)
+    assert full_res["available"] is True
+    assert full_res["summary_mode"] is False
+    assert full_res["returned"] == 10
+    assert "prev_hash" in full_res["entries"][0]
+    full_len = len(json.dumps(full_res))
+
+    assert default_len < full_len
+
+
+def test_voice_tools_audit_trail(tmp_path, monkeypatch):
+    """M8-12: Every voice tool call is recorded in audit chain, no credentials logged."""
+    import core.audit_chain as ac
+    from trading_mcp.voice_tools import halt, watch_setup
+    from core.approval_registry import approval_registry
+
+    chain_file = tmp_path / "audit_chain.jsonl"
+    monkeypatch.setattr(ac, "_CHAIN_PATH", chain_file)
+
+    # Call halt
+    halt(reason="Audited emergency freeze", source="voice")
+
+    # Call watch_setup
+    watch_setup("non-existent-id")
+
+    # Read audit trail
+    lines = chain_file.read_text(encoding="utf-8").splitlines()
+    entries = [json.loads(line) for line in lines if line.strip()]
+    assert len(entries) >= 2
+
+    # Verify no credential leaks in arguments
+    for e in entries:
+        args = e.get("entry", {}).get("arguments", {})
+        for k in args:
+            assert not any(bad in k.lower() for bad in ("token", "secret", "key", "password"))
+
+    # Confirm audit chain verifies cryptographic integrity
+    verify_res = ac.verify_chain()
+    assert verify_res["valid"] is True
+
+

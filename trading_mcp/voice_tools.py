@@ -57,6 +57,35 @@ def _num(val: Any) -> float | None:
         return None
 
 
+def _audit_voice_tool_call(tool: str, **kwargs: Any) -> None:
+    """M8-12: Audit logger for all voice-originated MCP tools.
+    Filters credentials by construction and appends entry to core.audit_chain.
+    """
+    from datetime import datetime, timezone
+    from core.audit_chain import append_entry
+
+    clean_args = {}
+    for k, v in kwargs.items():
+        k_lower = k.lower()
+        if any(bad in k_lower for bad in ("token", "secret", "key", "auth", "password", "credential")):
+            continue
+        clean_args[k] = v
+
+    try:
+        append_entry(
+            session_id="mcp-voice",
+            node=f"voice:{tool}",
+            entry={
+                "tool": tool,
+                "arguments": clean_args,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as e:
+        logger.warning(f"Voice tool audit append failed for {tool}: {e}")
+
+
+
 def _get_market_client():
     from core.wb import Webull
     from core.md import Market
@@ -111,6 +140,8 @@ def watch_setup(proposal_id: str, force_full: bool = False) -> dict[str, Any]:
 
     M8-01 / M8-04. Sourced from core.approval_registry, core.md, and core.td.
     """
+    _audit_voice_tool_call("watch_setup", proposal_id=proposal_id, force_full=force_full)
+
     # 1. Proposal lookup
     pending = approval_registry.get_pending(proposal_id)
     if not pending:
@@ -273,6 +304,7 @@ def find_pending_setup(query: str) -> dict[str, Any]:
 
     M8-05. Echoes resolved symbol on clean matches or flags explicit ambiguity/no-match.
     """
+    _audit_voice_tool_call("find_pending_setup", query=query)
     cleaned_query = (query or "").strip().lower()
     if not cleaned_query:
         return {"available": False, "query": query, "reason": "empty_query"}
@@ -347,6 +379,7 @@ def snooze_proposal(proposal_id: str, minutes: float = 60.0) -> dict[str, Any]:
     M8-06. Does NOT alter price, quantity, or approval status ('PENDING').
     The proposal remains fully approvable by button tap at any time.
     """
+    _audit_voice_tool_call("snooze_proposal", proposal_id=proposal_id, minutes=minutes)
     from datetime import datetime, timezone, timedelta
     from core.approval_registry import _load_approval_state, _save_approval_state
 
@@ -383,6 +416,7 @@ def tag_proposal(proposal_id: str, note: str) -> dict[str, Any]:
 
     M8-06. Appends to notes without modifying price, quantity, or invoking submit_decision.
     """
+    _audit_voice_tool_call("tag_proposal", proposal_id=proposal_id, note=note)
     from datetime import datetime, timezone
     from core.approval_registry import _load_approval_state, _save_approval_state
     from core.audit_chain import append_entry
@@ -442,6 +476,7 @@ def arm_alert(
 
     M8-07. Level can be static number or dynamic reference ('flip', 'pin', 'wall_above', 'wall_below').
     """
+    _audit_voice_tool_call("arm_alert", symbol=symbol, level=level, direction=direction, note=note, repeat=repeat)
     from alerts import make_alert, AlertError
 
     try:
@@ -474,6 +509,7 @@ def disarm_alert(alert_id: str) -> dict[str, Any]:
 
     M8-07. Once removed, the alert no longer evaluates.
     """
+    _audit_voice_tool_call("disarm_alert", alert_id=alert_id)
     try:
         store = _get_alert_store()
         removed = store.remove(alert_id)
@@ -486,12 +522,24 @@ def disarm_alert(alert_id: str) -> dict[str, Any]:
         return {"available": False, "alert_id": alert_id, "reason": str(e)}
 
 
+def halt(reason: str = "Emergency halt via MCP", source: str = "mcp") -> dict[str, Any]:
+    """Trigger an immediate emergency halt, freezing all execution paths.
+
+    M8-08. Flips the persistent halt state via core.halt.halt().
+    """
+    _audit_voice_tool_call("halt", reason=reason, source=source)
+    from core.halt import halt as _core_halt
+
+    return _core_halt(reason=reason, source=source)
+
+
 _find_pending_setup_impl = find_pending_setup
 _watch_setup_impl = watch_setup
 _snooze_proposal_impl = snooze_proposal
 _tag_proposal_impl = tag_proposal
 _arm_alert_impl = arm_alert
 _disarm_alert_impl = disarm_alert
+_halt_impl = halt
 
 
 def register_voice_tools(mcp: Any) -> list[str]:
@@ -541,6 +589,11 @@ def register_voice_tools(mcp: Any) -> list[str]:
         """Disarm and remove an alert from the store."""
         return _disarm_alert_impl(alert_id)
 
+    @mcp.tool()
+    def halt(reason: str = "Emergency halt via MCP", source: str = "mcp") -> dict[str, Any]:
+        """Trigger an immediate emergency halt, freezing all execution paths."""
+        return _halt_impl(reason=reason, source=source)
+
     return [
         "watch_setup",
         "find_pending_setup",
@@ -548,5 +601,6 @@ def register_voice_tools(mcp: Any) -> list[str]:
         "tag_proposal",
         "arm_alert",
         "disarm_alert",
+        "halt",
     ]
 
