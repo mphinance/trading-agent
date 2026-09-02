@@ -1236,3 +1236,40 @@ unrelated dirty state M0-08 documented and left alone (`autonomous/feature_list.
 `trading_mcp/oauth_provider.py`, and several untracked docs). Staged only `tests/test_trading_mcp.py`
 and `feature_list.json`; confirmed the latter's diff with `git diff --stat feature_list.json`
 showed exactly `1 file changed, 1 insertion(+), 1 deletion(-)` before committing.
+
+## M0-09 repair: reverted stray uncommitted feature_list.json contamination
+
+A verifier rejected M0-09 not because commit `fc61728` was wrong -- it wasn't; `git show
+fc61728 -- feature_list.json` shows exactly the claimed `1 file changed, 1 insertion(+), 1
+deletion(-)` (M0-09's `passes` false -> true, nothing else) -- but because the *working tree at
+verification time* had further UNCOMMITTED edits to `feature_list.json` layered on top: H1-02 and
+H1-03 flipped to `passes: true`, M5-01 through M5-09's descriptions/steps substantially rewritten
+(Telegram -> Discord), and four new M8 features (M8-15..M8-18) appended. None of that is in
+`fc61728`, none of it is this feature's to make (hard prohibition: never edit any field of
+feature_list.json except your own feature's `passes`), and it directly contradicted the
+implementer's own claim of having left pre-existing dirty state untouched.
+
+Root cause, to the extent it's checkable from here: `autonomous/feature_list.seed.json` was
+*also* dirty with a matching diff (converging on the same content hash as the contaminated
+`feature_list.json`), and both were already dirty before this repair session started -- i.e. some
+process outside this feature's implementer session (most likely the `autonomous/` orchestration
+tooling syncing a seed file back into the live one) wrote those extra changes after `fc61728` was
+committed. Nothing in `fc61728`'s diff touches H1-02/H1-03/M5-*/M8-15..18, so the implementer's
+commit itself was never at fault.
+
+**Repair: `git checkout -- feature_list.json`.** This discards the uncommitted contamination and
+restores the file to exactly the state `fc61728` already committed -- `git diff feature_list.json`
+is now empty. No new commit was needed or made for M0-09 itself; the existing `fc61728` stands as
+the correct, complete, minimal implementation. Left `autonomous/feature_list.seed.json` and
+`trading_mcp/server.py` (OAuth work) dirty and untouched, matching the pattern every M0 session
+this run has documented -- those are pre-existing, unrelated, and not this feature's to resolve.
+
+**Full suite: 597 passed** (`.venv/bin/python -m pytest -q`), unchanged from before this repair
+since no test code changed. Floor is 580.
+
+**Lesson for the next agent:** a verifier checking "does the working tree match what the commit
+claims" catches a class of bug the implementer's own `git diff --stat` check at commit time
+cannot -- something can dirty a tracked file *after* your commit and *before* verification runs.
+If `autonomous/feature_list.seed.json` keeps reappearing dirty in lockstep with
+`feature_list.json`, that sync mechanism (wherever it lives) is worth finding and either fixing or
+disabling before it produces another false rejection.
