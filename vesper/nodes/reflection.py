@@ -227,6 +227,20 @@ async def reflection_node(state: TradingState) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Auto-resolution check failed in reflection_node: {e}")
 
+    # ── 6. Log Multi-Agent Swarm Attribution ─────────────────────────────────
+    worker_reports = state.get("worker_reports", {})
+    debate_transcripts = state.get("debate_transcripts", [])
+    if worker_reports:
+        total_reports = sum(len(r) for r in worker_reports.values())
+        reflection_notes.append(
+            f"Swarm Attribution: {total_reports} reports across {len(worker_reports)} tickers evaluated."
+        )
+    if debate_transcripts:
+        conflicts = sum(1 for d in debate_transcripts if d.get("has_conflict"))
+        reflection_notes.append(
+            f"Debate Attribution: {len(debate_transcripts)} debates conducted ({conflicts} arbitrated conflicts)."
+        )
+
     audit_entry = {
         "node": "reflection_node",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -237,3 +251,4 @@ async def reflection_node(state: TradingState) -> Dict[str, Any]:
         "reflection_notes": reflection_notes,
         "audit_trail": [audit_entry],
     }
+

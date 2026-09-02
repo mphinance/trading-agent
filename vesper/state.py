@@ -168,6 +168,20 @@ class ExecutionResult(BaseModel):
     timestamp: Optional[str] = None
 
 
+class WorkerReport(BaseModel):
+    """Normalized analysis report emitted by a specialist worker agent."""
+    agent_name: str
+    ticker: str
+    direction: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL
+    confidence_score: float = 0.0  # 0.0 to 100.0
+    time_horizon: str = "SWING_SHORT"  # INTRADAY_0DTE, SWING_SHORT, POSITION_LONG
+    key_catalysts: List[str] = Field(default_factory=list)
+    invalidation_levels: List[float] = Field(default_factory=list)
+    thesis_summary: str = ""
+    suggested_playbook: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
 class TradingState(TypedDict):
     """Complete LangGraph Trading Agent State."""
     session_id: str
@@ -180,6 +194,12 @@ class TradingState(TypedDict):
     candidates: Annotated[List[Candidate], operator.add]
     technicals: Annotated[Dict[str, TechnicalAudit], operator.ior]
     options_audits: Annotated[Dict[str, OptionAudit], operator.ior]
+
+    # Multi-Agent Swarm & Debate
+    worker_reports: Annotated[Dict[str, List[WorkerReport]], operator.ior]
+    active_workers: Optional[List[str]]
+    debate_transcripts: Annotated[List[Dict[str, Any]], operator.add]
+    agent_conviction_weights: Optional[Dict[str, float]]
     
     # Orders & Risk
     proposals: List[OrderProposal]
@@ -203,3 +223,4 @@ class TradingState(TypedDict):
     audit_trail: Annotated[List[Dict[str, Any]], operator.add]
     reflection_notes: Annotated[List[str], operator.add]
     errors: Annotated[List[str], operator.add]
+

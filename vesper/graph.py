@@ -14,7 +14,9 @@ from vesper.nodes import (
     regime_node,
     scanner_node,
     analyst_node,
+    swarm_node,
     playbooks_node,
+    synthesis_node,
     risk_gate_node,
     human_gate_node,
     executor_node,
@@ -138,23 +140,25 @@ async def build_trading_graph(checkpointer: bool = True, persistent: bool = True
 
     # 1. Add all nodes, each wrapped so its audit_trail entries are
     # committed to the hash-chained ledger the instant they're produced
-    # (see _with_audit_chain's docstring for why this is per-node wiring
-    # rather than a session-end hook).
     workflow.add_node("regime_node", _with_audit_chain("regime_node", regime_node))
     workflow.add_node("scanner_node", _with_audit_chain("scanner_node", scanner_node))
     workflow.add_node("analyst_node", _with_audit_chain("analyst_node", analyst_node))
+    workflow.add_node("swarm_node", _with_audit_chain("swarm_node", swarm_node))
     workflow.add_node("playbooks_node", _with_audit_chain("playbooks_node", playbooks_node))
+    workflow.add_node("synthesis_node", _with_audit_chain("synthesis_node", synthesis_node))
     workflow.add_node("risk_gate_node", _with_audit_chain("risk_gate_node", risk_gate_node))
     workflow.add_node("human_gate_node", _with_audit_chain("human_gate_node", human_gate_node))
     workflow.add_node("executor_node", _with_audit_chain("executor_node", executor_node))
     workflow.add_node("reflection_node", _with_audit_chain("reflection_node", reflection_node))
 
-    # 2. Add sequential edges
+    # 2. Add sequential edges with multi-agent swarm & debate synthesis
     workflow.add_edge(START, "regime_node")
     workflow.add_edge("regime_node", "scanner_node")
     workflow.add_edge("scanner_node", "analyst_node")
-    workflow.add_edge("analyst_node", "playbooks_node")
-    workflow.add_edge("playbooks_node", "risk_gate_node")
+    workflow.add_edge("analyst_node", "swarm_node")
+    workflow.add_edge("swarm_node", "playbooks_node")
+    workflow.add_edge("playbooks_node", "synthesis_node")
+    workflow.add_edge("synthesis_node", "risk_gate_node")
     workflow.add_edge("risk_gate_node", "human_gate_node")
 
     # 3. Conditional Edge after Human Gate
@@ -179,3 +183,4 @@ async def build_trading_graph(checkpointer: bool = True, persistent: bool = True
         memory = MemorySaver()
     app = workflow.compile(checkpointer=memory)
     return app
+
