@@ -32,8 +32,10 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from fastmcp.server.auth import MultiAuth
 
 from trading_mcp.auth import HmacStaticTokenVerifier
+from trading_mcp.oauth_provider import SingleOperatorOAuthProvider
 
 load_dotenv()
 
@@ -46,7 +48,26 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _build_auth() -> HmacStaticTokenVerifier | None:
+def _build_oauth_provider(token: str) -> SingleOperatorOAuthProvider | None:
+    """Build the OAuth 2.1 authorization server (M2-03), or None if this
+    deployment hasn't set a public URL for it yet.
+
+    `MCP_PUBLIC_URL` (e.g. `https://agent.mphinance.com`) is required because
+    the OAuth metadata this mounts (issuer, authorization_endpoint,
+    token_endpoint, ...) has to advertise URLs a real client can reach —
+    there is no sane default for that on a box that isn't deployed yet. Local
+    dev and the test suite simply don't set it, so `_build_auth()` falls back
+    to the bearer-only path below, unchanged from M2-01/M2-02.
+    """
+    base_url = os.environ.get("MCP_PUBLIC_URL")
+    if not base_url:
+        return None
+    return SingleOperatorOAuthProvider(
+        operator_secret=token, base_url=base_url, required_scopes=["read"],
+    )
+
+
+def _build_auth() -> HmacStaticTokenVerifier | MultiAuth | None:
     """Build the auth provider from TRADING_AGENT_TOKEN, or None if unset.
 
     Constructing the server is unconditional either way — a missing token
@@ -58,14 +79,26 @@ def _build_auth() -> HmacStaticTokenVerifier | None:
     Uses `HmacStaticTokenVerifier` (trading_mcp/auth.py), not fastmcp's own
     `StaticTokenVerifier` — see that module's docstring: the stock verifier
     compares tokens with a plain dict lookup, which is not constant-time.
+
+    When `MCP_PUBLIC_URL` is also set, wraps the bearer verifier and the
+    OAuth 2.1 provider (M2-03, `trading_mcp/oauth_provider.py`) in a single
+    `MultiAuth`, per app_spec.txt's requirement that "both auth paths
+    converge on one authorization check" — `MultiAuth.verify_token()` is that
+    one check: it tries the OAuth server's own token store first, then the
+    static bearer, and a token is valid if either says so. There are not two
+    independent authorization decisions here, only one, fed by two sources.
     """
     token = os.environ.get("TRADING_AGENT_TOKEN")
     if not token:
         return None
-    return HmacStaticTokenVerifier(
+    bearer = HmacStaticTokenVerifier(
         tokens={token: {"client_id": "owner", "scopes": ["read"]}},
         required_scopes=["read"],
     )
+    oauth = _build_oauth_provider(token)
+    if oauth is None:
+        return bearer
+    return MultiAuth(server=oauth, verifiers=[bearer])
 
 
 mcp = FastMCP(

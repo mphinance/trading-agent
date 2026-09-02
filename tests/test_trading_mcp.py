@@ -325,6 +325,93 @@ async def test_hmac_verifier_rejects_missing_required_scope():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# M2-03: trading_mcp/oauth_provider.py's disposition review found its OAuth
+# access/refresh-token and authorization-code lookups doing plain
+# `dict.get(presented)` -- the same non-constant-time shape M2-02 fixed for
+# the static bearer token, just reintroduced one layer up. Fixed by routing
+# all three through `_lookup_constant_time`, which walks every stored key
+# with `hmac.compare_digest`. These tests pin that fix the same way M2-02's
+# pinned its own: a source-level check plus a behavioural spy.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _make_oauth_provider(secret: str = "m2-03-operator-secret"):
+    from trading_mcp.oauth_provider import SingleOperatorOAuthProvider
+
+    return SingleOperatorOAuthProvider(
+        operator_secret=secret, base_url="https://agent.example.test",
+    )
+
+
+def test_oauth_token_lookups_source_uses_lookup_constant_time():
+    """Source-level pin: none of the three presented-secret lookups may fall
+    back to a bare `.get(` on the token/code dicts."""
+    import inspect
+
+    from trading_mcp.oauth_provider import SingleOperatorOAuthProvider
+
+    for method_name, forbidden in (
+        ("load_access_token", "self.access_tokens.get("),
+        ("load_refresh_token", "self.refresh_tokens.get("),
+        ("load_authorization_code", "self.auth_codes.get("),
+    ):
+        source = inspect.getsource(getattr(SingleOperatorOAuthProvider, method_name))
+        assert "_lookup_constant_time(" in source, (
+            f"{method_name} must route through _lookup_constant_time"
+        )
+        assert forbidden not in source, (
+            f"{method_name} must not fall back to a bare dict lookup"
+        )
+
+
+async def test_oauth_lookup_constant_time_actually_invokes_compare_digest(monkeypatch):
+    """Behavioural spy: verifying an OAuth access token must call
+    hmac.compare_digest at least once, on both the accept and reject path."""
+    import trading_mcp.oauth_provider as oauth_mod
+
+    calls = []
+    real_compare_digest = oauth_mod.hmac.compare_digest
+
+    def _spy(a, b):
+        calls.append((a, b))
+        return real_compare_digest(a, b)
+
+    monkeypatch.setattr(oauth_mod.hmac, "compare_digest", _spy)
+
+    provider = _make_oauth_provider()
+    pair = provider._issue_token_pair("some-client", ["read"])
+
+    accepted = await provider.load_access_token(pair.access_token)
+    assert accepted is not None
+    assert calls, "load_access_token accepted a token without calling hmac.compare_digest"
+
+    calls.clear()
+    rejected = await provider.load_access_token("not-a-real-token")
+    assert rejected is None
+    assert calls, "load_access_token rejected a token without calling hmac.compare_digest"
+
+
+async def test_oauth_lookup_constant_time_correctness():
+    """Behavioural correctness, independent of the timing property: the
+    right token is still found, the wrong one is still rejected, for all
+    three secret stores this fix touches."""
+    provider = _make_oauth_provider()
+    pair = provider._issue_token_pair("some-client", ["read"])
+
+    access = await provider.load_access_token(pair.access_token)
+    assert access is not None and access.client_id == "some-client"
+    assert await provider.load_access_token("wrong") is None
+
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    client = OAuthClientInformationFull(
+        client_id="some-client", redirect_uris=["https://client.example.test/cb"],
+    )
+    refresh = await provider.load_refresh_token(client, pair.refresh_token)
+    assert refresh is not None and refresh.client_id == "some-client"
+    assert await provider.load_refresh_token(client, "wrong") is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Rule 3 pin: the order path stays in exactly one place
 # ═══════════════════════════════════════════════════════════════════════════
 

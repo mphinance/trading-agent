@@ -1273,3 +1273,114 @@ cannot -- something can dirty a tracked file *after* your commit and *before* ve
 If `autonomous/feature_list.seed.json` keeps reappearing dirty in lockstep with
 `feature_list.json`, that sync mechanism (wherever it lives) is worth finding and either fixing or
 disabling before it produces another false rejection.
+
+## M2-03: oauth_provider.py disposition -- KEEP AND FINISH (not discard)
+
+**What existed before this session.** An uncommitted `trading_mcp/oauth_provider.py`
+(`SingleOperatorOAuthProvider(OAuthProvider)`) and a matching uncommitted diff to
+`trading_mcp/server.py` (`_build_oauth_provider()`, `MultiAuth` wiring in
+`_build_auth()`) from an earlier session, predating the M0 core/ split. Neither
+was reviewed or committed; M0's layering work happened around them without
+touching either file.
+
+**Review against M2's four hard requirements (app_spec.txt):**
+
+- **Dynamic client registration stays open.** `register_client`/`get_client` add
+  no gate -- confirmed by reading, matches app_spec's explicit instruction that
+  gating `/register` would recreate the "paste a header" problem OAuth exists to
+  avoid.
+- **Exactly one authorization-decision function shared by both auth paths.**
+  `_build_auth()` wraps `HmacStaticTokenVerifier` (bearer) and
+  `SingleOperatorOAuthProvider` (OAuth) in one `fastmcp.server.auth.MultiAuth`.
+  Read `MultiAuth`'s actual source (`.venv/bin/python -c "import
+  fastmcp.server.auth.auth as a, inspect; print(inspect.getsource(a.MultiAuth))"`)
+  rather than trusting the module's own docstring claim: `MultiAuth.verify_token()`
+  really is the one converged entry point -- it tries the OAuth server's
+  `verify_token` first, then each bearer verifier, first non-None result wins.
+  This is the same shape app_spec warns to avoid the *opposite* of (supermcp's
+  bug was two paths each independently deciding "yes"); here there's one call
+  site the framework invokes, fed by two sources. Full scope-escalation proof is
+  M2-06's job, not this one's -- this review only had to confirm the uncommitted
+  code didn't already build two independent decisions, and it doesn't.
+- **No user model added.** Confirmed by reading: one shared `operator_secret`
+  (reused `TRADING_AGENT_TOKEN`, not a second secret), no per-user table, no
+  concept of "which user" anywhere in the file. The `/authorize` gate
+  (`_gated_authorize`) is a plain HTML form asking for the one shared key, and
+  `authorize()` itself performs no independent credential check -- it only
+  refuses an unregistered `client_id`, matching the module's own documented
+  design intent (never let a route that forgets to wrap `/authorize` silently
+  skip the gate).
+- **`hmac.compare_digest` for every token comparison -- this one FAILED as
+  written.** The gate check itself used `hmac.compare_digest` correctly, but
+  `load_access_token`, `load_refresh_token` and `load_authorization_code` all
+  did a plain `self.<dict>.get(presented)` -- exactly the non-constant-time
+  shape M2-02 (previous session) fixed for the static bearer token, reintroduced
+  one layer up in the OAuth token store. This is a real, mechanical gap against
+  an explicitly named hard requirement, not a style nit.
+
+**Decision: FINISH, not discard or keep-as-is.** The architecture is sound (DCR
+open, single converged decision function, no user model) and is exactly the
+foundation M2-04 through M2-11 are written to build on -- discarding would throw
+away real, correctly-shaped work and force re-deriving the same MultiAuth
+composition later. Keep-as-is was wrong because the token-comparison gap is a
+named hard requirement, not a nice-to-have. Fixed it directly rather than
+deferring: added `_lookup_constant_time(mapping, presented)` (walks every stored
+key with `hmac.compare_digest`, same "iterate the whole tiny set" pattern
+`HmacStaticTokenVerifier` already uses for the bearer token) and routed
+`load_access_token`/`load_refresh_token`/`load_authorization_code` through it.
+Left `exchange_authorization_code`'s `authorization_code.code not in
+self.auth_codes` and `revoke_token`'s dict `.pop()` alone -- both operate on an
+object the SDK already resolved via one of the three fixed lookups, not on a
+fresh attacker-supplied string, so they're not "token comparisons" in the sense
+the requirement means. Also corrected a stale in-file reference: the module
+docstring named "M2-07" as the follow-up that persists tokens to disk outside
+git, 0600 -- that's actually M2-09 in the current `feature_list.json` (the
+docstring predates the M0 renumbering). Fixed the cross-reference; left
+everything else in the docstring as-is since it still describes the code
+accurately.
+
+**Tests added** (`tests/test_trading_mcp.py`, modeled directly on M2-02's own
+pin pattern for `trading_mcp/auth.py`): a source-level pin
+(`test_oauth_token_lookups_source_uses_lookup_constant_time`) asserting all
+three methods route through `_lookup_constant_time` and none contains a bare
+`.get(` on its token/code dict; a behavioural spy
+(`test_oauth_lookup_constant_time_actually_invokes_compare_digest`) that
+monkeypatches `oauth_provider.hmac.compare_digest` and asserts it fires on both
+the accept and reject path for `load_access_token`; and a plain correctness
+test (`test_oauth_lookup_constant_time_correctness`) proving the right
+access/refresh token is still found and the wrong one still rejected, since a
+timing-focused pin alone wouldn't catch a `_lookup_constant_time` that was
+merely present but wired backwards.
+
+No test asserts the full authorization-code-exchange or discovery-endpoint
+flow end to end -- that's M2-04/M2-05's job, this feature's steps only asked
+for the disposition review plus a green suite.
+
+**Confirmed no import-time coupling to vesper (M0's invariant).** Both files'
+top-level imports are `mcp.*`, `fastmcp.*`, `starlette.*`, stdlib -- grepped
+`^import\|^from` in both files, zero `vesper` or `core.execution_guard`-adjacent
+names. `oauth_provider.py` is pure OAuth bookkeeping (no tool call, no broker
+reference), matching its own docstring's claim.
+
+**Confirmed the rule-3 AST pin already covers the new file mechanically, not by
+inspection.** `tests/test_trading_mcp.py`'s guard/halt/resume/submit_decision
+scanners all `rglob("*.py")` over the whole `trading_mcp/` package (not just
+`vesper_tools.py`), so `oauth_provider.py` was already in scope before this
+session touched anything -- confirmed by grep for the rglob call sites, and by
+the full suite passing with the new file present.
+
+**Verified:** `pytest -q tests/test_trading_mcp.py -k oauth` -> 3 passed,
+39 deselected. **Full suite: 600 passed** (`.venv/bin/python -m pytest -q`) --
+597 before this feature + 3 new tests. Floor is 597.
+
+**Untracked files status, unchanged from prior sessions' notes** --
+`HKUDS_REPOSITORY_REVIEW.md`, `docs/HANDOFF_2026-09-01.md`,
+`scripts/package_for_supermcp.py`, `supermcp_CLAUDE_remote.md` still present,
+still not this feature's to resolve. `docs/MULTI_AGENT_WORKFLOW.md` and
+`autonomous/` also present and untouched.
+
+**Staged for this feature's commit:** `trading_mcp/server.py` (pre-existing
+uncommitted diff, unchanged by this session -- reviewed and kept as-is),
+`trading_mcp/oauth_provider.py` (pre-existing uncommitted file, fixed this
+session), `tests/test_trading_mcp.py` (new tests). Did not stage
+`feature_list.json` -- the orchestrator records `passes`, not this session.
