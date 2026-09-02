@@ -197,12 +197,12 @@ class VesperDiscordBot(discord.Client):
             return
 
         if text.startswith("/halt") or text.startswith("!halt"):
-            from vesper.halt import halt
+            from core.halt import halt
             reason = text.split(" ", 1)[1] if " " in text else "Emergency freeze via Discord"
             halt(reason=f"{reason} by {user_name} ({user_id})", source="discord")
             await message.channel.send(f"🚨 **EMERGENCY FREEZE ACTIVATED**: {reason}")
         elif text.startswith("/resume") or text.startswith("!resume"):
-            from vesper.halt import resume
+            from core.halt import resume
             resume()
             await message.channel.send("🟢 **SYSTEM RESUMED**: Trading operations unlocked.")
 

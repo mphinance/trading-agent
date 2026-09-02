@@ -94,7 +94,7 @@ async def _check_and_fire_scans(
     already-fired set. Split out from run_continuous_loop's while-True
     wrapper so it's directly testable with an injected now_et, the same
     poll_once/run_forever split telegram_polling.py already uses."""
-    from vesper.halt import is_halted
+    from core.halt import is_halted
     from vesper.runner import run_agent_session
     from vesper.bot.manager import channel_manager
 

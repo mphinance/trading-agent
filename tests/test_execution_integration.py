@@ -16,7 +16,7 @@ import pytest
 
 from vesper.nodes.executor import executor_node
 from vesper.nodes.risk_gate import risk_gate_node
-from vesper.paper_ledger import _load_ledger, get_paper_summary
+from core.paper_ledger import _load_ledger, get_paper_summary
 from vesper.state import OrderLeg, OrderProposal, TradingState
 
 
@@ -26,8 +26,8 @@ def clean_paper_ledger(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = data_dir / "paper_ledger.json"
-    monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", ledger_path)
+    monkeypatch.setattr("core.paper_ledger._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.paper_ledger._LEDGER_PATH", ledger_path)
     return ledger_path
 
 
@@ -358,8 +358,8 @@ async def test_dry_run_records_no_paper_fill_while_halted(clean_paper_ledger, mo
     broker call to guard), so it needs its own is_halted() check -- without it a
     resume landing during a freeze still wrote a paper fill, which then fed
     circuit_breaker's own NLV/drawdown maths."""
-    from vesper.halt import halt, resume as clear_halt
-    from vesper.paper_ledger import get_paper_summary
+    from core.halt import halt, resume as clear_halt
+    from core.paper_ledger import get_paper_summary
 
     prop = _make_valid_equity_proposal("MSFT", 400.0, 5)
     prop.approved = True

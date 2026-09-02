@@ -50,7 +50,7 @@ def _sector_notional_paper() -> Dict[str, float]:
     option_type -- see vesper/state.py -- and record_paper_fill persists
     that same `ticker` field), so no OCC/contract-symbol parsing is needed
     here, unlike the live-mode OPTION gap below."""
-    from vesper.paper_ledger import get_paper_positions
+    from core.paper_ledger import get_paper_positions
     from vesper.sector import get_sector
 
     out: Dict[str, float] = {}
@@ -107,7 +107,7 @@ def _count_open_positions_paper() -> tuple[int, float]:
     """(open_long_option_count, wheel_stock_notional) from the paper ledger's
     own tracked fills, which DO carry strategy_type -- see paper_ledger.py's
     record_paper_fill. Not blocking (pure JSON file read)."""
-    from vesper.paper_ledger import get_paper_positions
+    from core.paper_ledger import get_paper_positions
 
     long_option_count = 0
     wheel_stock_notional = 0.0
@@ -159,12 +159,12 @@ async def risk_gate_node(state: TradingState) -> Dict[str, Any]:
     # shouldn't halt on live-account moves it has nothing to do with, and
     # vice versa.
     if mode == "dry_run":
-        from vesper.paper_ledger import get_paper_summary
+        from core.paper_ledger import get_paper_summary
         current_nlv = get_paper_summary().get("total_nlv", 0.0)
     else:
         current_nlv = account_equity if proposals else await asyncio.to_thread(fetch_live_equity)
 
-    from vesper.circuit_breaker import check_portfolio_drawdown, get_configured_threshold
+    from core.circuit_breaker import check_portfolio_drawdown, get_configured_threshold
     breaker_res = check_portfolio_drawdown(current_nlv, threshold_pct=get_configured_threshold())
     if breaker_res.get("tripped_now"):
         audit_notes.append(

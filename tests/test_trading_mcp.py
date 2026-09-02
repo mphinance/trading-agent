@@ -480,25 +480,25 @@ async def test_get_account_state_degrades_when_webull_unconfigured(vtools, monke
 
 
 def test_get_halt_status_degrades_on_error(vtools, monkeypatch):
-    monkeypatch.setattr("vesper.halt.get_halt_status", _boom)
+    monkeypatch.setattr("core.halt.get_halt_status", _boom)
     result = vtools["get_halt_status"]()
     assert result == {"available": False, "reason": "simulated failure"}
 
 
 def test_get_drawdown_status_degrades_on_error(vtools, monkeypatch):
-    monkeypatch.setattr("vesper.circuit_breaker.get_peak_nlv", _boom)
+    monkeypatch.setattr("core.circuit_breaker.get_peak_nlv", _boom)
     result = vtools["get_drawdown_status"]()
     assert result["available"] is False
 
 
 def test_get_paper_positions_degrades_on_error(vtools, monkeypatch):
-    monkeypatch.setattr("vesper.paper_ledger.get_paper_positions", _boom)
+    monkeypatch.setattr("core.paper_ledger.get_paper_positions", _boom)
     result = vtools["get_paper_positions"]()
     assert result["available"] is False
 
 
 def test_get_paper_summary_degrades_on_error(vtools, monkeypatch):
-    monkeypatch.setattr("vesper.paper_ledger.get_paper_summary", _boom)
+    monkeypatch.setattr("core.paper_ledger.get_paper_summary", _boom)
     result = vtools["get_paper_summary"]()
     assert result["available"] is False
 
@@ -575,7 +575,7 @@ def test_get_proposal_degrades_on_error(vtools, monkeypatch):
 
 
 def test_get_audit_trail_degrades_when_chain_path_unreadable(vtools, monkeypatch, tmp_path):
-    from vesper import audit_chain
+    from core import audit_chain
 
     # A directory sitting where a file is expected: Path.exists() is True
     # (so the tool doesn't take the empty-chain early return), but
@@ -590,7 +590,7 @@ def test_get_audit_trail_degrades_when_chain_path_unreadable(vtools, monkeypatch
 
 
 def test_verify_audit_chain_degrades_on_error(vtools, monkeypatch):
-    monkeypatch.setattr("vesper.audit_chain.verify_chain", _boom)
+    monkeypatch.setattr("core.audit_chain.verify_chain", _boom)
     result = vtools["verify_audit_chain"]()
     assert result["available"] is False
 
@@ -628,7 +628,7 @@ async def test_get_position_monitor_status_degrades_on_poll_failure(vtools, monk
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_no_vesper_tool_can_reach_halt_or_resume():
-    """halt() and resume() (the MUTATING pair in vesper/halt.py) and
+    """halt() and resume() (the MUTATING pair in core/halt.py) and
     ApprovalRegistry.submit_decision() must never be imported by this
     module -- only their read counterparts (get_halt_status,
     list_pending/get_pending/get_decision)."""

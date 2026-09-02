@@ -133,19 +133,27 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     vesper_data_dir = tmp_path / "vesper_data"
     vesper_data_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("vesper.halt._DATA_DIR", vesper_data_dir)
-    monkeypatch.setattr("vesper.halt._HALT_STATE_PATH", vesper_data_dir / "halt_state.json")
-    monkeypatch.setattr("vesper.circuit_breaker._DATA_DIR", vesper_data_dir)
-    monkeypatch.setattr("vesper.circuit_breaker._STATE_PATH", vesper_data_dir / "circuit_breaker_state.json")
-    monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", vesper_data_dir)
-    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", vesper_data_dir / "paper_ledger.json")
+    # M0-03 moved halt.py/circuit_breaker.py/paper_ledger.py/audit_chain.py to
+    # core/ -- patch core.X, not vesper.X. vesper/halt.py is now a thin
+    # compat shim (kept only so execution_guard.py's untouched `from
+    # vesper.halt import is_halted` still resolves) that re-exports the same
+    # function objects, whose __globals__ point at core.halt's namespace; it
+    # does not carry its own _DATA_DIR, so patching vesper.halt._DATA_DIR
+    # would silently do nothing -- core.halt is the module whose globals the
+    # functions actually read from, so that's what must be patched here.
+    monkeypatch.setattr("core.halt._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("core.halt._HALT_STATE_PATH", vesper_data_dir / "halt_state.json")
+    monkeypatch.setattr("core.circuit_breaker._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("core.circuit_breaker._STATE_PATH", vesper_data_dir / "circuit_breaker_state.json")
+    monkeypatch.setattr("core.paper_ledger._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("core.paper_ledger._LEDGER_PATH", vesper_data_dir / "paper_ledger.json")
 
-    # vesper/audit_chain.py's hash-chained ledger -- same reasoning as the
+    # core/audit_chain.py's hash-chained ledger -- same reasoning as the
     # three above: a hardcoded module-level _DATA_DIR that would otherwise
-    # read/write the developer's real vesper/data/audit_chain.jsonl and
+    # read/write the developer's real core/data/audit_chain.jsonl and
     # contaminate cross-test state.
-    monkeypatch.setattr("vesper.audit_chain._DATA_DIR", vesper_data_dir)
-    monkeypatch.setattr("vesper.audit_chain._CHAIN_PATH", vesper_data_dir / "audit_chain.jsonl")
+    monkeypatch.setattr("core.audit_chain._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("core.audit_chain._CHAIN_PATH", vesper_data_dir / "audit_chain.jsonl")
 
     # ApprovalRegistry (vesper/bot/inbound.py) became disk-backed the same
     # way -- same reasoning, same fix.

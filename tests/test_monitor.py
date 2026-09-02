@@ -212,9 +212,9 @@ def test_poll_paper_positions_populates_underlying_stop_fields(tmp_path, monkeyp
     """End-to-end: a paper_ledger.json fill entry carrying
     underlying_stop_type/underlying_stop_basis produces a MonitoredPosition
     with those fields populated."""
-    from vesper.paper_ledger import record_paper_fill
+    from core.paper_ledger import record_paper_fill
     fake_ledger = tmp_path / "paper_ledger.json"
-    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", fake_ledger)
+    monkeypatch.setattr("core.paper_ledger._LEDGER_PATH", fake_ledger)
 
     proposal = OrderProposal(
         id="prop-test-msft-leaps",
@@ -314,9 +314,9 @@ async def test_execute_exit_cascade_live_blocked_by_kill_switch(monkeypatch):
 @pytest.mark.asyncio
 async def test_execute_exit_cascade_closes_paper_position(tmp_path, monkeypatch):
     """Verify dry-run exit cascade closes open position in paper ledger."""
-    from vesper.paper_ledger import record_paper_fill, get_paper_positions
+    from core.paper_ledger import record_paper_fill, get_paper_positions
     fake_ledger = tmp_path / "paper_ledger.json"
-    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", fake_ledger)
+    monkeypatch.setattr("core.paper_ledger._LEDGER_PATH", fake_ledger)
 
     # Open a simulated paper position
     test_prop = OrderProposal(
@@ -351,7 +351,7 @@ async def test_execute_exit_cascade_closes_paper_position(tmp_path, monkeypatch)
     assert res.status == "DRY_RUN_SIMULATED"
 
     # Verify paper ledger position is now CLOSED
-    from vesper.paper_ledger import _load_ledger, get_paper_summary
+    from core.paper_ledger import _load_ledger, get_paper_summary
     open_positions = get_paper_positions()
     assert len(open_positions) == 0
 
@@ -429,10 +429,10 @@ def test_earnings_exit_malformed_date_skips_without_crashing():
 def test_poll_paper_positions_wires_earnings_exit_date(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", data_dir / "paper_ledger.json")
+    monkeypatch.setattr("core.paper_ledger._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.paper_ledger._LEDGER_PATH", data_dir / "paper_ledger.json")
 
-    from vesper.paper_ledger import record_paper_fill
+    from core.paper_ledger import record_paper_fill
     from vesper.state import ExecutionResult, OrderProposal
 
     prop = OrderProposal(

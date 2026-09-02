@@ -11,7 +11,7 @@ resolve a pending approval; it can only look at state other code already
 produced.
 
 Every tool below is a thin wrapper: it lazily imports (inside the function
-body, matching `vesper/account.py`'s and `vesper/circuit_breaker.py`'s own
+body, matching `vesper/account.py`'s and `core/circuit_breaker.py`'s own
 convention for cross-module deps -- keeps this module importable even if one
 dependency, e.g. the Webull SDK or chromadb, is missing or misbehaving in a
 given environment) one existing, already-tested function, calls it, and
@@ -94,11 +94,11 @@ def register_vesper_tools(mcp: Any) -> list[str]:
     def get_halt_status() -> dict[str, Any]:
         """Whether Vesper's emergency freeze is currently engaged, and why.
 
-        Read-only accessor only -- `vesper/halt.py`'s `halt()` / `resume()`
+        Read-only accessor only -- `core/halt.py`'s `halt()` / `resume()`
         are never imported here (see module docstring).
         """
         try:
-            from vesper.halt import get_halt_status as _get_halt_status
+            from core.halt import get_halt_status as _get_halt_status
         except Exception as e:
             return {"available": False, "reason": str(e)}
         try:
@@ -113,7 +113,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         default 15%). Report-only -- never calls
         `check_portfolio_drawdown()`, which can itself trigger a halt."""
         try:
-            from vesper.circuit_breaker import get_peak_nlv, get_configured_threshold
+            from core.circuit_breaker import get_peak_nlv, get_configured_threshold
         except Exception as e:
             return {"available": False, "reason": str(e)}
         try:
@@ -129,7 +129,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
     def get_paper_positions() -> dict[str, Any]:
         """Currently open simulated (paper-trading) positions."""
         try:
-            from vesper.paper_ledger import get_paper_positions as _get_paper_positions
+            from core.paper_ledger import get_paper_positions as _get_paper_positions
         except Exception as e:
             return {"available": False, "reason": str(e)}
         try:
@@ -143,7 +143,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         """Paper-trading account summary: NLV, realized/unrealized P&L, win
         rate, unswept premium/tax-reserve pools."""
         try:
-            from vesper.paper_ledger import get_paper_summary as _get_paper_summary
+            from core.paper_ledger import get_paper_summary as _get_paper_summary
         except Exception as e:
             return {"available": False, "reason": str(e)}
         try:
@@ -245,10 +245,10 @@ def register_vesper_tools(mcp: Any) -> list[str]:
     @mcp.tool()
     def get_audit_trail(limit: int = 20) -> dict[str, Any]:
         """The most recent entries in the hash-chained audit ledger
-        (`vesper/audit_chain.py`), newest last. `limit` <= 0 returns every
+        (`core/audit_chain.py`), newest last. `limit` <= 0 returns every
         entry. Does not verify the chain -- see `verify_audit_chain`."""
         try:
-            from vesper import audit_chain
+            from core import audit_chain
         except Exception as e:
             return {"available": False, "reason": str(e)}
 
@@ -282,7 +282,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         """Walk the audit chain and confirm every hash link, localizing the
         first break if the chain has been tampered with."""
         try:
-            from vesper.audit_chain import verify_chain
+            from core.audit_chain import verify_chain
         except Exception as e:
             return {"available": False, "reason": str(e)}
         try:

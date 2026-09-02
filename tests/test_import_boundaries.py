@@ -92,13 +92,19 @@ def _scan_vesper_refs(root: Path) -> dict[str, set[str]]:
 
 
 # The exact baseline read off trading_mcp/vesper_tools.py today.
+#
+# M0-03 moved halt.py/circuit_breaker.py/paper_ledger.py/audit_chain.py into
+# core/ (the four pure state-I/O modules), and vesper_tools.py's four
+# corresponding function-local imports were repointed at core.X per that
+# feature's own steps -- so vesper.halt, vesper.circuit_breaker,
+# vesper.paper_ledger and vesper.audit_chain drop out of this baseline.
+# vesper.alerts_runner, vesper.bot.inbound and vesper.monitor stay: those
+# three modules still live under vesper/ (they pull in LangGraph/broker
+# machinery this split isn't moving) and vesper_tools.py legitimately reads
+# through them as a viewer over vesper's own state.
 EXPECTED_VESPER_TOOLS_REFS = {
-    "vesper.halt",
-    "vesper.circuit_breaker",
-    "vesper.paper_ledger",
     "vesper.alerts_runner",
     "vesper.bot.inbound",
-    "vesper.audit_chain",
     "vesper.monitor",
 }
 

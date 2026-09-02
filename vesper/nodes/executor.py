@@ -105,7 +105,7 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
             # drawdown maths. Checked explicitly here rather than by routing
             # dry-run through the guard, which would require inventing a
             # broker-less ticket for something that places no order.
-            from vesper.halt import is_halted
+            from core.halt import is_halted
 
             halted, halt_info = is_halted()
             if halted:
@@ -137,7 +137,7 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
 
             # Record in Paper Trading Ledger (Module 7)
             try:
-                from vesper.paper_ledger import record_paper_fill
+                from core.paper_ledger import record_paper_fill
                 record_paper_fill(proposal=prop, result=sim_res, session_id=state.get("session_id"))
             except Exception as e:
                 logger.warning(f"Failed to record paper fill for {prop.ticker}: {e}")

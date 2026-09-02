@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from vesper.bot.inbound import ApprovalRegistry
-from vesper.halt import is_halted, resume
+from core.halt import is_halted, resume
 from vesper.state import OrderProposal, TradingState
 from vesper.nodes.human_gate import human_gate_node
 
@@ -14,8 +14,8 @@ def clean_registry(tmp_path, monkeypatch):
     """Isolate registry and halt state."""
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("vesper.halt._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
+    monkeypatch.setattr("core.halt._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
 
     registry = ApprovalRegistry()
     monkeypatch.setattr("vesper.bot.inbound.approval_registry", registry)

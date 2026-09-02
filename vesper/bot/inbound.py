@@ -96,7 +96,7 @@ def _is_discord_user_authorized(user_id: Any) -> bool:
 class ApprovalRegistry:
     """Registry for pending order proposals awaiting human resolution.
 
-    Disk-backed (JSON, atomic write -- same pattern as vesper/halt.py),
+    Disk-backed (JSON, atomic write -- same pattern as core/halt.py),
     not an in-memory dict. A pending proposal and the decision that resolves
     it both need to survive a process restart: `vesper loop` is a long-lived
     daemon now, and a proposal drafted from a scheduled scan can genuinely
@@ -165,7 +165,7 @@ class ApprovalRegistry:
 
         # Handle emergency halt trigger
         if decision_clean in ("HALT", "FREEZE", "KILL"):
-            from vesper.halt import halt
+            from core.halt import halt
             halt_res = halt(reason=f"Emergency freeze from {source} by {user_id}", source=source)
             return {
                 "status": "HALTED",
@@ -282,10 +282,10 @@ class ApprovalRegistry:
                         "message": f"User {user} is not authorized to halt/resume trading.",
                     }
             if text.startswith("/halt"):
-                from vesper.halt import halt
+                from core.halt import halt
                 return halt(reason=f"Telegram /halt from {user}", source="telegram")
             if text.startswith("/resume"):
-                from vesper.halt import resume
+                from core.halt import resume
                 return resume(source="telegram")
 
         # 3. Discord Interaction
@@ -315,12 +315,12 @@ class ApprovalRegistry:
 
         # 5. Direct /halt or /resume POST payload
         if payload.get("command") == "halt" or payload.get("action") == "halt":
-            from vesper.halt import halt
+            from core.halt import halt
             reason = payload.get("reason", "API halt trigger")
             return halt(reason=reason, source=source)
 
         if payload.get("command") == "resume" or payload.get("action") == "resume":
-            from vesper.halt import resume
+            from core.halt import resume
             return resume(source=source)
 
         return {"status": "ERROR", "message": "Unrecognized callback payload format."}
@@ -437,7 +437,7 @@ def create_inbound_app() -> Any:
         # headers) and deliberately minimal — no pending-proposal details here.
         # A ticker/side/quantity/price list is exactly what an unauthenticated
         # GET should never hand out; see handle_approvals for the guarded view.
-        from vesper.halt import is_halted
+        from core.halt import is_halted
         halted, _details = is_halted()
         return web.json_response({"status": "ok", "is_halted": halted})
 

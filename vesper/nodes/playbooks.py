@@ -1322,7 +1322,7 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
     # from collected premium (not fresh capital).
     # Configured via VESPER_PREMIUM_RECYCLE_TICKER (default SGOV).
     if selected_playbook in ("all", "recycle", "premium_recycle", "free_shares"):
-        from vesper.paper_ledger import get_unswept_premium
+        from core.paper_ledger import get_unswept_premium
         unswept_pnl = await asyncio.to_thread(get_unswept_premium)
         recycle_ticker = os.getenv("VESPER_PREMIUM_RECYCLE_TICKER", "SGOV").strip().upper()
 
@@ -1367,7 +1367,7 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
     # (default SGOV, same default as the free-share pool but tracked
     # separately -- the two pools may even choose different tickers).
     if selected_playbook in ("all", "tax_reserve", "taxsweep"):
-        from vesper.paper_ledger import get_unswept_tax_reserve
+        from core.paper_ledger import get_unswept_tax_reserve
         unswept_tax = await asyncio.to_thread(get_unswept_tax_reserve)
         tax_reserve_ticker = os.getenv("VESPER_TAX_RESERVE_TICKER", "SGOV").strip().upper()
 

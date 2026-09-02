@@ -24,8 +24,8 @@ def clean_registry(tmp_path, monkeypatch):
     """Isolate registry and halt state, same as tests/test_inbound_bot.py."""
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("vesper.halt._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
+    monkeypatch.setattr("core.halt._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
 
     registry = ApprovalRegistry()
     monkeypatch.setattr("vesper.bot.inbound.approval_registry", registry)
@@ -72,7 +72,7 @@ async def test_offset_advances_across_calls():
     ]
 
     with patch.object(poller._client, "get", new_callable=AsyncMock) as mock_get, \
-         patch("vesper.halt.halt", return_value={"status": "HALTED", "message": "ok"}):
+         patch("core.halt.halt", return_value={"status": "HALTED", "message": "ok"}):
         mock_get.return_value = _mock_get_updates_response(first_batch)
 
         assert poller._offset is None
@@ -156,7 +156,7 @@ async def test_slash_halt_command_routes_through(clean_registry):
         mock_get.return_value = _mock_get_updates_response(updates)
         await poller.poll_once()
 
-    from vesper.halt import is_halted
+    from core.halt import is_halted
     halted, _ = is_halted()
     assert halted
 

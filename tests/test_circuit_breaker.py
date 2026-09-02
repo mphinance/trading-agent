@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import pytest
 
-from vesper.circuit_breaker import check_portfolio_drawdown, get_peak_nlv
-from vesper.halt import is_halted, resume
+from core.circuit_breaker import check_portfolio_drawdown, get_peak_nlv
+from core.halt import is_halted, resume
 
 
 @pytest.fixture(autouse=True)
 def clean_breaker_state(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("vesper.circuit_breaker._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.circuit_breaker._STATE_PATH", data_dir / "circuit_breaker_state.json")
-    monkeypatch.setattr("vesper.halt._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
+    monkeypatch.setattr("core.circuit_breaker._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.circuit_breaker._STATE_PATH", data_dir / "circuit_breaker_state.json")
+    monkeypatch.setattr("core.halt._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
     yield
 
 

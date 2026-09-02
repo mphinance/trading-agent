@@ -1,92 +1,29 @@
-"""Remote Kill Switch & Emergency Freeze Engine for Vesper.
+"""Compatibility re-export: halt.py's real implementation moved to core/halt.py
+in M0-03 (four pure state-I/O modules -> core/, confirmed stdlib-only).
 
-Provides instant runtime halting independent of environment variables or process restarts.
-Controlled via CLI (`vesper halt` / `vesper resume`), bot commands (`/halt`), and execution guards.
+This shim exists for exactly one reason: vesper/execution_guard.py contains
+`from vesper.halt import is_halted` (guarded halt checks in preview()/place()),
+and execution_guard.py is never to be edited -- see repo policy (it is the one
+module allowed to move money, and an agent editing its import lines is still
+an agent editing the order path). Every other caller in this repo was
+repointed to `core.halt` directly; this file keeps that one import path
+resolving to the exact same objects.
+
+These are the same function objects as core.halt's (not copies), so their
+__globals__ still point at core.halt's module namespace -- monkeypatching
+core.halt._DATA_DIR / core.halt._HALT_STATE_PATH (as tests/conftest.py now
+does) governs their behavior identically to before the move. Patching
+vesper.halt._DATA_DIR instead would NOT work, since that would only rebind a
+name in this shim module's namespace, not core.halt's.
 """
 
 from __future__ import annotations
 
-import json
-import logging
-import os
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from core.halt import (
+    get_halt_status,
+    halt,
+    is_halted,
+    resume,
+)
 
-logger = logging.getLogger(__name__)
-
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_HALT_STATE_PATH = _DATA_DIR / "halt_state.json"
-
-
-def _load_state() -> Dict[str, Any]:
-    if not _HALT_STATE_PATH.exists():
-        return {"is_halted": False}
-    try:
-        with open(_HALT_STATE_PATH) as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"Failed to read halt state file: {e}")
-        return {"is_halted": False}
-
-
-def _save_state(state: Dict[str, Any]) -> None:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_path = _HALT_STATE_PATH.with_suffix(".tmp")
-    with open(tmp_path, "w") as f:
-        json.dump(state, f, indent=2)
-    os.replace(tmp_path, _HALT_STATE_PATH)
-
-
-def is_halted() -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """Check whether Vesper is currently halted under an emergency freeze."""
-    state = _load_state()
-    if state.get("is_halted", False):
-        return True, state
-    return False, None
-
-
-def halt(reason: str = "Manual emergency halt triggered", source: str = "cli") -> Dict[str, Any]:
-    """Trigger an immediate emergency halt, freezing all execution paths."""
-    now = datetime.now(timezone.utc).isoformat()
-    state = {
-        "is_halted": True,
-        "halted_at": now,
-        "halted_by": source,
-        "reason": reason,
-    }
-    _save_state(state)
-    logger.critical(f"🛑 [EMERGENCY HALT] Vesper execution frozen by {source}: {reason}")
-    return {
-        "status": "HALTED",
-        "message": f"Emergency halt active: {reason} (triggered by {source} at {now})",
-        "state": state,
-    }
-
-
-def resume(source: str = "cli") -> Dict[str, Any]:
-    """Clear emergency halt and restore normal system readiness."""
-    prev_state = _load_state()
-    now = datetime.now(timezone.utc).isoformat()
-    state = {
-        "is_halted": False,
-        "resumed_at": now,
-        "resumed_by": source,
-        "previous_halt": prev_state if prev_state.get("is_halted") else None,
-    }
-    _save_state(state)
-    logger.info(f"✅ [SYSTEM RESUMED] Vesper emergency halt cleared by {source} at {now}")
-    return {
-        "status": "ACTIVE",
-        "message": f"Emergency halt cleared by {source} at {now}. Normal trading enabled.",
-        "state": state,
-    }
-
-
-def get_halt_status() -> Dict[str, Any]:
-    """Return current halt status and metadata."""
-    state = _load_state()
-    return {
-        "is_halted": bool(state.get("is_halted", False)),
-        "details": state,
-    }
+__all__ = ["get_halt_status", "halt", "is_halted", "resume"]

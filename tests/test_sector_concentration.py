@@ -161,12 +161,12 @@ def test_get_sector_empty_ticker_returns_none_without_network_call():
 def clean_paper_ledger(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", data_dir / "paper_ledger.json")
-    monkeypatch.setattr("vesper.circuit_breaker._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.circuit_breaker._STATE_PATH", data_dir / "circuit_breaker_state.json")
-    monkeypatch.setattr("vesper.halt._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
+    monkeypatch.setattr("core.paper_ledger._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.paper_ledger._LEDGER_PATH", data_dir / "paper_ledger.json")
+    monkeypatch.setattr("core.circuit_breaker._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.circuit_breaker._STATE_PATH", data_dir / "circuit_breaker_state.json")
+    monkeypatch.setattr("core.halt._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
     return data_dir
 
 
@@ -220,7 +220,7 @@ async def test_risk_gate_second_same_sector_proposal_in_batch_stacks(clean_paper
 async def test_risk_gate_dry_run_counts_existing_paper_position_by_sector(clean_paper_ledger):
     """An already-open paper position's notional counts toward its sector's
     cap for a newly drafted proposal in the same sector."""
-    from vesper.paper_ledger import record_paper_fill
+    from core.paper_ledger import record_paper_fill
     from vesper.state import ExecutionResult
 
     existing = _buy(ticker="NVDA", cost=6000.0, id_="prop-existing")

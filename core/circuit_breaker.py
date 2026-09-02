@@ -1,13 +1,13 @@
 """Portfolio-Level Drawdown Circuit Breaker.
 
-Tracks a persisted high-water-mark NLV across runs and trips vesper.halt's
+Tracks a persisted high-water-mark NLV across runs and trips core.halt's
 existing emergency halt when current NLV falls VESPER_CIRCUIT_BREAKER_PCT
 (default 15%) below that peak. This is a portfolio-level backstop, distinct
 from execution_guard's per-order notional/quantity caps -- a series of
 individually-compliant trades can still bleed an account dry, and nothing
 before this watched for that.
 
-State lives in its own file (same atomic-write pattern as vesper/halt.py),
+State lives in its own file (same atomic-write pattern as core/halt.py),
 not inside halt_state.json -- halt.py's state is "are we halted and why,"
 this module's state is "what's the peak NLV we're measuring drawdown from,"
 and conflating the two would make halt.py's simple boolean model do double
@@ -83,7 +83,7 @@ def check_portfolio_drawdown(
       rather than let a bad/zero read from a broker hiccup trip the breaker
       or corrupt the peak.
     """
-    from vesper.halt import halt, is_halted
+    from core.halt import halt, is_halted
 
     if current_nlv is None or current_nlv <= 0:
         return {"skipped": True, "reason": "current_nlv unavailable or non-positive"}

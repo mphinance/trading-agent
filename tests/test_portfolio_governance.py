@@ -99,12 +99,12 @@ def test_non_wheel_equity_buy_ignores_wheel_stock_cap():
 def clean_paper_ledger(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", data_dir / "paper_ledger.json")
-    monkeypatch.setattr("vesper.circuit_breaker._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.circuit_breaker._STATE_PATH", data_dir / "circuit_breaker_state.json")
-    monkeypatch.setattr("vesper.halt._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
+    monkeypatch.setattr("core.paper_ledger._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.paper_ledger._LEDGER_PATH", data_dir / "paper_ledger.json")
+    monkeypatch.setattr("core.circuit_breaker._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.circuit_breaker._STATE_PATH", data_dir / "circuit_breaker_state.json")
+    monkeypatch.setattr("core.halt._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
     return data_dir
 
 
@@ -129,7 +129,7 @@ async def test_risk_gate_second_long_option_in_same_batch_is_rejected(clean_pape
 @pytest.mark.asyncio
 async def test_risk_gate_counts_existing_paper_long_option_against_new_one(clean_paper_ledger):
     """An already-open paper long-option position blocks a newly drafted one."""
-    from vesper.paper_ledger import record_paper_fill
+    from core.paper_ledger import record_paper_fill
     from vesper.state import ExecutionResult
 
     existing = _long_call("prop-existing")
@@ -154,7 +154,7 @@ async def test_risk_gate_counts_existing_paper_long_option_against_new_one(clean
 
 @pytest.mark.asyncio
 async def test_risk_gate_wheel_stock_bucket_uses_paper_ledger_tagging(clean_paper_ledger):
-    from vesper.paper_ledger import record_paper_fill
+    from core.paper_ledger import record_paper_fill
     from vesper.state import ExecutionResult
 
     with patch("vesper.account.fetch_live_equity", return_value=50_000.0):
@@ -181,8 +181,8 @@ async def test_risk_gate_wheel_stock_bucket_uses_paper_ledger_tagging(clean_pape
 async def test_risk_gate_tripped_circuit_breaker_note_and_halts(clean_paper_ledger):
     """A dry-run pass whose paper NLV has fallen >=15% from a previously
     recorded peak must trip the halt via risk_gate_node, with an audit note."""
-    from vesper.paper_ledger import _load_ledger, _save_ledger
-    from vesper.halt import is_halted
+    from core.paper_ledger import _load_ledger, _save_ledger
+    from core.halt import is_halted
 
     ledger = _load_ledger()
     ledger["account"]["cash"] = 100_000.0

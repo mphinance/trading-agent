@@ -1,4 +1,4 @@
-"""Tests for vesper/audit_chain.py's hash-chained, tamper-evident ledger,
+"""Tests for core/audit_chain.py's hash-chained, tamper-evident ledger,
 and vesper/graph.py's per-node wiring of it (_with_audit_chain).
 
 Two properties matter most and get their own tests:
@@ -15,7 +15,7 @@ import json
 import pytest
 from typing_extensions import TypedDict
 
-from vesper import audit_chain
+from core import audit_chain
 
 
 def _read_lines():

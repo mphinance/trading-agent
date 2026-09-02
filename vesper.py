@@ -78,20 +78,20 @@ Examples:
         sys.exit(0 if val_res.get("valid") else 1)
 
     if args.command == "halt":
-        from vesper.halt import halt
+        from core.halt import halt
         res = halt(reason=args.reason, source="cli") if args.reason else halt(source="cli")
         print(f"\n🛑 {res['message']}")
         sys.exit(0)
 
     if args.command == "resume":
-        from vesper.halt import resume
+        from core.halt import resume
         res = resume(source="cli")
         print(f"\n✅ {res['message']}")
         sys.exit(0)
 
     if args.command == "status":
-        from vesper.halt import get_halt_status
-        from vesper.paper_ledger import get_paper_summary
+        from core.halt import get_halt_status
+        from core.paper_ledger import get_paper_summary
         from vesper.metrics import read_snapshot, bucket_approval_ages
         hs = get_halt_status()
         ps = get_paper_summary()
@@ -158,7 +158,7 @@ Examples:
         sys.exit(0)
 
     if args.command == "paper":
-        from vesper.paper_ledger import get_paper_summary, get_paper_positions, mark_to_market
+        from core.paper_ledger import get_paper_summary, get_paper_positions, mark_to_market
         if args.mark:
             asyncio.run(mark_to_market())
         ps = get_paper_summary()
@@ -233,7 +233,7 @@ Examples:
         # `vesper audit --export`/`--tail` without a breaking CLI change,
         # matching this file's existing habit of pre-registering flags
         # per-command (--arm/--disarm above).
-        from vesper.audit_chain import verify_chain
+        from core.audit_chain import verify_chain
         result = verify_chain()
         print("\n" + "=" * 60)
         print("🔗 VESPER AUDIT CHAIN INTEGRITY")

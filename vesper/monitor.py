@@ -283,7 +283,7 @@ class PositionMonitor:
         """Fetch open positions from Paper Ledger for dry-run monitoring."""
         positions = []
         try:
-            from vesper.paper_ledger import get_paper_positions
+            from core.paper_ledger import get_paper_positions
             open_fills = get_paper_positions()
             for f in open_fills:
                 sym = f.get("ticker", "")
@@ -354,7 +354,7 @@ class PositionMonitor:
             )
             # Close open position in Paper Ledger (Item 2)
             try:
-                from vesper.paper_ledger import get_paper_positions, close_paper_position
+                from core.paper_ledger import get_paper_positions, close_paper_position
                 for op in get_paper_positions():
                     if op.get("ticker") == pos.symbol and op.get("status") == "OPEN":
                         close_paper_position(op["id"], close_price=pos.current_price, reason=trigger.reason)

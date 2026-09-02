@@ -417,3 +417,108 @@ resolve.
   approach used here (see this session's migration script pattern) applies
   directly — just extend the moved-module tuple and re-run the same style
   of grep-verify-before/after discipline.
+
+## M0-03 — the four pure state-I/O modules move into core/
+
+`git mv`'d vesper/{halt,circuit_breaker,paper_ledger,audit_chain}.py into
+core/. Confirmed by AST walk (not just eyeballing) that each imports only
+stdlib at module level (json/os/pathlib/datetime/logging/typing/uuid/
+fcntl/hashlib) -- the description's "confirmed stdlib-only" claim was
+already true before the move and stays true after it. `_DATA_DIR =
+Path(__file__).resolve().parent.parent / "data"` in all four resolves
+identically before and after: core/ sits at the same depth as vesper/ (both
+direct children of repo root), so every on-disk state path
+(data/halt_state.json, data/circuit_breaker_state.json,
+data/paper_ledger.json, data/audit_chain.jsonl) is byte-for-byte unchanged
+-- verified by importing all four post-move and printing the resolved
+paths, not just read off the source.
+
+**One hard-prohibition conflict, resolved without touching the prohibited
+file.** The feature's own step 2 lists execution_guard.py among the
+callers to repoint at core -- but execution_guard.py is never to be
+edited, full stop, per this run's standing rules. execution_guard.py's
+only reference to these four modules is `from vesper.halt import
+is_halted` (two call sites, both function-local, inside preview()/
+place()'s halt guard). Rather than force the literal step and edit that
+file, left `vesper/halt.py` in place as a 29-line compatibility shim:
+`from core.halt import (get_halt_status, halt, is_halted, resume)`. This
+is not a copy -- `vesper.halt.is_halted is core.halt.is_halted` is
+literally True (verified), because importing a function just binds a new
+name to the same object; the function's `__globals__` still point at
+core.halt's module namespace. That matters for test isolation:
+tests/conftest.py's autouse fixture now monkeypatches `core.halt._DATA_DIR`
+/ `core.halt._HALT_STATE_PATH` (not vesper.halt's, which no longer carries
+those names at all), and because the function object is shared, patching
+core.halt's globals governs execution_guard.py's calls through the
+`vesper.halt` shim identically to before the move. `git diff
+vesper/execution_guard.py` is empty -- confirmed, not assumed.
+
+The other three modules (circuit_breaker, paper_ledger, audit_chain) have
+no such conflict -- nothing forbidden imports them -- so they got no shim;
+every caller across vesper/, vesper/nodes/, vesper/bot/, trading_mcp/ and
+tests/ was mechanically repointed at `core.X` directly, the same
+grep-verify-before/after discipline M0-02 used. core/circuit_breaker.py's
+own internal `from vesper.halt import halt, is_halted` (it calls halt() to
+trip the breaker) became `from core.halt import halt, is_halted` -- that's
+an edit to circuit_breaker.py itself, not execution_guard.py, so no
+conflict there.
+
+**tests/conftest.py's `_isolated_vesper_state` fixture** (already
+autouse, already covering these four files by the old vesper.X paths) was
+the one place explicitly required to move by step 4 -- now patches
+`core.halt`, `core.circuit_breaker`, `core.paper_ledger`,
+`core.audit_chain`'s `_DATA_DIR`/`_STATE_PATH`/`_HALT_STATE_PATH`/
+`_LEDGER_PATH`/`_CHAIN_PATH` module globals, with a comment explaining why
+patching vesper.halt's copy would silently no-op (it doesn't carry those
+names). No *new* on-disk state file was introduced by this feature -- same
+four files, same fixture, just repointed -- so there was nothing to add
+to the fixture that wasn't already there.
+
+**tests/test_import_boundaries.py's `EXPECTED_VESPER_TOOLS_REFS` baseline**
+(pinning trading_mcp/vesper_tools.py's vesper.* references, an M0-01
+characterization test) had to shrink: vesper.halt, vesper.circuit_breaker,
+vesper.paper_ledger and vesper.audit_chain drop out now that
+vesper_tools.py's four corresponding imports (step 3) are `from core.X
+import Y`. Verified the new baseline against the actual AST-scanned set
+before writing it, not assumed from the diff. vesper.alerts_runner,
+vesper.bot.inbound and vesper.monitor remain -- those three still live
+under vesper/ and were out of this feature's scope.
+
+**Mechanical sweep, same discipline as M0-02:** every `from vesper.halt
+import`, `from vesper.circuit_breaker import`, `from vesper.paper_ledger
+import`, `from vesper.audit_chain import` / `from vesper import
+audit_chain`, and every string-literal `monkeypatch.setattr("vesper.X...")`
+/ `patch("vesper.X...")` target across vesper/, vesper/nodes/, vesper/bot/,
+trading_mcp/, and 16 test files was grepped and rewritten to `core.X`
+(execution_guard.py excluded, per above). Re-grepped after to confirm zero
+`from vesper.halt|circuit_breaker|paper_ledger|audit_chain import` remain
+outside the shim and outside execution_guard.py's two untouched lines.
+Also touched a handful of doc-comment path references
+(`vesper/audit_chain.py` -> `core/audit_chain.py` etc.) in vesper/graph.py,
+vesper/bot/inbound.py, vesper/metrics.py and trading_mcp/vesper_tools.py --
+cosmetic, but the standing warning about doc-vs-code drift applies to
+comments too, not just markdown files.
+
+`trading_mcp/server.py`'s pre-existing dirty state (OAuth-provider work,
+unrelated to this feature, flagged by every prior session) was again left
+untouched and unstaged.
+
+**Full suite: 584 passed** -- same count as before this feature (M0-02's
+handoff note said 584), confirming this was a pure layering move with no
+behavior change, exactly as the feature's step 5 asks to confirm.
+
+### For the next agent (M0-04+)
+
+- core/ now holds 18 modules: the 14 from M0-02 plus these 4. All four new
+  ones are genuinely stdlib-only leaves -- no residual mcp_server or
+  vesper back-reference the way M0-02's move left behind.
+- `vesper/halt.py` is now a real, intentional file again (not a stale
+  leftover) -- a 29-line re-export shim, kept alive solely because
+  execution_guard.py is off-limits. If a future feature is ever cleared to
+  touch execution_guard.py (it should not be, per repo policy), that shim
+  becomes deletable and execution_guard.py's two `from vesper.halt import
+  is_halted` lines can become `from core.halt import is_halted` directly --
+  but do not do this preemptively; the shim is correct and tested as-is.
+- If you're hunting for a place a `from vesper.halt import` still exists
+  outside the shim and outside execution_guard.py, there shouldn't be
+  one -- re-grep before assuming.

@@ -8,7 +8,7 @@ effectively none of this before this module.
 
 Report-only, by design. Nothing here gates or blocks execution -- it is
 strictly instrumentation, the observability analogue of
-vesper/audit_chain.py's "reports, never refuses" append-only ledger. No
+core/audit_chain.py's "reports, never refuses" append-only ledger. No
 metric here is wired into any risk/gating decision, and none ever will be
 from inside this module.
 
@@ -50,7 +50,7 @@ _SNAPSHOT_PATH = _DATA_DIR / "metrics_snapshot.json"
 # tier -- enough for a meaningful p50/p95 without growing without limit.
 _DURATIONS_MAXLEN = 200
 # Bound on the recent-order-digest trail surfaced in snapshot() -- eyeballing
-# aid, not an audit log (that job belongs to vesper/audit_chain.py).
+# aid, not an audit log (that job belongs to core/audit_chain.py).
 _RECENT_ORDERS_MAXLEN = 50
 
 

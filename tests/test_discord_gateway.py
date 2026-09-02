@@ -26,8 +26,8 @@ def clean_registry(tmp_path, monkeypatch):
     """Isolate registry and halt state."""
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("vesper.halt._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
+    monkeypatch.setattr("core.halt._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.halt._HALT_STATE_PATH", data_dir / "halt_state.json")
 
     registry = ApprovalRegistry()
     monkeypatch.setattr("vesper.bot.inbound.approval_registry", registry)
@@ -157,7 +157,7 @@ async def test_on_message_halt_rejects_unauthorized_user(clean_registry, monkeyp
 
     await bot.on_message(message)
 
-    from vesper.halt import is_halted
+    from core.halt import is_halted
     halted, _ = is_halted()
     assert halted is False
     message.channel.send.assert_called_once()
@@ -182,7 +182,7 @@ def test_create_approval_view_and_components():
 @pytest.mark.asyncio
 async def test_vesper_discord_bot_setup_and_messages(monkeypatch, clean_registry):
     """Verify VesperDiscordBot registers dynamic items and processes halt/resume."""
-    from vesper.halt import is_halted
+    from core.halt import is_halted
 
     bot = VesperDiscordBot(bot_token="test-bot-token")
     assert bot.configured is True

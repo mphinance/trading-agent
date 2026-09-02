@@ -62,7 +62,7 @@ def test_never_fires_on_weekends(weekend_dt):
 
 @pytest.mark.asyncio
 async def test_tick_fires_due_slot_and_marks_it_fired():
-    with patch("vesper.halt.is_halted", return_value=(False, None)):
+    with patch("core.halt.is_halted", return_value=(False, None)):
         with patch("vesper.runner.run_agent_session", new_callable=AsyncMock) as mock_session:
             with patch("vesper.bot.manager.channel_manager") as mock_cm:
                 mock_cm.active_channels = []
@@ -81,7 +81,7 @@ async def test_tick_fires_due_slot_and_marks_it_fired():
 @pytest.mark.asyncio
 async def test_tick_skips_when_halted_and_does_not_call_run_agent_session():
     halt_info = {"reason": "manual freeze", "halted_by": "cli"}
-    with patch("vesper.halt.is_halted", return_value=(True, halt_info)):
+    with patch("core.halt.is_halted", return_value=(True, halt_info)):
         with patch("vesper.runner.run_agent_session", new_callable=AsyncMock) as mock_session:
             with patch("vesper.bot.manager.channel_manager") as mock_cm:
                 mock_cm.active_channels = []
@@ -100,7 +100,7 @@ async def test_tick_skips_when_halted_and_does_not_call_run_agent_session():
 async def test_tick_live_mode_runs_interactive_true():
     """A live-mode scheduled scan must pause for remote approval, never
     auto-execute just because nobody was watching."""
-    with patch("vesper.halt.is_halted", return_value=(False, None)):
+    with patch("core.halt.is_halted", return_value=(False, None)):
         with patch("vesper.runner.run_agent_session", new_callable=AsyncMock) as mock_session:
             with patch("vesper.bot.manager.channel_manager") as mock_cm:
                 mock_cm.active_channels = []
@@ -116,7 +116,7 @@ async def test_tick_live_mode_runs_interactive_true():
 
 @pytest.mark.asyncio
 async def test_tick_broadcasts_completion_when_channels_active():
-    with patch("vesper.halt.is_halted", return_value=(False, None)):
+    with patch("core.halt.is_halted", return_value=(False, None)):
         with patch("vesper.runner.run_agent_session", new_callable=AsyncMock):
             with patch("vesper.bot.manager.channel_manager") as mock_cm:
                 mock_cm.active_channels = ["telegram"]
@@ -133,7 +133,7 @@ async def test_tick_broadcasts_completion_when_channels_active():
 
 @pytest.mark.asyncio
 async def test_tick_swallows_scan_exception_and_broadcasts_failure():
-    with patch("vesper.halt.is_halted", return_value=(False, None)):
+    with patch("core.halt.is_halted", return_value=(False, None)):
         with patch("vesper.runner.run_agent_session", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
             with patch("vesper.bot.manager.channel_manager") as mock_cm:
                 mock_cm.active_channels = ["telegram"]
@@ -153,7 +153,7 @@ async def test_tick_swallows_scan_exception_and_broadcasts_failure():
 @pytest.mark.asyncio
 async def test_tick_prunes_stale_dates_from_fired_set():
     yesterday_key = (MON_930.date().replace(day=MON_930.day - 1), dt_time(9, 30))
-    with patch("vesper.halt.is_halted", return_value=(False, None)):
+    with patch("core.halt.is_halted", return_value=(False, None)):
         with patch("vesper.runner.run_agent_session", new_callable=AsyncMock):
             with patch("vesper.bot.manager.channel_manager") as mock_cm:
                 mock_cm.active_channels = []

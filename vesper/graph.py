@@ -8,7 +8,7 @@ from pathlib import Path
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
-from vesper import audit_chain
+from core import audit_chain
 from vesper.state import TradingState
 from vesper.nodes import (
     regime_node,
@@ -66,7 +66,7 @@ async def _get_sqlite_checkpointer():
 
 def _with_audit_chain(node_name, node_fn):
     """Wrap a node so every `audit_trail` entry it returns is also committed
-    to the hash-chained ledger (see `vesper/audit_chain.py`) the instant
+    to the hash-chained ledger (see `core/audit_chain.py`) the instant
     it's produced -- not batched at session end.
 
     Why per-node, not a session-end hook: `run_agent_session`'s own

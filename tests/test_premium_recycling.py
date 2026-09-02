@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock, patch
 
-from vesper.paper_ledger import (
+from core.paper_ledger import (
     _load_ledger,
     _save_ledger,
     get_paper_summary,
@@ -23,8 +23,8 @@ def clean_paper_ledger(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = data_dir / "paper_ledger.json"
-    monkeypatch.setattr("vesper.paper_ledger._DATA_DIR", data_dir)
-    monkeypatch.setattr("vesper.paper_ledger._LEDGER_PATH", ledger_path)
+    monkeypatch.setattr("core.paper_ledger._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.paper_ledger._LEDGER_PATH", ledger_path)
     return ledger_path
 
 

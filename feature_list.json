@@ -152,7 +152,7 @@
       "Register the moved state-file paths in tests/conftest.py's _isolated_vesper_state fixture under their new module path",
       "Run the full suite; confirm the same pass count and that file paths/formats are byte-for-byte unchanged"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-04",
