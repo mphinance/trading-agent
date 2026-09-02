@@ -630,6 +630,75 @@
     "passes": false
   },
   {
+    "id": "M8-19",
+    "milestone": "M8",
+    "category": "docs",
+    "description": "The exposure rule is amended IN WRITING before any order tool exists: the MCP may increase exposure, bounded by the deterministic guards and a separate trade scope \u2014 and CLAUDE.md rule 3, app_spec I3 and the AST pin all say the same thing",
+    "steps": [
+      "Write amendment A4 into app_spec.txt: the MCP surface may reach the order path, via execution_guard ONLY, gated by VESPER_TRADING, the notional cap, the halt file, the circuit breaker, and an OAuth scope distinct from read",
+      "Update CLAUDE.md rule 3: it is no longer true that no MCP tool may reach the order path; state precisely which module may, and that every other module still may not",
+      "State explicitly what did NOT change: execution_guard.py remains the only module that can move money, and no order code is duplicated anywhere",
+      "Land this BEFORE M8-20..M8-23 \u2014 the M0-00 lesson was that widening an invariant without writing it down first produces contradictory docs and tests"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-20",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "submit_manual_proposal runs an operator-specified order through the FULL deterministic gate and returns either a staged ticket or an explicit rejection reason \u2014 it never places anything",
+    "steps": [
+      "Accept a manual order spec (ticker, side, quantity, order type, limit) and run it through the same RiskEnforcer and capital-bucket path the graph uses \u2014 do not reimplement sizing",
+      "On pass, call guard.preview() and return the ticket id, the SHA-256 the ticket carries, and the resolved payload in speakable form",
+      "On fail, return the specific guard that rejected it and its threshold \u2014 notional cap, quantity cap, allowlist, buying-power fraction, halt, or VESPER_TRADING",
+      "Assert a SELL-to-open option is sized off the STRIKE, not the premium, exactly as the guard already does",
+      "Add tests for an accepted spec, a notional-cap rejection, and a halted-system rejection"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-21",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "place_from_ticket(ticket_id) fires a previously staged ticket and nothing else \u2014 no single MCP call can both construct and fire an order",
+    "steps": [
+      "The tool takes only a ticket_id; it can never accept an order payload",
+      "It calls guard.place(), which re-runs the guards server-side; the tool implements no risk logic of its own",
+      "Confirm the ticket handshake still holds: single-use, 120s expiry, payload hash checked",
+      "Add a test that a forged or expired ticket_id is refused",
+      "Add a test that the same ticket cannot be fired twice"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-22",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "place_order places directly, in one call, through execution_guard \u2014 with MCP-specific limits that are stricter than the graph's and independently configurable",
+    "steps": [
+      "Route entirely through execution_guard; add no order-construction code outside it",
+      "Enforce an MCP-specific per-order notional cap and a per-day order count cap, both read from env and both defaulting to something small",
+      "Refuse when VESPER_TRADING=0, when halted, or when the circuit breaker has tripped \u2014 verify each refusal with a test",
+      "Every call writes to the audit chain with the caller identity and the resolved payload before the broker is contacted",
+      "Add a test that the per-day cap actually blocks the N+1th order"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-23",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "Order tools require an OAuth scope that the read token does not carry, and the AST pin is rewritten so guard.place/guard.preview are reachable from exactly one named module and nowhere else",
+    "steps": [
+      "Define a 'trade' scope separate from 'read'; the existing static bearer must NOT carry it by default",
+      "Assert a read-scoped token is refused by every order tool and accepted by every read tool",
+      "Rewrite tests/test_trading_mcp.py's pin: guard.place/guard.preview permitted ONLY in the designated order module; forbidden everywhere else under trading_mcp/ and mcp_server/, including bound-method references",
+      "submit_decision and resume stay forbidden everywhere, with no exception",
+      "Add a regression test planting each forbidden shape in a throwaway module and confirming the pin catches it"
+    ],
+    "passes": false
+  },
+  {
     "id": "M10-01",
     "milestone": "M10",
     "category": "docs",
