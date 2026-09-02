@@ -215,8 +215,8 @@ class SingleOperatorOAuthProvider(OAuthProvider):
             "client_registration_options", None
         ) or ClientRegistrationOptions(
             enabled=True,
-            valid_scopes=required_scopes or ["read"],
-            default_scopes=required_scopes or ["read"],
+            valid_scopes=required_scopes or ["read", "safe-write"],
+            default_scopes=["read"],
         )
         revocation_options = kwargs.pop(
             "revocation_options", None

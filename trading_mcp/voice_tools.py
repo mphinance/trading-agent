@@ -544,8 +544,12 @@ _halt_impl = halt
 
 def register_voice_tools(mcp: Any) -> list[str]:
     """Register voice co-pilot watch and safe-write tools onto `mcp` and return their names."""
+    from fastmcp.server.auth import require_scopes
 
-    @mcp.tool()
+    read_auth = require_scopes("read")
+    safe_write_auth = require_scopes("safe-write")
+
+    @mcp.tool(auth=read_auth)
     def watch_setup(proposal_id: str, force_full: bool = False) -> dict[str, Any]:
         """Inspect a pending trade setup with concise voice-speakable telemetry (<2KB).
 
@@ -555,7 +559,7 @@ def register_voice_tools(mcp: Any) -> list[str]:
         """
         return _watch_setup_impl(proposal_id, force_full=force_full)
 
-    @mcp.tool()
+    @mcp.tool(auth=read_auth)
     def find_pending_setup(query: str) -> dict[str, Any]:
         """Fuzzy resolve a spoken or mis-transcribed symbol against pending proposals.
 
@@ -563,17 +567,17 @@ def register_voice_tools(mcp: Any) -> list[str]:
         """
         return _find_pending_setup_impl(query)
 
-    @mcp.tool()
+    @mcp.tool(auth=safe_write_auth)
     def snooze_proposal(proposal_id: str, minutes: float = 60.0) -> dict[str, Any]:
         """Snooze a pending proposal for `minutes` without modifying its price, quantity, or approval state."""
         return _snooze_proposal_impl(proposal_id, minutes=minutes)
 
-    @mcp.tool()
+    @mcp.tool(auth=safe_write_auth)
     def tag_proposal(proposal_id: str, note: str) -> dict[str, Any]:
         """Append a note to a pending proposal visible in queue and audit trail, without deciding it."""
         return _tag_proposal_impl(proposal_id, note=note)
 
-    @mcp.tool()
+    @mcp.tool(auth=safe_write_auth)
     def arm_alert(
         symbol: str,
         level: str | float,
@@ -584,12 +588,12 @@ def register_voice_tools(mcp: Any) -> list[str]:
         """Arm a price or gamma alert (flip/pin/wall_above/wall_below) in the shared alert store."""
         return _arm_alert_impl(symbol, level, direction, note=note, repeat=repeat)
 
-    @mcp.tool()
+    @mcp.tool(auth=safe_write_auth)
     def disarm_alert(alert_id: str) -> dict[str, Any]:
         """Disarm and remove an alert from the store."""
         return _disarm_alert_impl(alert_id)
 
-    @mcp.tool()
+    @mcp.tool(auth=safe_write_auth)
     def halt(reason: str = "Emergency halt via MCP", source: str = "mcp") -> dict[str, Any]:
         """Trigger an immediate emergency halt, freezing all execution paths."""
         return _halt_impl(reason=reason, source=source)

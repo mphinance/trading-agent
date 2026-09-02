@@ -580,3 +580,49 @@ def test_voice_tools_audit_trail(tmp_path, monkeypatch):
     assert verify_res["valid"] is True
 
 
+@pytest.mark.asyncio
+async def test_oauth_scope_tiering_enforcement():
+    """M8-14: Scopes mirror read vs safe-write tiers.
+    A read-only token cannot invoke safe-write tools; safe-write token can.
+    """
+    from fastmcp import FastMCP
+    from fastmcp.server.auth import AccessToken, AuthContext, run_auth_checks
+    from trading_mcp.voice_tools import register_voice_tools
+
+    m = FastMCP("test-scopes")
+    register_voice_tools(m)
+
+    # 1. Read token: scopes=['read']
+    read_tok = AccessToken(token="read-tok", client_id="client-read", scopes=["read"])
+
+    # 2. Write token: scopes=['read', 'safe-write']
+    write_tok = AccessToken(token="write-tok", client_id="client-write", scopes=["read", "safe-write"])
+
+    safe_write_tool_names = ["arm_alert", "disarm_alert", "halt", "snooze_proposal", "tag_proposal"]
+    read_tool_names = ["watch_setup", "find_pending_setup"]
+
+    for name in safe_write_tool_names:
+        comp = m._local_provider._components[f"tool:{name}@"]
+        assert comp.auth is not None, f"Expected auth check on safe-write tool {name}"
+
+        # Read-only token fails auth check
+        ctx_read = AuthContext(token=read_tok, component=comp)
+        passes_read = await run_auth_checks(comp.auth, ctx_read)
+        assert not passes_read, f"Read token unexpectedly authorized for safe-write tool {name}"
+
+        # Safe-write token passes auth check
+        ctx_write = AuthContext(token=write_tok, component=comp)
+        passes_write = await run_auth_checks(comp.auth, ctx_write)
+        assert passes_write, f"Safe-write token rejected for safe-write tool {name}"
+
+    for name in read_tool_names:
+        comp = m._local_provider._components[f"tool:{name}@"]
+        assert comp.auth is not None, f"Expected auth check on read tool {name}"
+
+        # Read token passes auth check
+        ctx_read = AuthContext(token=read_tok, component=comp)
+        passes_read = await run_auth_checks(comp.auth, ctx_read)
+        assert passes_read, f"Read token rejected for read tool {name}"
+
+
+

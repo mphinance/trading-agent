@@ -63,7 +63,9 @@ def _build_oauth_provider(token: str) -> SingleOperatorOAuthProvider | None:
     if not base_url:
         return None
     return SingleOperatorOAuthProvider(
-        operator_secret=token, base_url=base_url, required_scopes=["read"],
+        operator_secret=token,
+        base_url=base_url,
+        required_scopes=["read"],
     )
 
 
@@ -121,7 +123,7 @@ def _build_auth() -> HmacStaticTokenVerifier | MultiAuth | None:
     if not token:
         return None
     bearer = HmacStaticTokenVerifier(
-        tokens={token: {"client_id": "owner", "scopes": ["read"]}},
+        tokens={token: {"client_id": "owner", "scopes": ["read", "safe-write"]}},
         required_scopes=["read"],
     )
     oauth = _build_oauth_provider(token)

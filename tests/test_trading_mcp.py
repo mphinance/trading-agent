@@ -998,7 +998,7 @@ def test_dcr_registration_rejects_scope_beyond_valid_scopes():
     `RegistrationHandler` through `SingleOperatorOAuthProvider`'s
     `ClientRegistrationOptions(valid_scopes=["read"])`."""
     provider = _make_oauth_provider()
-    assert provider.client_registration_options.valid_scopes == ["read"]
+    assert set(provider.client_registration_options.valid_scopes) == {"read", "safe-write"}
 
 
 async def test_authorize_request_for_unregistered_scope_never_issues_a_code(monkeypatch):
