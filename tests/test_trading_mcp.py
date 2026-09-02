@@ -1993,6 +1993,30 @@ def test_forbidden_resume_pin_catches_a_real_throwaway_module_under_trading_mcp(
     assert not probe_path.exists()
 
 
+def test_m8_13_exposure_boundary_and_no_audio_routes():
+    """M8-13: Confirms all M8 voice modules are scanned by the exposure pin,
+    no STT or audio endpoints exist, and resume remains strictly unreachable.
+    """
+    scanned_files = {p.name for p in (REPO_ROOT / "trading_mcp").rglob("*.py")}
+    expected_m8_modules = {"bar_summary.py", "gamma_summary.py", "voice_tools.py"}
+    assert expected_m8_modules.issubset(scanned_files), (
+        f"Missing expected M8 modules from scanned set: {expected_m8_modules - scanned_files}"
+    )
+
+    # Confirm resume() is not referenced anywhere in trading_mcp
+    for pyfile in (REPO_ROOT / "trading_mcp").rglob("*.py"):
+        hits = _module_func_ref_sites(pyfile, "core.halt", "resume")
+        assert hits == [], f"Forbidden resume reference in {pyfile}: {hits}"
+
+    # Confirm no STT or audio routes exist in trading_mcp or mcp_server
+    for pyfile in list((REPO_ROOT / "trading_mcp").rglob("*.py")) + list((REPO_ROOT / "mcp_server").rglob("*.py")):
+        content = pyfile.read_text(encoding="utf-8").lower()
+        assert "speech_to_text" not in content
+        assert "openrouter_stt" not in content
+        assert "audio/wav" not in content
+        assert "audio/mp3" not in content
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # M0-08: the MCP server survives the LangGraph agent being unimportable
 # ═══════════════════════════════════════════════════════════════════════════
