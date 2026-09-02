@@ -1810,3 +1810,79 @@ or `trading_mcp/oauth_provider.py` -- this feature's outcome was already true in
 only test coverage was missing. **Staged for this feature's commit:**
 `tests/test_trading_mcp.py` only. Did not touch `feature_list.json` or
 `autonomous/feature_list.seed.json`, per the hard prohibition.
+
+═══════════════════════════════════════════════════════════════════════════
+M2-09 — OAuth tokens are revocable and stored server-side outside git,
+0600, and the storage path is registered in the test suite's isolated-
+state fixture
+═══════════════════════════════════════════════════════════════════════════
+
+**Landed.** trading_mcp/oauth_provider.py's access/refresh tokens (M2-03 built these
+in-memory-only, with a docstring flagging M2-09 as the follow-up) now persist to
+data/oauth_tokens_state.json:
+
+- `_load_token_state()` / `_save_token_state()` follow core/halt.py's exact pattern:
+  module-level `_DATA_DIR` / `_TOKEN_STATE_PATH` constants (Path(__file__)-relative, not
+  imported from core/ -- keeps this module stdlib-only per M2-10's zero-vesper-coupling
+  requirement, without depending on core/ happening to also stay dependency-free), a fail-
+  open-to-empty read on a missing/corrupt file, atomic write via temp-file + os.replace.
+- 0600 permissions: `os.chmod(tmp_path, 0o600)` runs BEFORE `os.replace` -- POSIX rename
+  preserves the source inode's mode, so chmod-ing the tmp file (not the final path after
+  the replace) closes the window where the real path would otherwise briefly exist at the
+  umask's default, group/other-readable mode.
+- `SingleOperatorOAuthProvider.__init__` loads persisted access/refresh tokens (and the
+  access<->refresh pairing maps) from disk instead of starting empty. `_persist_tokens()`
+  is called at the end of `_issue_token_pair` and inside `_revoke_pair` (covering explicit
+  revocation via `revoke_token()` AND the expiry-driven prunes in `load_access_token`/
+  `load_refresh_token`), so the on-disk file is never stale relative to what the live
+  instance would answer.
+- Clients (DCR registrations) and authorization codes deliberately stay in-memory only --
+  out of scope for this feature (which is about tokens), and cheap to lose: an unregistered
+  client just re-runs DCR (open by design), and a code is single-use with a 5-minute expiry.
+- `.gitignore`: added `data/oauth_tokens_state.json`.
+- `tests/conftest.py`'s autouse `_isolated_vesper_state` fixture: added
+  `monkeypatch.setattr("trading_mcp.oauth_provider._DATA_DIR", ...)` and the matching
+  `_TOKEN_STATE_PATH` line, right after the `core.approval_registry` block, so every test
+  in the suite (not just the new ones) redirects to a per-test tmp dir automatically --
+  matches how `core.metrics` was folded into the same fixture despite also not being
+  "vesper" by path.
+
+**New tests in tests/test_trading_mcp.py** (M2-09 section, right after the M2-03
+constant-time-lookup block):
+- `test_oauth_token_state_path_is_gitignored` -- `data/<the actual filename>` appears in
+  .gitignore, read from the live constant rather than hardcoded, so a rename can't silently
+  desync the two.
+- `test_oauth_token_state_file_written_0600` -- issuing a token pair leaves the state file
+  at exactly 0600.
+- `test_revoked_access_token_is_rejected` -- the feature's own acceptance test, verbatim:
+  issue, use successfully, revoke, confirm rejected.
+- `test_revoked_refresh_token_is_rejected` -- revoking the refresh half also invalidates
+  the paired access token (exercises `_revoke_pair`'s pairing logic, not just the direct
+  case).
+- `test_revocation_survives_a_fresh_provider_instance` -- the persistence half specifically:
+  a brand-new `SingleOperatorOAuthProvider` pointed at the same (patched) `_DATA_DIR`
+  refuses a token revoked by an earlier instance, and still accepts one that was never
+  revoked. This is the test that would fail if persistence were removed but revocation
+  stayed in-memory-only.
+
+**Verified manually outside pytest too** (`/tmp/oauth_scratch`, cleaned up after): issued a
+token pair, confirmed the on-disk file mode is 0o600, confirmed the token verifies, revoked
+it, confirmed it's rejected, then constructed a second provider instance against the same
+directory (simulating a process restart) and confirmed it also rejects the revoked token
+while still nothing else broke.
+
+**Verified:**
+`.venv/bin/python -m pytest -q tests/test_trading_mcp.py -k "oauth_token_state or revoked or
+revocation"` -> 5 passed.
+`.venv/bin/python -m pytest -q tests/test_trading_mcp.py` -> 70 passed.
+**Full suite:** `.venv/bin/python -m pytest -q` -> **628 passed**. Floor was 597.
+`git status --porcelain data/` confirmed empty after the full run -- the real repo data/
+directory was never touched; every write went through the patched tmp dir.
+
+**Staged for this feature's commit:** `.gitignore`, `tests/conftest.py`,
+`tests/test_trading_mcp.py`, `trading_mcp/oauth_provider.py`. Did not touch
+`feature_list.json` or `autonomous/feature_list.seed.json`, per the hard prohibition. Did
+not touch `vesper/execution_guard.py`, set `VESPER_TRADING=1`, or run any monitor/loop/
+listen entrypoint. No credential, balance, or token value was printed at any point --
+`operator_secret="x"` in the manual scratch check was a throwaway test string, not a real
+credential.
