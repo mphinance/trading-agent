@@ -21,8 +21,8 @@ def _fetch_live_quote(symbol: str) -> Optional[float]:
     """Blocking — wrap in asyncio.to_thread. Returns None (never a guess) if
     Webull isn't configured or the quote can't be fetched."""
     try:
-        from wb import Webull
-        from md import Market
+        from core.wb import Webull
+        from core.md import Market
 
         wb = Webull()
         if not wb.configured:
@@ -46,8 +46,8 @@ def _fetch_live_option_quote(
     Returns None (never a fabricated placeholder) if Webull is unconfigured or no quote exists.
     """
     try:
-        from wb import Webull
-        from md import Market
+        from core.wb import Webull
+        from core.md import Market
 
         wb = Webull()
         if not wb.configured:
@@ -124,7 +124,7 @@ def _select_0dte_wall_strike(ticker: str, is_bullish: bool) -> Optional[float]:
     Blocking — wrap in asyncio.to_thread.
     """
     try:
-        from td import TDPro
+        from core.td import TDPro
 
         client = TDPro()
         if not client.configured:
@@ -217,8 +217,8 @@ def _select_0dte_delta_strike(
         return None
 
     try:
-        from wb import Webull
-        from md import Market
+        from core.wb import Webull
+        from core.md import Market
 
         wb = Webull()
         if not wb.configured:
@@ -296,8 +296,8 @@ def _fetch_0dte_option_quote(
     regardless of which of bid/ask/last ends up being the returned price.
     """
     try:
-        from wb import Webull
-        from md import Market
+        from core.wb import Webull
+        from core.md import Market
 
         wb = Webull()
         if not wb.configured:
@@ -398,8 +398,8 @@ def _fetch_leaps_option_quote(
     Returns (price, expiry_str) or None if no suitable contract or quote exists.
     """
     try:
-        from wb import Webull
-        from md import Market
+        from core.wb import Webull
+        from core.md import Market
 
         wb = Webull()
         if not wb.configured:
@@ -504,8 +504,8 @@ def _fetch_synthetic_long_quotes(
     put_contract_symbol) or None.
     """
     try:
-        from wb import Webull
-        from md import Market
+        from core.wb import Webull
+        from core.md import Market
 
         wb = Webull()
         if not wb.configured:
@@ -604,7 +604,7 @@ def _fetch_upcoming_earnings() -> Optional[List[Dict[str, Any]]]:
     calendar) if TDPro is unconfigured or the call errors.
     """
     try:
-        from td import TDPro
+        from core.td import TDPro
 
         client = TDPro()
         if not client.configured:
@@ -707,7 +707,7 @@ async def playbooks_node(state: TradingState) -> Dict[str, Any]:
     """Applies domain playbooks to draft high-conviction order proposals."""
     logger.info("-> [PlaybooksNode] Applying strategy playbooks to candidates...")
 
-    from mcp_server.conviction import get_playbook_performance
+    from core.conviction import get_playbook_performance
 
     proposals: List[OrderProposal] = []
     technicals = state.get("technicals", {})

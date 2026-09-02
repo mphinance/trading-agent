@@ -13,8 +13,8 @@ import pandas as pd
 from mcp_server.cache import smart_cache
 from mcp_server.schema import SignalResult
 from mcp_server.fundamentals import get_fundamentals
-from mcp_server.screener import run_stock_screen
-from mcp_server.market_top import detect_market_top
+from core.screener import run_stock_screen
+from core.market_top import detect_market_top
 
 logger = logging.getLogger(__name__)
 

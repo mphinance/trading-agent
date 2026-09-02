@@ -326,7 +326,7 @@ async def mark_to_market(live_quotes: Optional[Dict[str, float]] = None) -> Dict
             current_px = live_quotes[ticker]
         else:
             try:
-                from mcp_server.data import get_live_price
+                from core.data import get_live_price
                 current_px = await get_live_price(ticker)
             except Exception:
                 current_px = entry_px

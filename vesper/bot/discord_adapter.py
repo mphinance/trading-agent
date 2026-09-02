@@ -104,7 +104,7 @@ class DiscordAdapter(ApprovalChannel):
         chart_bytes: Optional[bytes] = None
         if card.ticker:
             try:
-                from mcp_server.charts import generate_chart
+                from core.charts import generate_chart
                 chart_res = await generate_chart(
                     ticker=card.ticker,
                     period="1d",

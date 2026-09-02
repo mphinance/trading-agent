@@ -467,7 +467,7 @@ def test_execution_guard_order_path_confined_to_known_call_sites():
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def test_get_account_state_degrades_when_webull_unconfigured(vtools, monkeypatch):
-    import wb
+    import core.wb as wb
 
     class _BrokenWebull:
         def __init__(self):
@@ -596,7 +596,7 @@ def test_verify_audit_chain_degrades_on_error(vtools, monkeypatch):
 
 
 def test_get_playbook_calibration_degrades_on_error(vtools, monkeypatch):
-    monkeypatch.setattr("mcp_server.conviction.get_playbook_performance", _boom)
+    monkeypatch.setattr("core.conviction.get_playbook_performance", _boom)
     result = vtools["get_playbook_calibration"]("wheel", days=30)
     assert result["available"] is False
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-import edgar
+import core.edgar as edgar
 from vesper.state import (
     Candidate,
     MarketRegime,

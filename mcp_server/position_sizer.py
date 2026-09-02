@@ -10,8 +10,8 @@ import math
 from typing import Any
 
 from mcp_server.schema import SignalResult
-from mcp_server.data import get_live_price
-from mcp_server.technicals import analyze_technicals
+from core.data import get_live_price
+from core.technicals import analyze_technicals
 
 logger = logging.getLogger(__name__)
 

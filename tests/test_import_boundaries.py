@@ -19,18 +19,19 @@ assumed from feature_list.json's wording:
   file uses, and it's the exact property this milestone protects --
   trading_mcp is meant to be a read-only viewer *over* vesper's state, never
   something vesper reaches into.
-- ``vesper/**/*.py`` is **not** asserted to hold zero references to
-  ``mcp_server``. Verified directly against the source: vesper imports
-  mcp_server analytics modules at 13 call sites across 10 files today (see
-  ``EXPECTED_VESPER_TO_MCP_SERVER_BASELINE`` below), and will keep doing so
-  until M0-02 moves those specific modules into ``core/``. Asserting "zero"
-  here would be a false claim about the current tree -- this file's job is
-  to characterize the current tree, not the post-M0-02 target. That target
-  is owned by M0-07's ``tests/test_import_direction.py``, whose own steps in
-  feature_list.json say exactly this: "For vesper -> mcp_server: after M0-02
-  this should be empty. If any site remains, put it in a named allowlist
-  constant". Until M0-02/M0-07 land, this file still pins today's 13 sites
-  by name so a *new* one shows up as a diff here too, not only there.
+- ``vesper/**/*.py`` was **not** asserted to hold zero references to
+  ``mcp_server`` at M0-01 time: vesper imported mcp_server analytics modules
+  at 13 call sites across 10 files then (technicals, options, conviction,
+  screener, vcp_screener, charts, data, macro_regime, market_top). M0-02
+  moved those specific modules into ``core/`` and repointed every one of
+  those 13 sites at ``core.X``, so ``EXPECTED_VESPER_TO_MCP_SERVER_BASELINE``
+  below is now the empty dict, verified directly against the source the same
+  way the 13-site figure was. The forward-looking assertion that this must
+  *stay* empty belongs to M0-07's ``tests/test_import_direction.py`` per its
+  own feature_list.json steps ("For vesper -> mcp_server: after M0-02 this
+  should be empty. If any site remains, put it in a named allowlist
+  constant"); this test still pins the baseline by value so a *new*
+  vesper -> mcp_server reference shows up as a diff here too, not only there.
 """
 
 from __future__ import annotations
@@ -134,27 +135,18 @@ def test_vesper_never_imports_trading_mcp():
     assert offenders == {}, f"vesper/ must never import trading_mcp: {offenders}"
 
 
-# Known, verified (via this same AST walk, not inferred from any doc)
-# baseline of vesper -> mcp_server references as of M0-01. mcp_server today
-# is both the quant-analytics library vesper legitimately depends on AND the
-# MCP registration layer -- M0-02 splits those, moving the analytics half
-# into core/ so this baseline empties out (or shrinks to an explicit
-# allowlist), enforced going forward by M0-07's test_import_direction.py.
-# This pins today's sites so any *new* one shows up as a diff to this test
-# before that split lands -- it is not a statement that the dependency is
-# fine forever.
-EXPECTED_VESPER_TO_MCP_SERVER_BASELINE = {
-    "vesper/agents/technical.py": {"mcp_server.technicals"},
-    "vesper/bot/discord_adapter.py": {"mcp_server.charts"},
-    "vesper/bot/telegram_adapter.py": {"mcp_server.charts"},
-    "vesper/monitor.py": {"mcp_server.technicals"},
-    "vesper/nodes/analyst.py": {"mcp_server.technicals", "mcp_server.options"},
-    "vesper/nodes/playbooks.py": {"mcp_server.conviction"},
-    "vesper/nodes/reflection.py": {"mcp_server.conviction"},
-    "vesper/nodes/regime.py": {"mcp_server.macro_regime", "mcp_server.market_top"},
-    "vesper/nodes/scanner.py": {"mcp_server.screener", "mcp_server.vcp_screener"},
-    "vesper/paper_ledger.py": {"mcp_server.data"},
-}
+# As of M0-01, this pinned 13 real vesper -> mcp_server import sites across
+# 10 files: mcp_server was both the quant-analytics library vesper legitimately
+# depended on AND the MCP registration layer. M0-02 split those apart --
+# technicals, options, conviction, screener, vcp_screener, charts, data,
+# macro_regime and market_top (plus wb/md/td/edgar/quotes) moved into core/,
+# and every one of those 13 sites now imports core.X instead. Verified
+# directly against the source (this same AST walk, not inferred from any
+# doc): vesper/**/*.py holds zero mcp_server references today, so the
+# baseline is empty, per this file's own M0-01-era note that said "ideally
+# to {}". Enforced going forward by M0-07's test_import_direction.py, which
+# owns the vesper -> core assertion this test doesn't make.
+EXPECTED_VESPER_TO_MCP_SERVER_BASELINE: dict[str, set[str]] = {}
 
 
 def test_vesper_to_mcp_server_baseline_is_pinned_not_growing():

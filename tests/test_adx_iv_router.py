@@ -270,12 +270,12 @@ async def test_adx_iv_router_skips_when_quotes_unavailable():
 
 def test_fetch_leaps_option_quote_mock_chain():
     """Verify _fetch_leaps_option_quote filters for far-dated contracts (~180-400 DTE)."""
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock()
         mock_wb.configured = True
         mock_wb_cls.return_value = mock_wb
 
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
             # 1 near-dated contract (ignored) + 1 far-dated contract (~270 days out)
             mock_mkt.option_chain.return_value = [
@@ -298,12 +298,12 @@ def test_fetch_synthetic_long_quotes_picks_shared_expiry_only():
     """Verify it only returns an expiry that has BOTH a call and a put quoted
     at the strike -- a call-only or put-only expiry must be ignored even if
     it's the nearest-dated one for that single leg."""
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock()
         mock_wb.configured = True
         mock_wb_cls.return_value = mock_wb
 
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
 
             def option_chain(underlying, option_type, strike_gte, strike_lte):
@@ -340,12 +340,12 @@ def test_fetch_synthetic_long_quotes_picks_shared_expiry_only():
 
 
 def test_fetch_synthetic_long_quotes_none_when_no_shared_expiry():
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock()
         mock_wb.configured = True
         mock_wb_cls.return_value = mock_wb
 
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
 
             def option_chain(underlying, option_type, strike_gte, strike_lte):

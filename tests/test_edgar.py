@@ -10,7 +10,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import edgar as E
+import core.edgar as E
 
 TICKERS_JSON = {
     "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},

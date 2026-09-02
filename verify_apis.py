@@ -19,7 +19,7 @@ def test_tdpro():
     print("1. Testing TraderDaddy Pro MCP Integration")
     print("=" * 60)
     try:
-        from td import TDPro
+        from core.td import TDPro
         td = TDPro()
         if not td.configured:
             print("[FAIL] TDPro is not configured (TD_API_KEY missing)")

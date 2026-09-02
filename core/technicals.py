@@ -13,7 +13,7 @@ from typing import Any
 import pandas as pd
 import pandas_ta as ta
 
-from mcp_server.data import get_historical_data, get_live_price
+from core.data import get_historical_data, get_live_price
 
 logger = logging.getLogger(__name__)
 

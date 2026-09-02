@@ -194,19 +194,19 @@ def register_tier1_tools(mcp: Any) -> list[str]:
 
 def register_tier2_tools(mcp: Any) -> list[str]:
     """Register Market Regime, Breadth, Screeners, and Technical Analysis tools."""
-    from mcp_server.screener import (
+    from core.screener import (
         run_stock_screen as _run_stock_screen,
         run_custom_screen as _run_custom_screen,
     )
-    from mcp_server.data import get_historical_data as _get_historical_data
-    from mcp_server.technicals import analyze_technicals as _analyze_technicals
+    from core.data import get_historical_data as _get_historical_data
+    from core.technicals import analyze_technicals as _analyze_technicals
     from mcp_server.tv_analysis import get_tv_analysis as _get_tv_analysis
-    from mcp_server.charts import generate_chart as _generate_chart
+    from core.charts import generate_chart as _generate_chart
     from mcp_server.alpha_cards import generate_alpha_card as _generate_alpha_card
-    from mcp_server.vcp_screener import screen_vcp as _screen_vcp
+    from core.vcp_screener import screen_vcp as _screen_vcp
     from mcp_server.pead_screener import screen_pead as _screen_pead
     from mcp_server.canslim_screener import screen_canslim as _screen_canslim
-    from mcp_server.market_top import detect_market_top as _detect_market_top
+    from core.market_top import detect_market_top as _detect_market_top
     from mcp_server.ftd_detector import detect_ftd as _detect_ftd
     from mcp_server.pair_trade import analyze_pair as _analyze_pair
     from mcp_server.scenario import (
@@ -215,7 +215,7 @@ def register_tier2_tools(mcp: Any) -> list[str]:
     )
     from mcp_server.exposure import get_exposure_recommendation as _get_exposure_recommendation
     from mcp_server.environment import get_market_environment as _get_market_environment
-    from mcp_server.macro_regime import detect_macro_regime as _detect_macro_regime
+    from core.macro_regime import detect_macro_regime as _detect_macro_regime
     from mcp_server.breadth import analyze_breadth as _analyze_breadth
     from mcp_server.uptrend import analyze_uptrend_participation as _analyze_uptrend_participation
     from mcp_server.themes import detect_themes as _detect_themes
@@ -448,7 +448,7 @@ def register_tier2_tools(mcp: Any) -> list[str]:
 
 def register_tier3_tools(mcp: Any) -> list[str]:
     """Register VoPR Options Analytics tools."""
-    from mcp_server.options import (
+    from core.options import (
         analyze_options_setup as _analyze_options_setup,
         find_best_to_sell as _find_best_to_sell,
         find_best_to_buy as _find_best_to_buy,

@@ -34,7 +34,7 @@ def _build_levels_of():
     a stale level. That is the specific failure this whole module exists to
     prevent, so do not add a fallback here.
     """
-    from td import TDPro
+    from core.td import TDPro
 
     client = TDPro()
 
@@ -63,7 +63,7 @@ def build_watcher(start: bool = True):
 
     import alerts as alerts_mod
     import notify
-    import quotes as quotes_mod
+    import core.quotes as quotes_mod
     import watcher as watcher_mod
 
     store = alerts_mod.AlertStore()
@@ -74,8 +74,8 @@ def build_watcher(start: bool = True):
     wb_data = None
     portfolio_fn = None
     try:
-        from wb import Webull
-        from md import Market
+        from core.wb import Webull
+        from core.md import Market
 
         wb = Webull()
         if wb.configured:
@@ -84,7 +84,7 @@ def build_watcher(start: bool = True):
     except Exception as e:
         logger.warning(f"Alert watcher: Webull unavailable, quotes will fall back to TDPro: {e}")
 
-    from td import TDPro
+    from core.td import TDPro
 
     q = quotes_mod.Quotes(
         wb_data=wb_data,

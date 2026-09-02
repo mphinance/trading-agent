@@ -292,7 +292,7 @@ class Streams:
         if self._started:
             self.retarget(symbols)
             return
-        from wb import credentials
+        from core.wb import credentials
 
         key, secret, region = credentials()
         self.quotes = QuoteStream(key, secret, region)

@@ -240,7 +240,7 @@ class PositionMonitor:
         """Fetch open positions from Webull portfolio."""
         positions = []
         try:
-            from wb import Webull
+            from core.wb import Webull
             wb = Webull()
             if wb.configured:
                 raw_portfolio = await asyncio.to_thread(wb.portfolio)
@@ -386,7 +386,7 @@ class PositionMonitor:
         }
 
         try:
-            from wb import Webull
+            from core.wb import Webull
             wb = Webull()
 
             def _fetch_bp_and_account():
@@ -480,7 +480,7 @@ class PositionMonitor:
         spy_spot = None
         spy_flip = None
         try:
-            from td import TDPro
+            from core.td import TDPro
             td = TDPro()
             if td.configured:
                 spy_levels = await asyncio.to_thread(td.levels, "SPY")
@@ -502,7 +502,7 @@ class PositionMonitor:
             if p.asset_type == "OPTION" and p.underlying_stop_type == "underlying_level"
         }
         if swing_underlyings:
-            from mcp_server.technicals import analyze_technicals
+            from core.technicals import analyze_technicals
             for u in swing_underlyings:
                 try:
                     res = await analyze_technicals(ticker=u, period="1y")

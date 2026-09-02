@@ -11,7 +11,7 @@ credential on stdout is a credential on camera.
 
 from __future__ import annotations
 
-import wb
+import core.wb as wb
 
 
 class _FakeApiClient:

@@ -48,7 +48,7 @@ async def get_sec_filings(
     `forms` narrows to specific form types, e.g. ["8-K", "10-Q"]. Every row
     carries `source_url` pointing at the primary document.
     """
-    import edgar
+    import core.edgar as edgar
 
     try:
         df = edgar.filings(ticker, months=months, forms=forms)
@@ -70,7 +70,7 @@ async def get_sec_financials(
     (net_income minus operating_cash_flow — positive means reported profit exceeds
     cash actually generated).
     """
-    import edgar
+    import core.edgar as edgar
 
     try:
         wide = edgar.financials(ticker, periods=periods, annual=annual)
@@ -92,7 +92,7 @@ async def get_shares_outstanding(ticker: str) -> dict[str, Any]:
     derived figure. Flags (rather than silently returning) an implausible diluted
     count, including the "reported in thousands" mixup seen in the wild.
     """
-    import edgar
+    import core.edgar as edgar
 
     try:
         return {"ticker": ticker.upper(), **edgar.shares_outstanding(ticker)}
@@ -108,7 +108,7 @@ async def get_stakes_held(ticker: str, months: int = 24) -> dict[str, Any]:
     indexes a 13D/G under both parties and this keeps only the filings where the
     ticker itself is the reporting person, not the issuer.
     """
-    import edgar
+    import core.edgar as edgar
 
     try:
         df = edgar.stakes_held(ticker, months=months)

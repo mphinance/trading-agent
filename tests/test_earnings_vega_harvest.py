@@ -55,7 +55,7 @@ def _bmo_entry(symbol="NIO", earnings_date="2026-09-01", expected_move=4.23):
 
 def test_fetch_upcoming_earnings_returns_list_when_configured():
     from unittest.mock import MagicMock
-    with patch("td.TDPro") as mock_td_cls:
+    with patch("core.td.TDPro") as mock_td_cls:
         mock_td = MagicMock()
         mock_td.configured = True
         mock_td.call.return_value = {"earnings": [_amc_entry()]}
@@ -68,14 +68,14 @@ def test_fetch_upcoming_earnings_returns_list_when_configured():
 
 def test_fetch_upcoming_earnings_returns_none_when_unconfigured():
     from unittest.mock import MagicMock
-    with patch("td.TDPro") as mock_td_cls:
+    with patch("core.td.TDPro") as mock_td_cls:
         mock_td_cls.return_value = MagicMock(configured=False)
         assert _fetch_upcoming_earnings() is None
 
 
 def test_fetch_upcoming_earnings_returns_none_on_malformed_response():
     from unittest.mock import MagicMock
-    with patch("td.TDPro") as mock_td_cls:
+    with patch("core.td.TDPro") as mock_td_cls:
         mock_td = MagicMock()
         mock_td.configured = True
         mock_td.call.return_value = "not a dict"

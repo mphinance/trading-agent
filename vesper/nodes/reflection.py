@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List
 
 from vesper.state import TradingState
-from mcp_server.conviction import log_conviction, resolve_convictions
+from core.conviction import log_conviction, resolve_convictions
 
 logger = logging.getLogger(__name__)
 

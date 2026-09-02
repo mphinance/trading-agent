@@ -281,7 +281,7 @@ async def test_execute_exit_cascade_live_places_guarded_order(monkeypatch):
     mock_wb.portfolio.return_value = {"totals": {"buying_power": 100000.0}}
     mock_wb.trade.order_v2.place_order.return_value = {"data": {"order_id": "ORD123"}}
 
-    with patch("wb.Webull", return_value=mock_wb):
+    with patch("core.wb.Webull", return_value=mock_wb):
         res = await monitor.execute_exit_cascade(trigger, live=True)
 
     assert res.status == "SUBMITTED"
@@ -304,7 +304,7 @@ async def test_execute_exit_cascade_live_blocked_by_kill_switch(monkeypatch):
     )
 
     mock_wb = MagicMock()
-    with patch("wb.Webull", return_value=mock_wb):
+    with patch("core.wb.Webull", return_value=mock_wb):
         res = await monitor.execute_exit_cascade(trigger, live=True)
 
     assert res.status == "BLOCKED_BY_GUARDRAIL"
@@ -479,7 +479,7 @@ async def test_execute_exit_cascade_live_submitted_records_order_outcome(monkeyp
     mock_wb.portfolio.return_value = {"totals": {"buying_power": 100000.0}}
     mock_wb.trade.order_v2.place_order.return_value = {"data": {"order_id": "ORD123"}}
 
-    with patch("wb.Webull", return_value=mock_wb):
+    with patch("core.wb.Webull", return_value=mock_wb):
         await monitor.execute_exit_cascade(trigger, live=True)
 
     snap = metrics.snapshot()["order_outcomes"]["live"]["webull"]
@@ -494,7 +494,7 @@ async def test_execute_exit_cascade_blocked_by_kill_switch_records_order_outcome
     trigger = ExitTrigger(position=pos, reason="STOP_LOSS", sell_quantity=10, est_proceeds=550.0, pnl_pct=-0.45)
 
     mock_wb = MagicMock()
-    with patch("wb.Webull", return_value=mock_wb):
+    with patch("core.wb.Webull", return_value=mock_wb):
         await monitor.execute_exit_cascade(trigger, live=True)
 
     snap = metrics.snapshot()["order_outcomes"]["live"]["webull"]
@@ -508,7 +508,7 @@ async def test_execute_exit_cascade_broker_exception_records_failed_outcome(monk
     pos = MonitoredPosition(symbol="NVDA", quantity=10, entry_price=100.0, current_price=160.0)
     trigger = ExitTrigger(position=pos, reason="TAKE_PROFIT", sell_quantity=10, est_proceeds=1600.0, pnl_pct=0.60)
 
-    with patch("wb.Webull", side_effect=RuntimeError("connection refused")):
+    with patch("core.wb.Webull", side_effect=RuntimeError("connection refused")):
         res = await monitor.execute_exit_cascade(trigger, live=True)
 
     assert res.status == "FAILED"

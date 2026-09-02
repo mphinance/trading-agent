@@ -46,7 +46,7 @@ async def test_scanner_node_promotes_directional_flow_candidate(empty_screeners)
         "audit_trail": [],
     }
 
-    with patch("td.TDPro", return_value=mock_td):
+    with patch("core.td.TDPro", return_value=mock_td):
         res = await scanner_node(state)
 
     discovered = [c.ticker for c in res["candidates"]]
@@ -94,7 +94,7 @@ async def test_scanner_node_filters_out_hedge_flow(empty_screeners):
         "audit_trail": [],
     }
 
-    with patch("td.TDPro", return_value=mock_td):
+    with patch("core.td.TDPro", return_value=mock_td):
         res = await scanner_node(state)
 
     # SPY was filtered out of the unusual flow step
@@ -115,7 +115,7 @@ async def test_scanner_node_handles_unconfigured_tdpro(empty_screeners):
         "audit_trail": [],
     }
 
-    with patch("td.TDPro", return_value=mock_td):
+    with patch("core.td.TDPro", return_value=mock_td):
         res = await scanner_node(state)
 
     assert len(res["candidates"]) == 0

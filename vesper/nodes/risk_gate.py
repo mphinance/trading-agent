@@ -26,7 +26,7 @@ def _count_open_positions_live() -> tuple[int, float]:
     mechanism that doesn't exist yet, not a guess bolted onto this function.
     """
     try:
-        from wb import Webull
+        from core.wb import Webull
 
         wb = Webull()
         if not wb.configured:
@@ -80,7 +80,7 @@ def _sector_notional_live() -> Dict[str, float]:
     assumed OCC root symbol. Same honesty pattern as the existing
     wheel-stock live-mode gap in _count_open_positions_live above.
     """
-    from wb import Webull
+    from core.wb import Webull
     from vesper.sector import get_sector
 
     wb = Webull()

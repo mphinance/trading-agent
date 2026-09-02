@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-import quotes as Q
+import core.quotes as Q
 
 
 # These fakes stand in for `md.Market`, which is what Quotes takes as

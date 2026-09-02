@@ -34,7 +34,7 @@ def clean_paper_ledger(tmp_path, monkeypatch):
 @pytest.fixture
 def mock_wb():
     """Mock Webull client with valid credentials, account list, and buying power."""
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         wb = MagicMock()
         wb.configured = True
         wb.trade.account_v2.get_account_list.return_value = {

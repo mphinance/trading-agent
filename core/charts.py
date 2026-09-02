@@ -20,7 +20,7 @@ matplotlib.use("Agg")  # Headless rendering — must be set before importing pyp
 import mplfinance as mpf  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from mcp_server.data import get_historical_data  # noqa: E402
+from core.data import get_historical_data  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

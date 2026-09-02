@@ -41,7 +41,7 @@ async def _build_chart_image(ticker: str) -> Optional[bytes]:
     (5m data is thin outside market hours, and empty for a symbol that has not
     traded today), so the common weekend/overnight case still gets context.
     """
-    from mcp_server.charts import generate_chart
+    from core.charts import generate_chart
 
     pngs: list[bytes] = []
     for period, interval, label in _CHART_PANELS:

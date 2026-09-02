@@ -57,7 +57,7 @@ async def start_trade_events(wake: asyncio.Event) -> bool:
 
     try:
         import stream as stream_mod
-        from wb import Webull, credentials
+        from core.wb import Webull, credentials
 
         wb = Webull()
         if not wb.configured:

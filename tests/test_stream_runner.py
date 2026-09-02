@@ -29,7 +29,7 @@ def _reset_module_state(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_returns_false_and_does_not_raise_when_webull_unconfigured():
-    with patch("wb.Webull", return_value=MagicMock(configured=False)):
+    with patch("core.wb.Webull", return_value=MagicMock(configured=False)):
         assert await sr.start_trade_events(asyncio.Event()) is False
 
 
@@ -51,8 +51,8 @@ async def test_returns_false_and_does_not_raise_when_stream_import_explodes():
 async def test_returns_false_when_account_has_no_ids():
     wb = MagicMock(configured=True)
     wb.account_ids.return_value = []
-    with patch("wb.Webull", return_value=wb), \
-         patch("wb.credentials", return_value=("k", "s", "us")):
+    with patch("core.wb.Webull", return_value=wb), \
+         patch("core.wb.credentials", return_value=("k", "s", "us")):
         assert await sr.start_trade_events(asyncio.Event()) is False
 
 
@@ -65,8 +65,8 @@ async def _start_with_fake_bus(wake, queue):
     fake_stream.EventStream.return_value = MagicMock(connected=True, error=None)
 
     with patch.dict("sys.modules", {"stream": fake_stream}), \
-         patch("wb.Webull", return_value=wb), \
-         patch("wb.credentials", return_value=("k", "s", "us")):
+         patch("core.wb.Webull", return_value=wb), \
+         patch("core.wb.credentials", return_value=("k", "s", "us")):
         ok = await sr.start_trade_events(wake)
     return ok
 

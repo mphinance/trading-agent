@@ -308,7 +308,7 @@ async def test_risk_gate_live_mode_counts_equity_and_skips_option_with_audit_not
         "session_id": "sess-sector-live", "mode": "live",
         "proposals": [new_prop], "audit_trail": [],
     }
-    with patch("wb.Webull", return_value=mock_wb), \
+    with patch("core.wb.Webull", return_value=mock_wb), \
          patch("vesper.llm.is_llm_enabled", return_value=False), \
          patch("vesper.sector.get_sector", return_value="Technology"):
         res = await risk_gate_node(state)
@@ -338,7 +338,7 @@ async def test_risk_gate_live_mode_equity_only_under_cap_passes():
         "session_id": "sess-sector-live-ok", "mode": "live",
         "proposals": [new_prop], "audit_trail": [],
     }
-    with patch("wb.Webull", return_value=mock_wb), \
+    with patch("core.wb.Webull", return_value=mock_wb), \
          patch("vesper.llm.is_llm_enabled", return_value=False), \
          patch("vesper.sector.get_sector", return_value="Technology"):
         res = await risk_gate_node(state)

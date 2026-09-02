@@ -27,7 +27,7 @@ async def generate_morning_plan() -> Dict[str, Any]:
     health_score = 2.0
     health_label = "ELEVATED"
     try:
-        from td import TDPro
+        from core.td import TDPro
         td = TDPro()
         if td.configured:
             mhealth = await asyncio.to_thread(td.get_market_health)
@@ -51,7 +51,7 @@ async def generate_morning_plan() -> Dict[str, Any]:
     qqq_flip = None
     
     try:
-        from td import TDPro
+        from core.td import TDPro
         td = TDPro()
         if td.configured:
             spy_levels = await asyncio.to_thread(td.levels, "SPY")

@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 from vesper.state import TradingState, TechnicalAudit, OptionAudit
-from mcp_server.technicals import analyze_technicals
-from mcp_server.options import find_best_to_buy, analyze_options_setup
+from core.technicals import analyze_technicals
+from core.options import find_best_to_buy, analyze_options_setup
 
 logger = logging.getLogger(__name__)
 

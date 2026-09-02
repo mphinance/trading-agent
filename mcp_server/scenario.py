@@ -7,7 +7,7 @@ import logging
 import pandas as pd
 from typing import Any
 from mcp_server.schema import SignalResult
-from mcp_server.technicals import analyze_technicals
+from core.technicals import analyze_technicals
 from mcp_server.fundamentals import get_fundamentals
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ async def model_price_distribution(
     """Compute statistical price targets using historical volatility."""
     ticker = ticker.strip().upper()
     try:
-        from mcp_server.data import get_historical_data
+        from core.data import get_historical_data
         df_raw = await get_historical_data(ticker, period="1y")
         if not df_raw:
             return SignalResult.error_msg("No historical data found.")

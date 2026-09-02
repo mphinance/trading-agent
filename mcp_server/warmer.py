@@ -288,7 +288,7 @@ async def warm_yfinance_session() -> None:
 async def _warm_loop() -> None:
     """Periodically pre-fetch technicals for popular tickers + check alpha signals."""
     from mcp_server.cache import is_market_open
-    from mcp_server.technicals import analyze_technicals
+    from core.technicals import analyze_technicals
 
     # Wait a bit after startup before first warm cycle
     await asyncio.sleep(10)
@@ -352,7 +352,7 @@ async def _warm_loop() -> None:
 async def _warm_ticker(ticker: str) -> dict | None:
     """Warm cache for a single ticker. Returns technicals data dict on success."""
     try:
-        from mcp_server.technicals import analyze_technicals
+        from core.technicals import analyze_technicals
         result = await analyze_technicals(ticker)
 
         # Extract the data dict for alpha signal checking

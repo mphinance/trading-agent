@@ -8,8 +8,8 @@ import logging
 import pandas as pd
 from typing import Any
 from mcp_server.schema import SignalResult
-from mcp_server.data import get_historical_data
-from mcp_server.screener import run_stock_screen, run_custom_screen
+from core.data import get_historical_data
+from core.screener import run_stock_screen, run_custom_screen
 
 logger = logging.getLogger(__name__)
 

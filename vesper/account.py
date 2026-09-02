@@ -20,7 +20,7 @@ def fetch_live_equity() -> float:
     """Blocking (constructs its own Webull client and reads NLV) — callers on
     an async node must wrap this in asyncio.to_thread."""
     try:
-        from wb import Webull
+        from core.wb import Webull
 
         wb = Webull()
         if not wb.configured:
@@ -43,7 +43,7 @@ def fetch_live_buying_power() -> Optional[float]:
     line, not substitute a guess.
     """
     try:
-        from wb import Webull
+        from core.wb import Webull
 
         wb = Webull()
         if not wb.configured:

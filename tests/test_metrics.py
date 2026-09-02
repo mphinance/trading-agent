@@ -310,7 +310,7 @@ def test_execution_result_shaped_list_aggregates_like_runner_and_monitor_will():
 
 
 def _build_webull(monkeypatch):
-    import wb
+    import core.wb as wb
 
     monkeypatch.setattr(wb, "ApiClient", lambda *a, **k: type("C", (), {"add_endpoint": lambda *a, **k: None})())
     monkeypatch.setattr(wb, "TradeClient", lambda c: object())
@@ -374,7 +374,7 @@ def test_retrying_records_rate_limited_on_429_then_ok_on_eventual_success(monkey
 
 
 def test_market_cached_records_market_data_broker_call_on_miss_and_hit(monkeypatch):
-    import md
+    import core.md as md
     from vesper.metrics import metrics as ms
 
     market = md.Market.__new__(md.Market)  # skip __init__'s webull-client wiring
@@ -398,7 +398,7 @@ def test_market_cached_records_market_data_broker_call_on_miss_and_hit(monkeypat
 
 
 def test_market_cached_records_error_on_raising_fn(monkeypatch):
-    import md
+    import core.md as md
     from vesper.metrics import metrics as ms
     import threading
 

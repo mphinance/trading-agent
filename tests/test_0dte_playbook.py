@@ -60,12 +60,12 @@ def test_fetch_0dte_option_quote_picks_today_contract_only():
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     future_str = "2029-12-31"
 
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock()
         mock_wb.configured = True
         mock_wb_cls.return_value = mock_wb
 
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
             mock_mkt.option_chain.return_value = [
                 {
@@ -93,12 +93,12 @@ def test_fetch_0dte_option_quote_returns_none_when_no_today_expiry():
     """Verify returns None when no contracts in the chain expire today (never fall back to later expiry)."""
     future_str = "2029-12-31"
 
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock()
         mock_wb.configured = True
         mock_wb_cls.return_value = mock_wb
 
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
             mock_mkt.option_chain.return_value = [
                 {
@@ -115,7 +115,7 @@ def test_fetch_0dte_option_quote_returns_none_when_no_today_expiry():
 
 def test_fetch_0dte_option_quote_unconfigured():
     """Verify returns None when Webull is unconfigured."""
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock()
         mock_wb.configured = False
         mock_wb_cls.return_value = mock_wb
@@ -219,7 +219,7 @@ async def test_0dte_playbook_skips_when_live_quote_unavailable():
 def test_select_0dte_wall_strike_picks_highest_oi_on_the_bullish_side():
     from vesper.nodes.playbooks import _select_0dte_wall_strike
 
-    with patch("td.TDPro") as mock_td_cls:
+    with patch("core.td.TDPro") as mock_td_cls:
         mock_td = MagicMock()
         mock_td.configured = True
         mock_td.levels.return_value = {
@@ -238,7 +238,7 @@ def test_select_0dte_wall_strike_picks_highest_oi_on_the_bullish_side():
 def test_select_0dte_wall_strike_returns_none_when_no_wall_on_side():
     from vesper.nodes.playbooks import _select_0dte_wall_strike
 
-    with patch("td.TDPro") as mock_td_cls:
+    with patch("core.td.TDPro") as mock_td_cls:
         mock_td = MagicMock()
         mock_td.configured = True
         mock_td.levels.return_value = {"walls": [{"strike": 555.0, "side": "below", "put_oi": 50000}]}
@@ -251,7 +251,7 @@ def test_select_0dte_wall_strike_returns_none_when_no_wall_on_side():
 def test_select_0dte_wall_strike_returns_none_when_tdpro_unconfigured():
     from vesper.nodes.playbooks import _select_0dte_wall_strike
 
-    with patch("td.TDPro") as mock_td_cls:
+    with patch("core.td.TDPro") as mock_td_cls:
         mock_td_cls.return_value = MagicMock(configured=False)
         assert _select_0dte_wall_strike("SPY", is_bullish=True) is None
 
@@ -259,7 +259,7 @@ def test_select_0dte_wall_strike_returns_none_when_tdpro_unconfigured():
 def test_select_0dte_wall_strike_returns_none_on_levels_error():
     from vesper.nodes.playbooks import _select_0dte_wall_strike
 
-    with patch("td.TDPro") as mock_td_cls:
+    with patch("core.td.TDPro") as mock_td_cls:
         mock_td = MagicMock()
         mock_td.configured = True
         mock_td.levels.return_value = {"error": "TD_API_KEY not set"}
@@ -270,12 +270,12 @@ def test_select_0dte_wall_strike_returns_none_on_levels_error():
 # ── Bid/ask spread rejection ─────────────────────────────────────────────────
 
 def test_fetch_0dte_option_quote_rejects_wide_spread():
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock(configured=True)
         mock_wb_cls.return_value = mock_wb
 
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
             mock_mkt.option_chain.return_value = [
                 {"symbol": "SPY_TODAY_CALL", "strike_price": 561.0, "expire_date": today_str},
@@ -292,12 +292,12 @@ def test_fetch_0dte_option_quote_rejects_wide_spread():
 
 
 def test_fetch_0dte_option_quote_accepts_tight_spread():
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock(configured=True)
         mock_wb_cls.return_value = mock_wb
 
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
             mock_mkt.option_chain.return_value = [
                 {"symbol": "SPY_TODAY_CALL", "strike_price": 561.0, "expire_date": today_str},
@@ -334,11 +334,11 @@ def test_select_0dte_delta_strike_picks_closest_to_030():
     strikes = [561.0, 562.0, 563.0, 564.0, 565.0, 566.0, 567.0, 568.0]
 
     with patch("vesper.nodes.playbooks._time_to_close_years", return_value=2 / 24 / 365):
-        with patch("wb.Webull") as mock_wb_cls:
+        with patch("core.wb.Webull") as mock_wb_cls:
             mock_wb = MagicMock(configured=True)
             mock_wb_cls.return_value = mock_wb
 
-            with patch("md.Market") as mock_mkt_cls:
+            with patch("core.md.Market") as mock_mkt_cls:
                 mock_mkt = MagicMock()
                 mock_mkt.option_chain.return_value = _mock_today_chain(strikes, "CALL")
                 mock_mkt_cls.return_value = mock_mkt
@@ -355,11 +355,11 @@ def test_select_0dte_delta_strike_put_side_uses_negative_delta():
     strikes = [552.0, 553.0, 554.0, 555.0, 556.0, 557.0, 558.0, 559.0]
 
     with patch("vesper.nodes.playbooks._time_to_close_years", return_value=2 / 24 / 365):
-        with patch("wb.Webull") as mock_wb_cls:
+        with patch("core.wb.Webull") as mock_wb_cls:
             mock_wb = MagicMock(configured=True)
             mock_wb_cls.return_value = mock_wb
 
-            with patch("md.Market") as mock_mkt_cls:
+            with patch("core.md.Market") as mock_mkt_cls:
                 mock_mkt = MagicMock()
                 mock_mkt.option_chain.return_value = _mock_today_chain(strikes, "PUT")
                 mock_mkt_cls.return_value = mock_mkt
@@ -370,11 +370,11 @@ def test_select_0dte_delta_strike_put_side_uses_negative_delta():
 
 
 def test_select_0dte_delta_strike_returns_none_when_no_today_expiry():
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock(configured=True)
         mock_wb_cls.return_value = mock_wb
 
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
             mock_mkt.option_chain.return_value = [
                 {"symbol": "SPY_FUTURE_CALL", "strike_price": 565.0, "expire_date": "2029-12-31"},
@@ -387,7 +387,7 @@ def test_select_0dte_delta_strike_returns_none_when_no_today_expiry():
 
 
 def test_select_0dte_delta_strike_returns_none_when_wb_unconfigured():
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb_cls.return_value = MagicMock(configured=False)
         strike = _select_0dte_delta_strike("SPY", spot=560.0, is_bullish=True, iv_pct=85.0)
 

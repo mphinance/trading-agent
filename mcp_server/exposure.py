@@ -8,7 +8,7 @@ import logging
 from typing import Any
 from mcp_server.schema import SignalResult
 from mcp_server.macro import get_macro_context
-from mcp_server.market_top import detect_market_top
+from core.market_top import detect_market_top
 from mcp_server.ftd_detector import detect_ftd
 
 logger = logging.getLogger(__name__)

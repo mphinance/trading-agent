@@ -240,7 +240,7 @@ async def test_discord_adapter_gateway_active_routing():
     mock_bot.send_proposal_card = AsyncMock(return_value="msg-gw-999")
 
     with patch("vesper.bot.discord_gateway.get_active_gateway_bot", return_value=mock_bot):
-        with patch("mcp_server.charts.generate_chart", side_effect=Exception("no chart")):
+        with patch("core.charts.generate_chart", side_effect=Exception("no chart")):
             msg_id = await adapter.send_proposal_card(card)
             assert msg_id == "msg-gw-999"
             mock_bot.send_proposal_card.assert_called_once()
@@ -265,7 +265,7 @@ async def test_discord_adapter_bot_rest_fallback():
     mock_resp.json.return_value = {"id": "msg-rest-888"}
 
     with patch("vesper.bot.discord_gateway.get_active_gateway_bot", return_value=None):
-        with patch("mcp_server.charts.generate_chart", side_effect=Exception("no chart")):
+        with patch("core.charts.generate_chart", side_effect=Exception("no chart")):
             with patch.object(adapter._client, "post", new_callable=AsyncMock) as mock_post:
                 mock_post.return_value = mock_resp
                 msg_id = await adapter.send_proposal_card(card)

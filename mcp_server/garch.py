@@ -157,8 +157,8 @@ async def calibrate_blend(
         dict with optimal_weight, results per ticker, and MAE comparison.
     """
     import asyncio
-    from mcp_server.data import get_historical_data
-    from mcp_server.options import _composite_rv, _to_ohlcv_df
+    from core.data import get_historical_data
+    from core.options import _composite_rv, _to_ohlcv_df
 
     if not tickers:
         # Diverse set: mega-cap, mid-cap, volatile, stable, ETF

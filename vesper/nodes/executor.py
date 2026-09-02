@@ -205,7 +205,7 @@ async def _execute_webull(prop: OrderProposal) -> ExecutionResult:
     if prop.legs:
         return await _execute_webull_multileg(prop)
 
-    from wb import Webull
+    from core.wb import Webull
 
     def _fetch_account_and_place(payload: Optional[dict] = None):
         """Runs entirely on a worker thread: constructs the (cheap, local)
@@ -286,7 +286,7 @@ async def _execute_webull_multileg(prop: OrderProposal) -> ExecutionResult:
     accepted by preview_option). Anything else is refused below rather than
     guessed at -- see the two checks.
     """
-    from wb import Webull
+    from core.wb import Webull
 
     # Refusal 1: mixed equity+option combos (Thega's 100 shares + call + puts).
     # place_option is an options endpoint; whether it accepts an EQUITY leg at

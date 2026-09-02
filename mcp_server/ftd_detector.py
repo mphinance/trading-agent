@@ -12,7 +12,7 @@ import pandas as pd
 
 from mcp_server.cache import smart_cache
 from mcp_server.schema import SignalResult
-from mcp_server.data import get_historical_data
+from core.data import get_historical_data
 
 logger = logging.getLogger(__name__)
 

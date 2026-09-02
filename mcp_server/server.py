@@ -28,16 +28,16 @@ def _out(res: Any) -> Any:
 
 
 # ── Tool imports ──────────────────────────────────────────────────────────────
-from mcp_server.screener import run_stock_screen as _run_stock_screen
-from mcp_server.screener import run_custom_screen as _run_custom_screen
-from mcp_server.data import get_historical_data as _get_historical_data
-from mcp_server.technicals import analyze_technicals as _analyze_technicals
-from mcp_server.charts import generate_chart as _generate_chart
+from core.screener import run_stock_screen as _run_stock_screen
+from core.screener import run_custom_screen as _run_custom_screen
+from core.data import get_historical_data as _get_historical_data
+from core.technicals import analyze_technicals as _analyze_technicals
+from core.charts import generate_chart as _generate_chart
 from mcp_server.news import (
     fetch_ticker_news as _fetch_ticker_news,
     extract_article_text as _extract_article_text,
 )
-from mcp_server.options import (
+from core.options import (
     analyze_options_setup as _analyze_options_setup,
     find_best_to_sell as _find_best_to_sell,
     find_best_to_buy as _find_best_to_buy,
@@ -52,7 +52,7 @@ from mcp_server.edgar_tools import (
     get_stakes_held as _get_stakes_held,
 )
 from mcp_server.knowledge import search_knowledge as _search_knowledge
-from mcp_server.conviction import (
+from core.conviction import (
     log_conviction as _log_conviction,
     get_track_record as _get_track_record,
 )
@@ -77,8 +77,8 @@ from mcp_server.traderdaddy import (
     get_earnings_flow as _get_earnings_flow,
 )
 from mcp_server.position_sizer import calculate_position_size as _calculate_position_size
-from mcp_server.vcp_screener import screen_vcp as _screen_vcp
-from mcp_server.market_top import detect_market_top as _detect_market_top
+from core.vcp_screener import screen_vcp as _screen_vcp
+from core.market_top import detect_market_top as _detect_market_top
 from mcp_server.ftd_detector import detect_ftd as _detect_ftd
 from mcp_server.pead_screener import screen_pead as _screen_pead
 from mcp_server.pair_trade import analyze_pair as _analyze_pair
@@ -86,7 +86,7 @@ from mcp_server.canslim_screener import screen_canslim as _screen_canslim
 from mcp_server.scenario import analyze_scenario as _analyze_scenario, model_price_distribution as _model_price_distribution
 from mcp_server.exposure import get_exposure_recommendation as _get_exposure_recommendation
 from mcp_server.environment import get_market_environment as _get_market_environment
-from mcp_server.macro_regime import detect_macro_regime as _detect_macro_regime
+from core.macro_regime import detect_macro_regime as _detect_macro_regime
 from mcp_server.breadth import analyze_breadth as _analyze_breadth
 from mcp_server.uptrend import analyze_uptrend_participation as _analyze_uptrend_participation
 from mcp_server.themes import detect_themes as _detect_themes

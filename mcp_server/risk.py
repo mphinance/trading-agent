@@ -48,7 +48,7 @@ async def check_risk_flags(
 
     # --- 2. VIX regime ---
     try:
-        from mcp_server.data import get_live_price
+        from core.data import get_live_price
         vix = await get_live_price("^VIX")
         if vix >= 35:
             flags.append(f"🔴 VIX at {vix:.1f} — panic regime. Premium is rich but risk of gap moves is extreme")

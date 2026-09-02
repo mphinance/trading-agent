@@ -144,7 +144,7 @@ async def scan_watchlist(max_tickers: int = 20) -> dict[str, Any]:
     Returns:
         Dict with scan results, alerts, and timing.
     """
-    from mcp_server.technicals import analyze_technicals
+    from core.technicals import analyze_technicals
 
     tickers = _load_watchlist()[:max_tickers]
     if not tickers:
@@ -197,7 +197,7 @@ async def scan_watchlist(max_tickers: int = 20) -> dict[str, Any]:
 
 async def _scan_ticker(ticker: str) -> dict[str, Any]:
     """Scan a single ticker for actionable signals."""
-    from mcp_server.technicals import analyze_technicals
+    from core.technicals import analyze_technicals
 
     try:
         tech = await analyze_technicals(ticker)

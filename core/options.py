@@ -23,7 +23,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from mcp_server.data import get_historical_data, get_live_price, get_option_expirations
+from core.data import get_historical_data, get_live_price, get_option_expirations
 from mcp_server.risk import check_risk_flags
 from mcp_server.schema import SignalResult
 from mcp_server.options_greeks import (
@@ -605,7 +605,7 @@ async def find_best_to_buy(
 ) -> SignalResult:
     """Find the optimal directional contract to BUY based on technicals."""
     try:
-        from mcp_server.technicals import analyze_technicals
+        from core.technicals import analyze_technicals
 
         ticker = ticker.strip().upper()
 
@@ -836,7 +836,7 @@ async def sweep_setups(
 ) -> SignalResult:
     """Scan multiple tickers and rank the best options opportunities."""
     try:
-        from mcp_server.screener import run_stock_screen
+        from core.screener import run_stock_screen
 
         max_tickers = min(max_tickers, 10)
 

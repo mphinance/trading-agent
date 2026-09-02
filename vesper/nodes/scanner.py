@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List
 
 from vesper.state import TradingState, Candidate
-from mcp_server.screener import run_stock_screen
-from mcp_server.vcp_screener import screen_vcp
+from core.screener import run_stock_screen
+from core.vcp_screener import screen_vcp
 from tickertrace_mcp import get_briefing
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ async def scanner_node(state: TradingState) -> Dict[str, Any]:
     # Promotes DIRECTIONAL prints to Candidate; filters out HEDGE prints (dealer/institutional rebalancing).
     if playbook in ("unusual_flow", "flow", "options_flow", "all"):
         try:
-            from td import TDPro
+            from core.td import TDPro
             from vesper.flow_classifier import classify_unusual_activity_record
 
             td = TDPro()
@@ -192,7 +192,7 @@ async def scanner_node(state: TradingState) -> Dict[str, Any]:
     }
     for preset in _SCREENER_FOR_PLAYBOOK.get(playbook, []):
         try:
-            from td import TDPro
+            from core.td import TDPro
 
             client = TDPro()
             if not client.configured:
@@ -233,7 +233,7 @@ async def scanner_node(state: TradingState) -> Dict[str, Any]:
     # feed says so itself via `session`, so it is not gated on a clock here.
     if playbook in ("all", "momentum_squeeze", "gappers"):
         try:
-            from td import TDPro
+            from core.td import TDPro
 
             client = TDPro()
             if client.configured:
@@ -268,7 +268,7 @@ async def scanner_node(state: TradingState) -> Dict[str, Any]:
     # 7. Bounce signals — TDPro's own detector, keyed `ticker` not `symbol`.
     if playbook in ("all", "momentum_squeeze", "bounce"):
         try:
-            from td import TDPro
+            from core.td import TDPro
 
             client = TDPro()
             if client.configured:

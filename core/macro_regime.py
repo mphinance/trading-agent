@@ -7,7 +7,7 @@ import logging
 import pandas as pd
 from typing import Any
 from mcp_server.schema import SignalResult
-from mcp_server.data import get_historical_data
+from core.data import get_historical_data
 
 logger = logging.getLogger(__name__)
 

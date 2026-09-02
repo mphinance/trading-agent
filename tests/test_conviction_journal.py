@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import pytest
 
-from mcp_server.conviction import (
+from core.conviction import (
     log_conviction,
     _load_journal,
     _save_journal,
@@ -25,8 +25,8 @@ def temp_journal(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("mcp_server.conviction._DATA_DIR", data_dir)
-    monkeypatch.setattr("mcp_server.conviction._JOURNAL_PATH", journal_file)
+    monkeypatch.setattr("core.conviction._DATA_DIR", data_dir)
+    monkeypatch.setattr("core.conviction._JOURNAL_PATH", journal_file)
     return journal_file
 
 
@@ -289,7 +289,7 @@ async def test_reflection_node_captures_all_unexecuted_tiers(temp_journal):
 async def test_reflection_node_auto_resolves_mature_convictions(temp_journal, monkeypatch):
     """Verify reflection_node triggers auto-resolution for historical convictions."""
     from datetime import datetime, timezone, timedelta
-    from mcp_server.conviction import _fetch_price
+    from core.conviction import _fetch_price
 
     # Seed an entry from 2 days ago
     past_date = datetime.now(timezone.utc) - timedelta(days=2)
@@ -313,7 +313,7 @@ async def test_reflection_node_auto_resolves_mature_convictions(temp_journal, mo
     async def mock_price(ticker):
         return 205.00
 
-    monkeypatch.setattr("mcp_server.conviction._fetch_price", mock_price)
+    monkeypatch.setattr("core.conviction._fetch_price", mock_price)
 
     state: TradingState = {
         "session_id": "sess-auto-res",
@@ -406,7 +406,7 @@ async def test_trade_memory_ingest_and_recall_similar_setups(temp_journal, tmp_p
 def test_playbook_performance_and_calibration_adjustment(temp_journal):
     """Verify playbook win-rate computation and dynamic calibration adjustment."""
     from datetime import datetime, timezone
-    from mcp_server.conviction import get_playbook_performance
+    from core.conviction import get_playbook_performance
 
     # Seed 4 entries for 'momentum_squeeze' (3 WIN, 1 LOSS = 75% win rate)
     now_iso = datetime.now(timezone.utc).isoformat()

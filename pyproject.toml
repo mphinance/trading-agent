@@ -26,4 +26,4 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["mcp_server*", "webull_openapi_mcp*"]
+include = ["mcp_server*", "webull_openapi_mcp*", "core*"]

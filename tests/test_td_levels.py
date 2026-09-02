@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-import td as T
+import core.td as T
 
 GEX = {
     "symbol": "SPY", "spotPrice": 746.48, "totalGEX": 4.35e9,

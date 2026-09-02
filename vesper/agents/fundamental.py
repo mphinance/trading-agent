@@ -32,7 +32,7 @@ class FundamentalAgent(BaseSpecialistAgent):
 
         # 2. Attempt asynchronous non-blocking SEC EDGAR filings lookup
         try:
-            import edgar
+            import core.edgar as edgar
             recent_filings = await asyncio.to_thread(edgar.filings, ticker=ticker, months=3)
             if hasattr(recent_filings, "empty") and not recent_filings.empty:
                 form_types = set(recent_filings.get("form", []))

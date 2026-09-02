@@ -138,7 +138,7 @@
       "Run: grep -rlE 'langgraph|fastmcp' core/ and confirm no match \u2014 core must not know about either",
       "Run the full suite with .venv/bin/python -m pytest -q and confirm the same 580 pass count"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-03",

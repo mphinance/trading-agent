@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 from vesper.state import TradingState, MarketRegime
-from td import TDPro
-from mcp_server.macro_regime import detect_macro_regime
-from mcp_server.market_top import detect_market_top
+from core.td import TDPro
+from core.macro_regime import detect_macro_regime
+from core.market_top import detect_market_top
 
 logger = logging.getLogger(__name__)
 

@@ -52,7 +52,7 @@ def test_extract_fund_put_hedges_empty_and_deduplication():
 
 def test_fetch_live_option_quote_unconfigured():
     """When Webull is not configured, _fetch_live_option_quote returns None (no placeholder)."""
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock()
         mock_wb.configured = False
         mock_wb_cls.return_value = mock_wb
@@ -63,12 +63,12 @@ def test_fetch_live_option_quote_unconfigured():
 
 def test_fetch_live_option_quote_success():
     """When Webull market data returns valid quote, returns mid/last price."""
-    with patch("wb.Webull") as mock_wb_cls:
+    with patch("core.wb.Webull") as mock_wb_cls:
         mock_wb = MagicMock()
         mock_wb.configured = True
         mock_wb_cls.return_value = mock_wb
 
-        with patch("md.Market") as mock_mkt_cls:
+        with patch("core.md.Market") as mock_mkt_cls:
             mock_mkt = MagicMock()
             mock_mkt.option_chain.return_value = [
                 {"symbol": "SPY240920P00550000", "strike_price": 550.0}

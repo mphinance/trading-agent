@@ -13,7 +13,7 @@ async def test_morning_plan_stale_fallback_labeling(monkeypatch):
     # Ensure TDPro reports unconfigured
     mock_td = MagicMock()
     mock_td.configured = False
-    monkeypatch.setattr("td.TDPro", lambda: mock_td)
+    monkeypatch.setattr("core.td.TDPro", lambda: mock_td)
 
     plan = await generate_morning_plan()
     assert plan["gex"]["SPY"]["status"] == "STALE"
@@ -33,7 +33,7 @@ async def test_morning_plan_live_data_labeling(monkeypatch):
         "regime": "Positive Gamma",
     }
     mock_td.get_market_health.return_value = {"score": {"value": 5.5, "label": "HEALTHY"}}
-    monkeypatch.setattr("td.TDPro", lambda: mock_td)
+    monkeypatch.setattr("core.td.TDPro", lambda: mock_td)
 
     plan = await generate_morning_plan()
     assert plan["gex"]["SPY"]["status"] == "LIVE"

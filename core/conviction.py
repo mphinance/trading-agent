@@ -563,7 +563,7 @@ def _build_scorecard_summary(
 async def _fetch_price(ticker: str) -> float | None:
     """Fetch latest price for a ticker. Uses shared get_live_price helper."""
     try:
-        from mcp_server.data import get_live_price
+        from core.data import get_live_price
         return await get_live_price(ticker)
     except Exception as e:
         logger.warning("Price fetch failed for %s: %s", ticker, e)

@@ -23,7 +23,7 @@ class TechnicalAnalystAgent(BaseSpecialistAgent):
 
         if audit is None:
             try:
-                from mcp_server.technicals import analyze_technicals
+                from core.technicals import analyze_technicals
                 tech_res = await analyze_technicals(ticker=ticker, period="1y")
                 tech_data = tech_res.data if hasattr(tech_res, "data") and isinstance(tech_res.data, dict) else {}
                 close = float(tech_data.get("close", 0.0))

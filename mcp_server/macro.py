@@ -232,7 +232,7 @@ def _build_summary(ctx: dict[str, Any]) -> str:
 
 async def _fetch_vix() -> dict:
     try:
-        from mcp_server.data import get_live_price
+        from core.data import get_live_price
         vix = await get_live_price("^VIX")
         return {"vix": vix}
     except Exception as e:

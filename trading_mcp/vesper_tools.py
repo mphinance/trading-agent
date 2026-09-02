@@ -59,7 +59,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         the same `totals` dict those two functions themselves read.
         """
         try:
-            from wb import Webull, WebullError
+            from core.wb import Webull, WebullError
         except Exception as e:
             return {"available": False, "reason": f"webull SDK unavailable: {e}"}
 
@@ -297,7 +297,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         (`mcp_server/conviction.py`). Read-only -- never appends a journal
         entry."""
         try:
-            from mcp_server.conviction import get_playbook_performance
+            from core.conviction import get_playbook_performance
         except Exception as e:
             return {"available": False, "reason": f"conviction journal unavailable: {e}"}
         try:

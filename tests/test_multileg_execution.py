@@ -191,7 +191,7 @@ async def test_single_option_leg_uses_the_verified_wire_shape(monkeypatch):
     mock_wb.portfolio.return_value = {"totals": {"buying_power": 100000.0}}
     mock_wb.trade.order_v2.place_option.return_value = {"data": {"status": "WORKING"}}
 
-    with patch("wb.Webull", return_value=mock_wb):
+    with patch("core.wb.Webull", return_value=mock_wb):
         res = await _execute_webull_multileg(_single_option_leg_proposal())
 
     assert res.status == "SUBMITTED"
@@ -266,7 +266,7 @@ async def test_single_option_leg_still_blocked_by_kill_switch():
         "data": [{"account_id": "acct-1", "account_class": "INDIVIDUAL_CASH"}]
     }
     mock_wb.portfolio.return_value = {"totals": {"buying_power": 100000.0}}
-    with patch("wb.Webull", return_value=mock_wb):
+    with patch("core.wb.Webull", return_value=mock_wb):
         with pytest.raises(TradingDisabled):
             await _execute_webull_multileg(_single_option_leg_proposal())
     mock_wb.trade.order_v2.place_option.assert_not_called()

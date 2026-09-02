@@ -13,8 +13,8 @@ import numpy as np
 
 from mcp_server.cache import smart_cache
 from mcp_server.schema import SignalResult
-from mcp_server.data import get_historical_data
-from mcp_server.screener import run_stock_screen
+from core.data import get_historical_data
+from core.screener import run_stock_screen
 
 logger = logging.getLogger(__name__)
 
