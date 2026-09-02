@@ -998,7 +998,7 @@ def test_dcr_registration_rejects_scope_beyond_valid_scopes():
     `RegistrationHandler` through `SingleOperatorOAuthProvider`'s
     `ClientRegistrationOptions(valid_scopes=["read"])`."""
     provider = _make_oauth_provider()
-    assert set(provider.client_registration_options.valid_scopes) == {"read", "safe-write"}
+    assert set(provider.client_registration_options.valid_scopes) == {"read", "safe-write", "trade"}
 
 
 async def test_authorize_request_for_unregistered_scope_never_issues_a_code(monkeypatch):
@@ -1402,11 +1402,17 @@ def test_guard_pin_catches_indirect_call_shapes(tmp_path):
 
 
 def test_trading_mcp_never_calls_execution_guard():
-    """Rule 3: this package reads state, it never moves money."""
+    """Rule 3 / M8-23: guard.place / guard.preview permitted ONLY in the
+    designated order module (trading_mcp/order_tools.py); forbidden everywhere
+    else under trading_mcp/ and mcp_server/."""
+    designated_order_module = (REPO_ROOT / "trading_mcp" / "order_tools.py").resolve()
+    assert designated_order_module.exists(), "designated order module must exist"
+    assert _guard_call_sites(designated_order_module), "order_tools.py must actually reach guard"
+
     offenders = {
         str(p): _guard_call_sites(p)
         for p in (REPO_ROOT / "trading_mcp").rglob("*.py")
-        if _guard_call_sites(p)
+        if p.resolve() != designated_order_module and _guard_call_sites(p)
     }
     assert offenders == {}
 
@@ -1574,6 +1580,7 @@ def test_execution_guard_order_path_confined_to_known_call_sites():
     known_call_sites = {
         REPO_ROOT / "vesper" / "nodes" / "executor.py",
         REPO_ROOT / "vesper" / "monitor.py",
+        REPO_ROOT / "trading_mcp" / "order_tools.py",
     }
     offenders = []
     for pyfile in REPO_ROOT.rglob("*.py"):
@@ -1998,7 +2005,7 @@ def test_m8_13_exposure_boundary_and_no_audio_routes():
     no STT or audio endpoints exist, and resume remains strictly unreachable.
     """
     scanned_files = {p.name for p in (REPO_ROOT / "trading_mcp").rglob("*.py")}
-    expected_m8_modules = {"bar_summary.py", "gamma_summary.py", "voice_tools.py", "drafting.py"}
+    expected_m8_modules = {"bar_summary.py", "gamma_summary.py", "voice_tools.py", "drafting.py", "order_tools.py"}
     assert expected_m8_modules.issubset(scanned_files), (
         f"Missing expected M8 modules from scanned set: {expected_m8_modules - scanned_files}"
     )
