@@ -1517,3 +1517,74 @@ benign `PytestUnhandledThreadExceptionWarning` at teardown as before, not a fail
 **Nothing staged from feature_list.json or the seed file** -- both are clean/untouched relative to
 HEAD after the checkout, which is the point. Only this file (`claude-progress.txt`) is staged for
 this repair's commit.
+
+## M2-05 — Dynamic client registration works end to end
+
+**Finding: the DCR endpoint itself was already implemented, same shape as M2-04.**
+`SingleOperatorOAuthProvider` (trading_mcp/oauth_provider.py) already implements
+`register_client()`/`get_client()`, and `ClientRegistrationOptions(enabled=True, ...)`
+in `__init__` already causes fastmcp/the mcp SDK's `OAuthProvider.get_routes()` to mount
+`/register` (RFC 7591) automatically -- confirmed by driving a real POST /register through
+the ASGI app and getting a 201 with client_id/client_secret back, no server.py or
+oauth_provider.py changes required. What M2-05 actually needed, per its own steps, was the
+end-to-end round trip proven and pinned by tests -- that was the only genuinely undone work,
+the same pattern M2-04's report already called out for the discovery endpoints.
+
+**New tests added to `tests/test_trading_mcp.py`** (new "M2-05" section, 5 tests), each
+driving the real production `_build_auth()`-built ASGI app via `httpx.ASGITransport` --
+no mocked pieces of the handshake:
+
+- `test_dynamic_client_registration_issues_credentials` -- POST /register with no prior
+  credential (DCR stays open by design, per the module docstring) returns 201 with a
+  client_id and client_secret.
+- `test_dcr_client_completes_authorization_code_exchange_and_token_works_on_mcp` -- the
+  full path M2-05 names: register -> GET /authorize (through the operator-key gate, with a
+  real PKCE S256 challenge and `scope=read`) -> 302 with `?code=...` -> POST /token
+  (code + code_verifier + client_secret) -> 200 with an access_token -> that access_token
+  presented as `Authorization: Bearer ...` on a real POST /mcp `initialize` call -> 200.
+  Also re-confirms a garbage token on the same live endpoint still gets 401.
+- `test_authorize_without_operator_key_never_issues_a_code` -- a registered client hitting
+  /authorize with no operator_key gets the gate form back (200), never a redirect/code.
+- `test_unregistered_client_cannot_obtain_a_token` -- POST /token with a client_id that was
+  never registered (plausible attacker input: a made-up client_id, client_secret, and code)
+  is refused with 401 `unauthorized_client`/`invalid_client`, from the mcp SDK's
+  `ClientAuthenticator.authenticate_request()` (`get_client()` returns None ->
+  `AuthenticationError("Invalid client_id")`).
+- `test_unregistered_client_authorize_is_also_refused` -- same property at the front door:
+  GET /authorize with a never-registered client_id gets a direct 400 JSON error (not a
+  redirect, since no client means no trusted redirect_uri), from
+  `AuthorizationHandler.handle()`'s `attempt_load_client=False` path before
+  `SingleOperatorOAuthProvider.authorize()` is ever reached.
+
+**One real bug caught by writing the actual end-to-end test** (not by inspection): the
+initial version of the full-flow test omitted `scope` from the /authorize request. Per RFC's
+`OAuthClientInformationFull.validate_scope()`, an absent `scope` param validates to `None`
+(not "the client's registered scopes"), so `oauth_provider.authorize()`'s
+`scopes_list = params.scopes or []` issued a code -- and therefore a token -- carrying zero
+scopes, which then failed `insufficient_scope` (403) against the /mcp endpoint's
+`required_scopes=["read"]`. Fixed by passing `scope=read` explicitly in the authorize
+request; this is exactly the kind of gap the feature's step 3 ("confirm the resulting access
+token is accepted by the MCP endpoint") exists to catch -- a token that mints successfully
+but doesn't actually work is a real end-to-end failure, and only exercising the actual /mcp
+call after minting the token would surface it.
+
+**Scope-tiering beyond plain "read" (i.e. can an OAuth handshake escalate past what it was
+granted) is explicitly out of scope for this feature** -- that's M2-06 and M8-14's job, named
+as such in ROADMAP. This feature only proves the DCR + code-exchange + token-acceptance
+plumbing works for the one scope the server currently issues.
+
+**Verified:** `.venv/bin/python -m pytest -q tests/test_trading_mcp.py -k "dcr or
+dynamic_client or unregistered or authorize_without"` -> 5 passed, 49 deselected.
+**Full suite: 612 passed** (`.venv/bin/python -m pytest -q`) -- 607 before this feature + 5
+new tests. Floor was 597.
+
+**No changes to `trading_mcp/server.py` or `trading_mcp/oauth_provider.py`** -- both were
+already correct from M2-03/M2-04; this feature was purely verification plus test coverage of
+a handshake that already worked, the same shape M2-04's report described for the discovery
+endpoints.
+
+**Staged for this feature's commit:** `tests/test_trading_mcp.py` only. Did not stage
+`feature_list.json` -- the orchestrator records `passes`, not this session. Untracked files
+(`HKUDS_REPOSITORY_REVIEW.md`, `docs/HANDOFF_2026-09-01.md`,
+`scripts/package_for_supermcp.py`, `supermcp_CLAUDE_remote.md`, `autonomous/`,
+`docs/MULTI_AGENT_WORKFLOW.md`) unchanged, not this feature's to resolve.

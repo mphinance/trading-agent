@@ -589,6 +589,233 @@ def test_oauth_mount_still_no_user_model(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# M2-05: dynamic client registration (RFC 7591) works END TO END -- a client
+# POSTs to /register with no prior credential (by design, see oauth_provider's
+# module docstring: gating DCR would just recreate the "paste a header"
+# problem OAuth was chosen to avoid), receives a client_id/client_secret,
+# then drives the FULL authorization-code + PKCE handshake through the
+# operator-key gate at /authorize and exchanges the code for a token at
+# /token -- and that token is then actually accepted by the live /mcp
+# endpoint, not just minted and left untested. A second flow proves the
+# other half: a client_id nobody registered cannot walk away with a token.
+#
+# Same pattern as the M2-04 block above: build the real ASGI app from
+# `_build_auth()` and drive it with `httpx.ASGITransport`, no real socket,
+# no mocked pieces of the handshake -- every hop (register, gate, authorize,
+# token, mcp) goes through the actual mcp-SDK route handlers
+# `SingleOperatorOAuthProvider` sits underneath.
+# ═══════════════════════════════════════════════════════════════════════════
+
+import base64
+import hashlib
+import secrets
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """A (code_verifier, code_challenge) pair per RFC 7636 S256."""
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+    return verifier, challenge
+
+
+async def _register_client(app, **overrides) -> dict[str, Any]:
+    """POST /register (RFC 7591), return the parsed client-information JSON."""
+    body = {
+        "redirect_uris": ["https://client.example.test/callback"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "client_name": "m2-05-test-client",
+        **overrides,
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/register", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_dynamic_client_registration_issues_credentials(monkeypatch):
+    """The DCR endpoint is open (no operator credential required to reach
+    it -- see the module docstring's reasoning) and hands back a client_id
+    plus a client_secret for the default `client_secret_post` auth method."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+    client_info = await _register_client(app)
+    assert client_info["client_id"]
+    assert client_info["client_secret"]
+    assert client_info["redirect_uris"] == ["https://client.example.test/callback"]
+
+
+async def _authorize(app, *, client_id: str, redirect_uri: str, code_challenge: str,
+                      operator_key: str | None, state: str = "m2-05-state",
+                      scope: str = "read") -> httpx.Response:
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+        "scope": scope,
+    }
+    if operator_key is not None:
+        params["operator_key"] = operator_key
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", follow_redirects=False
+        ) as client:
+            return await client.get("/authorize", params=params)
+
+
+async def _token_from_code(app, *, client_id: str, client_secret: str, code: str,
+                            redirect_uri: str, code_verifier: str) -> httpx.Response:
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code_verifier": code_verifier,
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post("/token", data=data)
+
+
+async def test_dcr_client_completes_authorization_code_exchange_and_token_works_on_mcp(
+    monkeypatch,
+):
+    """The full end-to-end path M2-05 names: register -> gated /authorize ->
+    /token -> the resulting access token is accepted by the live /mcp
+    endpoint. Every hop is a real HTTP round trip through the production
+    `_build_auth()`-built app; nothing about the handshake is stubbed."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+
+    # 1. Register (no credential required -- DCR stays open by design).
+    client_info = await _register_client(app)
+    client_id = client_info["client_id"]
+    client_secret = client_info["client_secret"]
+    redirect_uri = client_info["redirect_uris"][0]
+
+    # 2. Drive /authorize past the operator-key gate with a valid PKCE pair.
+    verifier, challenge = _pkce_pair()
+    auth_response = await _authorize(
+        app, client_id=client_id, redirect_uri=redirect_uri,
+        code_challenge=challenge, operator_key=_OAUTH_ENV["TRADING_AGENT_TOKEN"],
+    )
+    assert auth_response.status_code == 302, auth_response.text
+    location = auth_response.headers["location"]
+    assert location.startswith(redirect_uri)
+    from urllib.parse import parse_qs, urlsplit
+
+    query = parse_qs(urlsplit(location).query)
+    assert query["state"] == ["m2-05-state"]
+    code = query["code"][0]
+
+    # 3. Exchange the code (+ PKCE verifier) for an access token.
+    token_response = await _token_from_code(
+        app, client_id=client_id, client_secret=client_secret, code=code,
+        redirect_uri=redirect_uri, code_verifier=verifier,
+    )
+    assert token_response.status_code == 200, token_response.text
+    token_payload = token_response.json()
+    access_token = token_payload["access_token"]
+    assert token_payload["token_type"].lower() == "bearer"
+    assert token_payload["refresh_token"]
+
+    # 4. The resulting access token is accepted by the live /mcp endpoint.
+    headers = {**_MCP_HEADERS, "Authorization": f"Bearer {access_token}"}
+    mcp_response = await _post_mcp(app, headers)
+    assert mcp_response.status_code == 200, mcp_response.text
+
+    # ... and a garbage token still isn't.
+    bad_headers = {**_MCP_HEADERS, "Authorization": "Bearer not-a-real-token"}
+    bad_response = await _post_mcp(app, bad_headers)
+    assert bad_response.status_code == 401
+
+
+async def test_authorize_without_operator_key_never_issues_a_code(monkeypatch):
+    """Reaching /authorize with no operator_key at all must render the gate
+    form (200), never redirect with a code -- registration alone must not be
+    enough to obtain a token."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+    client_info = await _register_client(app)
+    _verifier, challenge = _pkce_pair()
+
+    response = await _authorize(
+        app, client_id=client_info["client_id"],
+        redirect_uri=client_info["redirect_uris"][0],
+        code_challenge=challenge, operator_key=None,
+    )
+    assert response.status_code == 200
+    assert "authorize" not in response.headers.get("location", "")
+    assert response.status_code != 302
+
+
+async def test_unregistered_client_cannot_obtain_a_token(monkeypatch):
+    """A client_id nobody ever POSTed to /register must be refused at
+    /token -- confirming DCR being open doesn't mean the token endpoint
+    trusts an unknown client_id handed to it directly."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+
+    # A syntactically-plausible but never-registered client, presenting a
+    # code that was never issued either (there is no legitimate way to have
+    # one without a registered client, so this is the strongest input an
+    # attacker could actually construct).
+    response = await _token_from_code(
+        app,
+        client_id="never-registered-client-id",
+        client_secret="whatever",
+        code="toa_code_forged",
+        redirect_uri="https://client.example.test/callback",
+        code_verifier="forged-verifier",
+    )
+    assert response.status_code == 401, response.text
+    body = response.json()
+    assert body["error"] in ("unauthorized_client", "invalid_client")
+
+
+async def test_unregistered_client_authorize_is_also_refused(monkeypatch):
+    """Same property at the front door: /authorize itself refuses to issue a
+    code for a client_id that was never registered, even with a valid
+    operator key -- `SingleOperatorOAuthProvider.authorize()`'s explicit
+    `client.client_id not in self.clients` check (module docstring: "only
+    refuses an unregistered client_id, it does not perform its own separate
+    credential check")."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+    _verifier, challenge = _pkce_pair()
+
+    response = await _authorize(
+        app, client_id="never-registered-client-id",
+        redirect_uri="https://client.example.test/callback",
+        code_challenge=challenge, operator_key=_OAUTH_ENV["TRADING_AGENT_TOKEN"],
+    )
+    # AuthorizationHandler.handle() returns a direct 400 JSON error (not a
+    # redirect) when client_id itself doesn't resolve -- see
+    # mcp.server.auth.handlers.authorize's `attempt_load_client=False` path.
+    assert response.status_code == 400
+    assert response.json()["error"] in ("invalid_request", "unauthorized_client")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Rule 3 pin: the order path stays in exactly one place
 # ═══════════════════════════════════════════════════════════════════════════
 
