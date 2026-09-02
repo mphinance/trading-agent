@@ -51,7 +51,11 @@ discord.py     # Discord gateway client with dynamic interactive approval button
 # Quantitative analysis, charts, backtesting & technical indicators
 numpy
 pandas
-pandas-ta
+# Only prereleases of pandas-ta have ever been published, so a bare name makes
+# pip refuse to consider any candidate ("No matching distribution found"). The
+# floor opts pip into prereleases for this one package — same trick, and same
+# reason, as requirements.txt:102. Do not drop the `b0`.
+pandas-ta>=0.4.0b0
 matplotlib
 mplfinance
 scipy
