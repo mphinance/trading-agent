@@ -127,14 +127,18 @@ Properties that hold it together, none decorative:
 broker credentials or implements its own risk checks.** Any adapter that grows
 its own order path is a new threat model, not a small addition.
 
-`trading_mcp/` (below) is a third MCP surface, owner-only and exposure-bounded
-rather than strictly read-only: `halt()` is *permitted* to become
-MCP-reachable from it — freezing can only reduce exposure — but
-`guard.preview`, `guard.place`, `resume()`, and
-`ApprovalRegistry.submit_decision()` remain forbidden from every module under
-it (and under `mcp_server/`) — including by passing a bound method. See
-app_spec.txt's A3. `tests/test_trading_mcp.py` mechanically pins this via AST,
-not just a docstring promise.
+`trading_mcp/` is an owner-only, exposure-bounded MCP surface. Under amendment A4,
+the MCP surface may reach the order path, via `vesper.execution_guard` ONLY, through
+a dedicated module (`trading_mcp/order_tools.py`), gated by `VESPER_TRADING`, the
+deterministic notional cap, the halt state file, the circuit breaker, and an OAuth
+`trade` scope distinct from `read`. Every other module under `trading_mcp/` and
+`mcp_server/` remains strictly forbidden from referencing `guard.preview` or
+`guard.place`. `resume()` and `ApprovalRegistry.submit_decision()` remain strictly
+forbidden everywhere across all MCP modules with zero exceptions.
+
+What did NOT change: `vesper/execution_guard.py` remains the ONLY module that can
+move money, and no order execution or risk-gate code is duplicated anywhere.
+`tests/test_trading_mcp.py` mechanically pins this via AST, not just a docstring promise.
 
 ### 4. Inject live state; never make the model fetch it
 `vesper/llm.py` formats portfolio + signals + dealer gamma into the turn.

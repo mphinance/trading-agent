@@ -113,13 +113,13 @@ guards and stages a ticket carrying a SHA-256 of the exact payload; `place()`
 takes a `ticket_id`, never an order. No single call may both construct and fire.
 Tickets are single-use, 120 s expiry.
 
-**I3. No MCP tool may reach the order path.** (see A3) `halt()` is *permitted*
-to be reached from `trading_mcp/` once a halt tool exists; no module under `trading_mcp/` or `mcp_server/` may
-reference `guard.preview`, `guard.place`, `resume()`, or
-`ApprovalRegistry.submit_decision()` — including by passing a bound method
-(`asyncio.to_thread(guard.place, …)`). `tests/test_trading_mcp.py` pins this with
-an AST check that matches attribute *access*, not just calls. **Never narrow that
-test.** If you add a new MCP surface, it must be covered by the same pin.
+**I3. Bounded order reachability from MCP.** Under amendment A4, the MCP surface
+may reach the order path via `vesper/execution_guard.py` ONLY (through designated
+`trading_mcp/order_tools.py`), gated by `VESPER_TRADING`, notional caps, the halt file,
+the circuit breaker, and an OAuth `trade` scope distinct from `read`. Every other
+module under `trading_mcp/` and `mcp_server/` is forbidden from referencing
+`guard.preview` or `guard.place`. `resume()` and `ApprovalRegistry.submit_decision()`
+remain strictly forbidden everywhere with zero exceptions.
 
 **I4. `VESPER_TRADING=0` is the kill switch and it defaults off.** It stays off on
 the remote box until a milestone explicitly turns it on, and even then only after
@@ -149,9 +149,7 @@ unreachable feed (TDPro, the gRPC push stream), or an absent credential must
 degrade to `{"available": false}` or a slower poll — never crash the process.
 
 **I10. Never restart or reconfigure anything on the coolify box that is not
-`trading-agent.service`.** Other people's production runs there, except
-`systemctl --user start/stop/enable/restart` against unit names matching
-`trading-agent*` or `vesper-*`, which this run owns.
+`trading-agent.service`.** Other people's production runs there.
 
 ---
 
@@ -177,17 +175,16 @@ and it survives for the same reason: a transcript is ambiguous in exactly the
 wrong place ("approve" — *which* proposal?), while a button is unambiguous,
 per-user authorised and restart-safe.
 
+**A4 — The exposure rule is amended for bounded order execution.** The MCP surface
+may reach the order path, via `vesper.execution_guard` ONLY, gated by `VESPER_TRADING`,
+the notional cap, the halt file, the circuit breaker, and an OAuth scope (`trade`)
+distinct from `read`. Execution code is never duplicated; `execution_guard.py` remains
+the single source of truth for moving money. All other modules under `trading_mcp/`
+and `mcp_server/` remain forbidden from referencing `guard.preview` or `guard.place`.
+`resume()` and `ApprovalRegistry.submit_decision()` remain forbidden from every MCP tool.
+
 Also update: the Status section (order path, deployment), the Layout tree, the
 test count, and the `deploy/` description once M7 lands.
-
-**A3 -- I3 is amended:** halt() is PERMITTED to become reachable from
-trading_mcp/, because freezing can only reduce exposure. No halt tool exists
-yet: M8-08 builds it and updates the pin in the same change. Until then the pin
-correctly still forbids the import, and docs claiming otherwise are wrong.
-guard.preview, guard.place, resume(), and ApprovalRegistry.submit_decision()
-remain forbidden from every module under trading_mcp/ and mcp_server/,
-including by passing a bound method. tests/test_trading_mcp.py's AST pin is
-updated, not narrowed, to match.
 
 ---
 
