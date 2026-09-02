@@ -248,6 +248,83 @@ def test_http_transport_refuses_to_start_without_token():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# M2-02: token comparison is hmac.compare_digest, not a bare dict lookup.
+#
+# fastmcp's own StaticTokenVerifier checks a presented token with
+# `self.tokens.get(token)`, a plain dict lookup that CPython resolves with
+# str.__eq__ on a hash collision -- not constant-time. trading_mcp/auth.py's
+# HmacStaticTokenVerifier is the drop-in replacement `_build_auth()` now
+# constructs; these tests pin both that the helper is actually used (source
+# + behavioural spy) and that its accept/reject behaviour is unchanged.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_build_auth_returns_hmac_verifier_not_stock_one(monkeypatch):
+    """`_build_auth()` must build the constant-time verifier, not fastmcp's
+    stock `StaticTokenVerifier` -- a regression here would silently revert
+    M2-02 while every behavioural test above kept passing (both classes
+    accept/reject the same tokens; only the comparison timing differs)."""
+    monkeypatch.setenv("TRADING_AGENT_TOKEN", "m2-02-test-token")
+    import trading_mcp.server as srv
+    from trading_mcp.auth import HmacStaticTokenVerifier
+
+    auth = srv._build_auth()
+    assert isinstance(auth, HmacStaticTokenVerifier)
+
+
+def test_hmac_static_token_verifier_source_uses_compare_digest():
+    """Source-level pin, mirroring test_notify.py's grep-shaped assertions:
+    fails the moment verify_token stops routing through
+    hmac.compare_digest, not just when today's behaviour looks right."""
+    import inspect
+
+    from trading_mcp.auth import HmacStaticTokenVerifier
+
+    source = inspect.getsource(HmacStaticTokenVerifier.verify_token)
+    assert "hmac.compare_digest" in source
+    assert ".get(token)" not in source, "must not fall back to a bare dict lookup"
+
+
+async def test_verify_token_actually_invokes_compare_digest(monkeypatch):
+    """Behavioural spy: verify_token must call hmac.compare_digest at least
+    once per verification, not just import the module and never use it."""
+    import trading_mcp.auth as auth_mod
+
+    calls = []
+    real_compare_digest = auth_mod.hmac.compare_digest
+
+    def _spy(a, b):
+        calls.append((a, b))
+        return real_compare_digest(a, b)
+
+    monkeypatch.setattr(auth_mod.hmac, "compare_digest", _spy)
+
+    verifier = auth_mod.HmacStaticTokenVerifier(
+        tokens={"good-token": {"client_id": "owner", "scopes": ["read"]}},
+        required_scopes=["read"],
+    )
+
+    accepted = await verifier.verify_token("good-token")
+    assert accepted is not None
+    assert accepted.client_id == "owner"
+    assert calls, "verify_token accepted a token without calling hmac.compare_digest"
+
+    calls.clear()
+    rejected = await verifier.verify_token("wrong-token")
+    assert rejected is None
+    assert calls, "verify_token rejected a token without calling hmac.compare_digest"
+
+
+async def test_hmac_verifier_rejects_missing_required_scope():
+    import trading_mcp.auth as auth_mod
+
+    verifier = auth_mod.HmacStaticTokenVerifier(
+        tokens={"scoped-token": {"client_id": "owner", "scopes": []}},
+        required_scopes=["read"],
+    )
+    assert await verifier.verify_token("scoped-token") is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Rule 3 pin: the order path stays in exactly one place
 # ═══════════════════════════════════════════════════════════════════════════
 

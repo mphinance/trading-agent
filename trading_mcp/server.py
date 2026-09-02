@@ -32,7 +32,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from fastmcp.server.auth import StaticTokenVerifier
+
+from trading_mcp.auth import HmacStaticTokenVerifier
 
 load_dotenv()
 
@@ -45,7 +46,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _build_auth() -> StaticTokenVerifier | None:
+def _build_auth() -> HmacStaticTokenVerifier | None:
     """Build the auth provider from TRADING_AGENT_TOKEN, or None if unset.
 
     Constructing the server is unconditional either way — a missing token
@@ -53,11 +54,15 @@ def _build_auth() -> StaticTokenVerifier | None:
     headers and an auth check there would be meaningless. An http transport
     with no token is refused later, at the bottom of this module, rather
     than silently serving unauthenticated.
+
+    Uses `HmacStaticTokenVerifier` (trading_mcp/auth.py), not fastmcp's own
+    `StaticTokenVerifier` — see that module's docstring: the stock verifier
+    compares tokens with a plain dict lookup, which is not constant-time.
     """
     token = os.environ.get("TRADING_AGENT_TOKEN")
     if not token:
         return None
-    return StaticTokenVerifier(
+    return HmacStaticTokenVerifier(
         tokens={token: {"client_id": "owner", "scopes": ["read"]}},
         required_scopes=["read"],
     )

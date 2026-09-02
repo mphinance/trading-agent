@@ -122,7 +122,7 @@
       "Add a test that the comparison helper is used (import-level or behavioural)",
       "Run: python3 -m pytest -q"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-03",
