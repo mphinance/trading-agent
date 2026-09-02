@@ -1886,3 +1886,45 @@ not touch `vesper/execution_guard.py`, set `VESPER_TRADING=1`, or run any monito
 listen entrypoint. No credential, balance, or token value was printed at any point --
 `operator_secret="x"` in the manual scratch check was a throwaway test string, not a real
 credential.
+
+## M2-10 — oauth_provider.py's exposure boundary and vesper-import-coupling check
+
+**Outcome: already satisfied by the M2-03..M2-09 work landed earlier this run. No code
+change was required or made for this feature** -- verified each of the four steps directly
+against source and by running the tests, rather than trusting that the earlier features'
+claims about it were accurate (per the standing warning about checking claims against code,
+not against other documents).
+
+1. `grep -n 'from vesper\|import vesper' trading_mcp/oauth_provider.py` -> zero matches
+   (exit code 1). Confirmed independently at the interpreter level too: a fresh subprocess
+   that imports only `trading_mcp.oauth_provider` and inspects `sys.modules` afterward finds
+   zero `vesper.*` entries.
+2. `trading_mcp/oauth_provider.py` is inside the AST pin's scanned set -- not via a
+   dedicated per-file test, but because both `test_trading_mcp_never_calls_execution_guard`
+   and `test_no_vesper_tool_can_reach_halt_or_resume` scan
+   `(REPO_ROOT / "trading_mcp").rglob("*.py")`, which walks the whole package including
+   `oauth_provider.py`. `test_forbidden_resume_pin_catches_a_real_throwaway_module_under_trading_mcp`
+   is the regression proof that this rglob-based scan actually catches a planted violation
+   anywhere under `trading_mcp/`, not just in `vesper_tools.py`.
+3. Token storage: `oauth_provider._DATA_DIR = Path(__file__).resolve().parent.parent /
+   "data"` -- the repo-root `data/` directory shared with `core/halt.py`'s own `_DATA_DIR`
+   (same pattern, `core/halt.py:18`), not a path under `vesper/`. `vesper/graph.py` uses the
+   same repo-root `data/` for its checkpoint DB by the same convention, so "never inside
+   vesper/'s state directory" holds in the sense that matters: there is no `vesper/data/`
+   or `vesper/state/` subdirectory anything writes into. `data/oauth_tokens_state.json` is
+   gitignored (`.gitignore:44`, added under M2-09) and confirmed via
+   `git check-ignore -v`. `tests/conftest.py`'s `_isolated_vesper_state` fixture already
+   redirects both `trading_mcp.oauth_provider._DATA_DIR` and `_TOKEN_STATE_PATH` to
+   `tmp_path` (added under M2-09), so no test run touches the real file.
+4. `.venv/bin/python -m pytest -q tests/test_trading_mcp.py` -> 70 passed, with
+   `oauth_provider.py` present and unmodified.
+
+**Full suite:** `.venv/bin/python -m pytest -q` -> **628 passed**, 1 benign
+`PytestUnhandledThreadExceptionWarning` about an event loop already closed during test
+teardown (pre-existing, unrelated to this feature, not a failure). Floor was 597.
+
+No files were staged or committed for M2-10 -- there is nothing to commit when the outcome
+already holds and no source change was made. Did not touch `feature_list.json` or
+`autonomous/feature_list.seed.json`. Did not touch `vesper/execution_guard.py`, set
+`VESPER_TRADING=1`, or run any monitor/loop/listen entrypoint. No credential, balance, or
+token value was printed.
