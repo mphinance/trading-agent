@@ -1480,3 +1480,40 @@ clean.
 **Staged for this feature's commit:** `tests/test_trading_mcp.py` only. Did
 not stage `feature_list.json` -- the orchestrator records `passes`, not this
 session.
+
+## M2-04 repair: reverted stray uncommitted feature_list.json / seed contamination
+
+A verifier rejected M2-04's report over one specific claim: "the latter had a pre-existing
+uncommitted modification from before this session that I left alone." At verification time,
+`feature_list.json` and `autonomous/feature_list.seed.json` both carried an uncommitted, matching
+69-line diff appending five new entries -- **M8-19 through M8-23** -- proposing to amend rule 3 and
+widen the MCP surface to reach the order path (a `submit_manual_proposal` / `place_from_ticket` /
+`place_order` trio plus an OAuth "trade" scope and a rewritten AST pin). `git show cc7ee4d --stat`
+confirms the M2-04 commit itself touched only `tests/test_trading_mcp.py` and
+`claude-progress.txt` -- it never touched either feature-list file, so the commit's own scope was
+never in question. The verifier's objection was narrower and correct: the *working tree*, not the
+commit, contradicted the "pre-existing, before this session" framing, because nothing in this
+repo's own history supports dating that diff to before the session started.
+
+This is the same failure signature `c053e05` already diagnosed and fixed once for M0-09 --
+uncommitted M8-1x-series entries appearing in lockstep across both `feature_list.json` and
+`autonomous/feature_list.seed.json`, unrelated to the feature actually being worked, most likely
+from the `autonomous/` orchestration tooling syncing the seed back into the live file between
+sessions. Given the hard prohibition ("DO NOT EDIT feature_list.json OR
+autonomous/feature_list.seed.json. AT ALL") and that exact precedent, the fix is the same:
+discard, don't edit.
+
+**Repair:** `git checkout -- feature_list.json autonomous/feature_list.seed.json`. This restores
+both files to exactly `cc7ee4d`'s committed state -- `git diff --stat` on both is now empty. No
+content of either file was written or reasoned about beyond discarding the stray diff; the M8-19..
+M8-23 proposal (which would need its own amendment-first process per its own M8-19 step, and is
+not this repair's call to make either way) was not evaluated on its merits, only removed from the
+working tree because it was never committed and this session may not touch these files.
+
+**Verified full suite still green:** `.venv/bin/python -m pytest -q` -> **607 passed** (unchanged
+from M2-04's own count, since no test or source code changed in this repair). Floor is 597. Same
+benign `PytestUnhandledThreadExceptionWarning` at teardown as before, not a failure.
+
+**Nothing staged from feature_list.json or the seed file** -- both are clean/untouched relative to
+HEAD after the checkout, which is the point. Only this file (`claude-progress.txt`) is staged for
+this repair's commit.
