@@ -254,6 +254,39 @@ class TDPro:
         return self.cached("get_market_health", ttl=300.0) or {}
 
 
+def build_levels_of():
+    """Return a `levels_of(symbol) -> dict | None` backed by `TDPro.levels()`.
+
+    Moved here (M0-06) from `vesper/alerts_runner.py`, which still owns the
+    live alert watcher (`build_watcher()`) and imports this back from core —
+    the same shape M0-02 already put every other pure read helper in. Before
+    the move, `trading_mcp/vesper_tools.py`'s `list_alerts` tool reached this
+    logic via `from vesper.alerts_runner import _build_levels_of`, which was
+    the last `vesper.*` reference left in that file; it now imports this
+    function directly and `vesper/alerts_runner.py`'s own `_build_levels_of`
+    is a thin wrapper around it so `build_watcher()` is unchanged.
+
+    Returns None (never a remembered/stale number) when TDPro is unconfigured
+    or the call fails -- `alerts.resolve_level()` treats None as "cannot
+    resolve" and leaves a dynamic alert pending rather than firing it against
+    a stale level. That is the specific failure this helper exists to
+    prevent, so do not add a fallback here.
+    """
+    client = TDPro()
+
+    def levels_of(symbol: str):
+        if not client.configured:
+            return None
+        try:
+            data = client.levels(symbol)
+        except Exception:
+            return None
+        if not isinstance(data, dict) or data.get("error"):
+            return None
+        return data
+
+    return levels_of
+
 
 def _num(v: Any) -> float | None:
     try:

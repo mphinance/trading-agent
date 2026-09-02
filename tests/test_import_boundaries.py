@@ -106,10 +106,17 @@ def _scan_vesper_refs(root: Path) -> dict[str, set[str]]:
 # longer need to import vesper.bot at all (that package's __init__ eagerly
 # constructs TelegramAdapter/DiscordAdapter/WebhookAdapter/ChannelManager).
 # So vesper.bot.inbound drops out here too.
-# vesper.alerts_runner stays: that module still lives under vesper/ (it
-# pulls in LangGraph/broker machinery this split isn't moving) and
-# vesper_tools.py legitimately reads through it as a viewer over vesper's
-# own state.
+# vesper.alerts_runner dropped out as of M0-06: its only trading_mcp
+# consumer was `list_alerts`'s `_build_levels_of()` (a pure, side-effect-free
+# wrapper around `TDPro.levels()` -- module-level imports in
+# vesper/alerts_runner.py are just logging/typing, and _build_levels_of()
+# only ever resolved to `core.td` at call time, verified against the source,
+# not assumed). That logic moved to `core.td.build_levels_of()`, which
+# vesper/alerts_runner.py's own `_build_levels_of()` now delegates to (so
+# `build_watcher()` and the live watcher thread are unchanged), and
+# vesper_tools.py's `list_alerts` imports it from `core.td` directly. That
+# was the last vesper.* reference in this file, so the baseline is now
+# empty -- trading_mcp/vesper_tools.py imports nothing from vesper/ at all.
 # vesper.monitor dropped out as of M0-05: importing it -- even just to reach
 # its two read-only methods -- pulls `vesper.execution_guard`'s live `guard`
 # singleton into sys.modules as an import side effect (module-scope `from
@@ -117,24 +124,53 @@ def _scan_vesper_refs(root: Path) -> dict[str, set[str]]:
 # this read-only server must never do. The position-monitor-preview tool now
 # reads through core/position_preview.py, a guard-free duplicate of just the
 # read-only rules, instead.
-EXPECTED_VESPER_TOOLS_REFS = {
-    "vesper.alerts_runner",
+EXPECTED_VESPER_TOOLS_REFS: set[str] = set()
+
+# Belt-and-suspenders on top of the exact-match assertion below: even if a
+# future change legitimately widens EXPECTED_VESPER_TOOLS_REFS again (say,
+# a new vesper.* module as pure and justified as alerts_runner once was),
+# these three must never reappear in trading_mcp/ under any name. Spelled
+# out explicitly per M0-06's own steps, rather than relying solely on the
+# baseline's set-equality to catch a regression here.
+FORBIDDEN_VESPER_REFS = {
+    "vesper.monitor",
+    "vesper.bot.inbound",
+    "vesper.execution_guard",
 }
 
 
 def test_trading_mcp_vesper_imports_match_baseline():
     found = _scan_vesper_refs(REPO_ROOT / "trading_mcp")
 
-    # Only vesper_tools.py references vesper at all under trading_mcp/.
-    assert set(found) == {"trading_mcp/vesper_tools.py"}, (
-        f"unexpected vesper reference outside vesper_tools.py: {found}"
-    )
+    # As of M0-06 the baseline is empty, so nothing under trading_mcp/
+    # should reference vesper.* at all -- but keep this check shaped to
+    # tolerate a future non-empty baseline (only vesper_tools.py would be
+    # allowed to carry it) rather than hard-coding "found == {}".
+    if EXPECTED_VESPER_TOOLS_REFS:
+        assert set(found) == {"trading_mcp/vesper_tools.py"}, (
+            f"unexpected vesper reference outside vesper_tools.py: {found}"
+        )
+    else:
+        assert found == {}, (
+            f"trading_mcp/ must reference no vesper.* module: {found}"
+        )
 
-    actual = found["trading_mcp/vesper_tools.py"]
+    actual = found.get("trading_mcp/vesper_tools.py", set())
     assert actual == EXPECTED_VESPER_TOOLS_REFS, (
         "trading_mcp/vesper_tools.py's vesper.* imports changed -- update "
         "this baseline deliberately as part of the M0 split.\n"
         f"expected={EXPECTED_VESPER_TOOLS_REFS}\nactual={actual}"
+    )
+
+    # M0-06: explicit, name-based denial on top of the baseline's set
+    # equality -- these three must never appear anywhere under trading_mcp/,
+    # regardless of what EXPECTED_VESPER_TOOLS_REFS grows to later.
+    all_refs: set[str] = set()
+    for refs in found.values():
+        all_refs |= refs
+    forbidden_hit = all_refs & FORBIDDEN_VESPER_REFS
+    assert not forbidden_hit, (
+        f"trading_mcp/ must never import these: {forbidden_hit}"
     )
 
 

@@ -156,16 +156,19 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         """Every armed/pending/triggered price alert, with each dynamic
         level (flip/pin/wall_above/wall_below) re-resolved live from TDPro.
 
-        Reuses `vesper/alerts_runner.py`'s `_build_levels_of()` -- the same
-        `levels_of()` the live watcher thread runs on -- rather than
-        re-deriving the TDPro-down behavior here, so rule 4c's guarantee
-        stays defined in exactly one place: if TDPro can't answer, the
-        level comes back as unavailable (`current_level: null,
-        level_unavailable: true`), never a remembered number.
+        Reuses `core.td.build_levels_of()` (M0-06) -- the same `levels_of()`
+        `vesper/alerts_runner.py`'s live watcher thread runs on, since that
+        module now delegates to this one too -- rather than re-deriving the
+        TDPro-down behavior here, so rule 4c's guarantee stays defined in
+        exactly one place: if TDPro can't answer, the level comes back as
+        unavailable (`current_level: null, level_unavailable: true`), never
+        a remembered number. Importing from `core.td` rather than
+        `vesper.alerts_runner` directly means this tool needs no `vesper.*`
+        import at all -- see `tests/test_import_boundaries.py`.
         """
         try:
             from alerts import AlertStore, resolve_level
-            from vesper.alerts_runner import _build_levels_of
+            from core.td import build_levels_of
         except Exception as e:
             return {"available": False, "reason": str(e)}
 
@@ -174,7 +177,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         except Exception as e:
             return {"available": False, "reason": f"could not read alert store: {e}"}
 
-        levels_of = _build_levels_of()
+        levels_of = build_levels_of()
         level_cache: dict[str, Any] = {}
         out = []
         for a in alerts:

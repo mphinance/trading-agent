@@ -192,7 +192,7 @@
       "Update tests/test_import_boundaries.py from M0-01 to the NEW, smaller allowlist and explicitly forbid regressing to vesper.monitor, vesper.bot.inbound or vesper.execution_guard",
       "Run the full suite plus tests/test_trading_mcp.py's existing pins and confirm both green"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-07",

@@ -674,9 +674,11 @@ def test_list_alerts_reports_unavailable_when_tdpro_down(vtools, monkeypatch):
             return [dynamic_alert, static_alert]
 
     monkeypatch.setattr("alerts.AlertStore", _FakeStore)
-    # Simulates TDPro being unreachable: _build_levels_of()'s own docstring
+    # Simulates TDPro being unreachable: build_levels_of()'s own docstring
     # says levels_of() returns None (never a remembered number) in that case.
-    monkeypatch.setattr("vesper.alerts_runner._build_levels_of", lambda: (lambda symbol: None))
+    # list_alerts imports core.td.build_levels_of directly (M0-06), not
+    # vesper.alerts_runner's wrapper, so that's what this patches.
+    monkeypatch.setattr("core.td.build_levels_of", lambda: (lambda symbol: None))
 
     result = vtools["list_alerts"]()
     assert result["available"] is True

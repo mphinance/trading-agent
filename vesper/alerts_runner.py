@@ -28,29 +28,16 @@ _watcher: Optional[Any] = None
 def _build_levels_of():
     """Return a `levels_of(symbol) -> dict | None` backed by td.levels().
 
-    Returns None (never a remembered/stale number) when TDPro is unconfigured
-    or the call fails -- `alerts.resolve_level()` treats None as "cannot
-    resolve" and leaves a dynamic alert pending rather than firing it against
-    a stale level. That is the specific failure this whole module exists to
-    prevent, so do not add a fallback here.
+    Thin wrapper (M0-06) around `core.td.build_levels_of()`, which now owns
+    the actual logic -- moved there so `trading_mcp/vesper_tools.py`'s
+    `list_alerts` tool could import it without reaching into `vesper/` at
+    all. Kept here, under this name, so `build_watcher()` below (and this
+    module's own docstring/import surface for the live watcher thread) is
+    unchanged.
     """
-    from core.td import TDPro
+    from core.td import build_levels_of
 
-    client = TDPro()
-
-    def levels_of(symbol: str):
-        if not client.configured:
-            return None
-        try:
-            data = client.levels(symbol)
-        except Exception as e:
-            logger.debug(f"levels_of({symbol}) failed: {e}")
-            return None
-        if not isinstance(data, dict) or data.get("error"):
-            return None
-        return data
-
-    return levels_of
+    return build_levels_of()
 
 
 def build_watcher(start: bool = True):
