@@ -328,3 +328,92 @@ resolve.
   as part of M0-02 without moving the modules — the modules have to
   actually move for that assertion to become true; M0-02's steps already
   say so.
+
+## M0-02 — core/ carries the quant analytics and data layer
+
+Implemented as specified: `git mv`'d wb.py, md.py, td.py, edgar.py, quotes.py
+(root-level) and mcp_server/{technicals,options,conviction,screener,
+vcp_screener,charts,data,macro_regime,market_top}.py into a new core/
+package, then repointed every importer across the repo.
+
+**Scope of the mechanical sweep, verified before and after with the same
+grep, not assumed:** 78 files touched beyond the 14 moved modules — 41 for
+`mcp_server.<moved> -> core.<moved>` (both real import statements and
+string-literal `patch()`/`monkeypatch.setattr()` targets in
+mcp_server/registry.py, mcp_server/server.py, a dozen other mcp_server/*.py
+callers, vesper/, trading_mcp/vesper_tools.py, and the tests that reach
+mcp_server.conviction/.charts by string), 23 for bare `import wb` / `from wb
+import` style root-module imports (rewritten as `import core.wb as wb` where
+the file used the bare form, so every downstream `wb.Something` call site in
+that file needed no further edit), and 12 test files whose
+`patch("wb.Webull", ...)` / `patch("td.TDPro", ...)` / `patch("md.Market",
+...)` string targets had to move too — mock.patch patches an attribute on
+the *string-named* module, and once the code under test does `from core.wb
+import Webull` the old `"wb.Webull"` target patches a module nothing reads
+from anymore; a test that skipped this would still pass today (mock still
+succeeds) but the underlying code would call the *real* unmocked SDK. Caught
+this class of bug by grepping for `patch\("wb\.|patch\("td\.|patch\("md\.`
+before declaring done, not just by running pytest (which was passing before
+I checked — the patches were silently no-ops on unexercised branches until
+grepped).
+
+**tests/test_import_boundaries.py's own baseline had to move with it, by
+design** — its M0-01 docstring said exactly this ("update it, ideally to
+{}, in the same commit"). `EXPECTED_VESPER_TO_MCP_SERVER_BASELINE` is now
+`{}`; verified `grep -rn 'mcp_server' vesper/` is empty before writing the
+new dict, not inferred from the old baseline shrinking. Both docstrings (top
+of file and the constant's own comment) rewritten to describe today's state
+rather than predict it — an M0-01-era doc that says "will keep doing so
+until M0-02 moves those modules" is exactly the kind of doc-vs-code drift
+the standing warning is about, once M0-02 lands.
+
+**Known, documented residual — NOT fixed here, out of this feature's
+literal scope:**
+- core/{technicals,options,conviction,vcp_screener,charts,macro_regime,
+  market_top}.py still import mcp_server.{cache,schema,risk,options_greeks,
+  traderdaddy,knowledge} — five leaf utility modules plus knowledge.py
+  (the chromadb-backed KB) that were never in this feature's move list.
+  This is a real core -> mcp_server reference, the direction M0-07's future
+  test_import_direction.py is meant to forbid.
+- core/wb.py and core/md.py still `from vesper.metrics import metrics` —
+  a real core -> vesper reference (metrics.py is a leaf, no further vesper
+  imports, but the direction is still backwards from the target layering).
+- Step 5 of this feature (`grep -rlE 'langgraph|fastmcp' core/`) is clean,
+  and the vesper -> mcp_server reverse-dependency count is verified 0, so
+  both of this feature's explicit checks pass honestly. But whoever builds
+  M0-07's `test_import_direction.py` will hit these two residuals
+  immediately and need to either allowlist them by name or pull
+  cache/schema/risk/options_greeks/traderdaddy/knowledge (and maybe
+  vesper/metrics.py) down into core/ too. Flagging now so it isn't
+  rediscovered as a surprise.
+
+Also added `"core*"` to `pyproject.toml`'s `[tool.setuptools.packages.find]`
+include list, alongside the existing `mcp_server*` — packaging metadata
+only, not exercised by pytest, but core/ is now a real importable package
+and belongs there for the same reason mcp_server* is listed.
+
+No new on-disk state — this was a pure file-move + import-path rewrite,
+nothing to add to conftest.py's `_isolated_vesper_state` fixture.
+
+**Full suite: 584 passed** (`.venv/bin/python -m pytest -q`), unchanged from
+the pre-move count — this was a layering move, not a behavior change, so no
+test was expected to move.
+
+`trading_mcp/server.py`'s pre-existing dirty state (noted by every prior
+session) was again left untouched and unstaged — it does not import any of
+the modules this feature moved (only `mcp_server.registry`, which stayed
+put), so it needed no change here and still isn't this session's to
+resolve.
+
+### For the next agent (M0-03+)
+
+- core/ now exists and holds 14 modules. Read the "Known, documented
+  residual" note above before assuming core/ is a clean leaf package — it
+  isn't yet, on two fronts (mcp_server and vesper), both pre-existing and
+  both left as-is per this feature's literal scope.
+- If a future feature moves mcp_server/cache.py, schema.py, risk.py,
+  options_greeks.py, traderdaddy.py and/or knowledge.py into core/ too,
+  the same `mcp_server\.(name)\b -> core.\1` mechanical-substitution
+  approach used here (see this session's migration script pattern) applies
+  directly — just extend the moved-module tuple and re-run the same style
+  of grep-verify-before/after discipline.
