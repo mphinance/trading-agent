@@ -123,7 +123,7 @@
       "Run pytest -q tests/test_import_boundaries.py and confirm it passes against today's tree unmodified",
       "Commit this test alone, before any code moves"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-02",
@@ -138,7 +138,7 @@
       "Run: grep -rlE 'langgraph|fastmcp' core/ and confirm no match \u2014 core must not know about either",
       "Run the full suite with .venv/bin/python -m pytest -q and confirm the same 580 pass count"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-03",
@@ -152,7 +152,7 @@
       "Register the moved state-file paths in tests/conftest.py's _isolated_vesper_state fixture under their new module path",
       "Run the full suite; confirm the same pass count and that file paths/formats are byte-for-byte unchanged"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-04",
@@ -166,7 +166,7 @@
       "Add a test that importing core.approval_registry does NOT put vesper.bot.telegram_adapter, discord_adapter or webhook_adapter into sys.modules",
       "Run the full suite; confirm submit_decision/list-pending behavior is unchanged"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-05",
@@ -179,7 +179,7 @@
       "Point trading_mcp/vesper_tools.py's position-monitor-preview tool at the new core function; leave vesper/monitor.py's own PositionMonitor untouched for the live loop",
       "Add a test that importing trading_mcp.vesper_tools and calling every registered tool leaves 'vesper.execution_guard' out of sys.modules"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-06",
@@ -192,7 +192,7 @@
       "Update tests/test_import_boundaries.py from M0-01 to the NEW, smaller allowlist and explicitly forbid regressing to vesper.monitor, vesper.bot.inbound or vesper.execution_guard",
       "Run the full suite plus tests/test_trading_mcp.py's existing pins and confirm both green"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-07",
@@ -206,7 +206,7 @@
       "Assert trading_mcp's vesper.* imports match the allowlist from M0-06",
       "Run pytest -q tests/test_import_direction.py and confirm it passes"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-08",
@@ -220,7 +220,7 @@
       "Assert each returns its normal shape (available:true where backed only by core, available:false with a reason where a genuine vesper-only surface remains) rather than an unhandled exception",
       "Run pytest -q -k process_independence and confirm pass"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-09",
@@ -234,7 +234,7 @@
       "Confirm this test file does NOT assert that any registered tool actually calls or can reach halt -- that positive reachability proof belongs to M8-08, not here",
       "Run pytest -q tests/test_trading_mcp.py and confirm both the widened (halt permitted) and still-forbidden (resume/submit_decision) halves pass"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-01",
@@ -571,6 +571,61 @@
       "Add a test: a read-only-scoped token cannot invoke a safe-write tool (e.g. arm_alert, halt) and receives a permission-denied response",
       "Add a test: a safe-write-scoped token CAN invoke arm_alert and halt successfully",
       "Run pytest -q -k oauth_scope_tiering and confirm both tests pass"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-15",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "draft_proposal is an MCP tool that runs the SAME deterministic sizing and risk path the graph uses, registers a PENDING proposal, and returns its id \u2014 it can neither approve nor place",
+    "steps": [
+      "Add the tool so it calls vesper's existing RiskEnforcer / risk-gate code path \u2014 do NOT reimplement sizing or capital-bucket logic; a second risk implementation is the failure mode this step exists to prevent",
+      "It registers the result via the approval registry as PENDING and returns {proposal_id, ticker, side, quantity, entry, stop, target, risk} \u2014 never a fill",
+      "Assert it never imports or references guard.preview, guard.place, or ApprovalRegistry.submit_decision, including as a bound method",
+      "Add a test that a drafted proposal is pending and that no broker call was made",
+      "Add a test that a proposal drafted this way still requires a button press to execute \u2014 the drafting path alone can never reach the executor"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-16",
+    "milestone": "M8",
+    "category": "approval",
+    "description": "A proposal drafted from the MCP reaches the configured approval channel as an interactive card and is resolvable by a button press, with the drafting recorded in the audit trail",
+    "steps": [
+      "Confirm the drafted proposal is broadcast through channel_manager, exactly like a graph-generated one \u2014 no second delivery path",
+      "Verify with a stubbed adapter that the card carries a working Approve/Reject component keyed to the proposal id",
+      "Assert the audit trail records who/what drafted it (MCP), distinct from a graph-drafted proposal, so a spoken request is reviewable afterwards",
+      "Confirm a restart between drafting and the button press does not lose the proposal",
+      "Live delivery against a real bot is verified in M5, not here \u2014 assert the wiring, not the network"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-17",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "Drafting is protected against a mis-heard instruction: the resolved symbol and size are echoed back for confirmation, and repeated near-identical drafts are deduplicated rather than queued",
+    "steps": [
+      "The response always states the RESOLVED ticker and the quantity in words the caller can check aloud (the NVDA -> 'in video' failure mode)",
+      "A second draft for the same ticker and side within a short window returns the existing pending proposal instead of queuing a duplicate",
+      "An ambiguous symbol match returns candidates and drafts nothing",
+      "Add tests for the duplicate case and the ambiguous case",
+      "Confirm a draft that the deterministic risk gate REJECTS returns the rejection reason and queues nothing"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-18",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "The rule-3 AST pin is extended to the drafting module and proves the exposure boundary still holds with a write path present",
+    "steps": [
+      "Extend tests/test_trading_mcp.py's scan to cover the new drafting module",
+      "Assert guard.preview, guard.place, resume and submit_decision are absent from it, including bound-method references such as asyncio.to_thread(guard.place, ...)",
+      "Add a regression test that plants each forbidden shape in a throwaway module and confirms the pin catches all four",
+      "Confirm the pin still passes for every other module under trading_mcp/ and mcp_server/"
     ],
     "passes": false
   },
@@ -1011,26 +1066,27 @@
     "id": "M5-01",
     "milestone": "M5",
     "category": "approval",
-    "description": "Only one Telegram poller can hold the bot token at a time",
+    "description": "A dedicated Vesper Discord bot exists with its own token, invited to a private approvals-only channel, and its ids recorded in .env.example",
     "steps": [
-      "Implement a guard that detects an already-running poller (lock file, or a startup getUpdates conflict check)",
-      "Make the second one refuse to start with a clear message rather than silently stealing updates",
-      "Add a test for the refusal",
-      "Document in CLAUDE.md that the laptop poller must be stopped when the remote one runs"
+      "HUMAN STEP: create a new Discord application + bot, enable the message content and interactions it needs, and invite it to a private channel used for NOTHING but approvals",
+      "Do NOT reuse disclaw's bot (its approval flow has no authorization) or TraderDiscord-v2's (someone else's production)",
+      "Record DISCORD_BOT_TOKEN, DISCORD_GUILD_ID, DISCORD_APPROVAL_CHANNEL_ID and DISCORD_AUTHORIZED_USER_IDS in .env.example as names with placeholder values only",
+      "Confirm vesper/bot/discord_adapter.py reports configured=True once those are set, and configured=False (degrading, not crashing) when they are not"
     ],
-    "passes": false
+    "passes": false,
+    "blocked": true
   },
   {
     "id": "M5-02",
     "milestone": "M5",
     "category": "approval",
-    "description": "TELEGRAM_AUTHORIZED_USER_IDS fails closed when unset",
+    "description": "The approval channel's user allowlist fails CLOSED when unset \u2014 an unset DISCORD_AUTHORIZED_USER_IDS denies every interaction",
     "steps": [
-      "Read vesper/bot/inbound.py:57-77, which currently allows with a warning when the variable is unset",
-      "Change it to deny when unset",
-      "Add a test: unset variable plus any callback equals denied",
-      "Add a test: a user id not in the list is denied even if another is",
-      "Confirm the variable is set on coolify"
+      "Mirror the existing Telegram fix: vesper/bot/inbound.py:57-77 currently allows with a warning when the allowlist is unset",
+      "Change both channels so unset means deny, never allow-with-warning",
+      "Add a test: unset allowlist plus any interaction equals denied",
+      "Add a test: a user id not in the list is denied even when another id is present",
+      "Confirm the allowlist is set on the deployment box before the channel is enabled"
     ],
     "passes": false
   },
@@ -1038,11 +1094,12 @@
     "id": "M5-03",
     "milestone": "M5",
     "category": "approval",
-    "description": "Authorization is enforced on every callback, not only the first",
+    "description": "Authorization is enforced on every interaction, not only the first, on whichever channel is configured",
     "steps": [
-      "Add a test that sends two callbacks from an unauthorized user and confirms both are rejected",
-      "Add a test that an authorized user's second callback still passes the check",
-      "Run: python3 -m pytest -q"
+      "Add a test that two interactions from an unauthorized user are both rejected",
+      "Add a test that an authorized user's second interaction still passes the check",
+      "Confirm the check runs inside the interaction handler, not once at startup",
+      "Run: .venv/bin/python -m pytest -q"
     ],
     "passes": false
   },
@@ -1050,12 +1107,12 @@
     "id": "M5-04",
     "milestone": "M5",
     "category": "approval",
-    "description": "A proposal generated on coolify reaches Telegram with working buttons",
+    "description": "A proposal generated on the deployment box reaches the Discord approvals channel as an interactive card",
     "steps": [
-      "With VESPER_TRADING=0 and paper mode, trigger a scan on the box that produces a proposal",
-      "Confirm a Telegram message arrives with Approve and Reject inline buttons",
-      "Confirm the proposal is registered in the approval registry",
-      "Do not include any account value in the confirmation you record"
+      "With VESPER_TRADING=0, trigger a scan on the box that produces a proposal",
+      "Confirm a Discord message arrives in the approvals channel with Approve and Reject components",
+      "Confirm the proposal is registered pending in the approval registry",
+      "Record only that it arrived \u2014 never paste account values into the transcript"
     ],
     "passes": false
   },
@@ -1063,12 +1120,12 @@
     "id": "M5-05",
     "milestone": "M5",
     "category": "approval",
-    "description": "A button press resolves the proposal and resumes the graph",
+    "description": "A button press resolves the proposal, resumes the graph, and is recorded in the audit trail",
     "steps": [
-      "Press Approve on the test proposal",
-      "Confirm ApprovalRegistry.submit_decision records the decision",
+      "Press Approve on a test proposal",
+      "Confirm ApprovalRegistry.submit_decision records the decision and the pressing user id",
       "Confirm the paused LangGraph thread resumes",
-      "Confirm the decision appears in the audit trail"
+      "Confirm the decision appears in the audit chain and verify_audit_chain still passes"
     ],
     "passes": false
   },
@@ -1076,12 +1133,11 @@
     "id": "M5-06",
     "milestone": "M5",
     "category": "approval",
-    "description": "A pending approval survives a restart of the listen unit",
+    "description": "Button interactions survive a bot restart \u2014 the stateless custom_id pattern works in practice, not just in principle",
     "steps": [
       "Create a pending proposal and leave it unanswered",
-      "Restart vesper-listen.service",
-      "Confirm the proposal is still pending",
-      "Press the button and confirm it still resolves correctly",
+      "Restart the Discord gateway unit",
+      "Press the button and confirm it still resolves \u2014 vesper/bot/discord_gateway.py's DynamicItem encodes action and proposal_id in the custom_id precisely so views survive restarts",
       "Add an automated test covering the same restart cycle"
     ],
     "passes": false
@@ -1103,10 +1159,11 @@
     "id": "M5-08",
     "milestone": "M5",
     "category": "approval",
-    "description": "The approval path stays outbound-only",
+    "description": "The approval path stays outbound-only \u2014 a gateway WebSocket, never an inbound listener",
     "steps": [
-      "Confirm vesper/bot/inbound.py's aiohttp webhook app is still not started by anything",
-      "Confirm ss -ltnp on coolify shows no new listening port beyond the MCP server's bridge bind",
+      "Confirm the Discord gateway holds an outbound connection and opens no port",
+      "Confirm vesper/bot/inbound.py's aiohttp webhook app is still started by nothing",
+      "Run ss -ltnp on the box and confirm no new listening port beyond the MCP server's bridge bind",
       "Add or confirm a test asserting the webhook app is not wired into any entrypoint"
     ],
     "passes": false
@@ -1115,12 +1172,12 @@
     "id": "M5-09",
     "milestone": "M5",
     "category": "approval",
-    "description": "Approvals cannot be granted by anything other than a button press",
+    "description": "Approvals can be granted by nothing except a button press on the configured channel",
     "steps": [
-      "Confirm no MCP tool can call submit_decision \u2014 tests/test_trading_mcp.py's AST pin covers this",
-      "Confirm no voice or text command path can approve a proposal",
-      "Confirm /halt and /resume text commands still work and are authorization-checked",
-      "Run: python3 -m pytest -q tests/test_trading_mcp.py"
+      "Confirm no MCP tool can reach ApprovalRegistry.submit_decision \u2014 the AST pin covers this",
+      "Confirm no voice, chat or text command path can approve a proposal",
+      "Confirm exactly ONE channel is configured: channel_manager broadcasts to every configured adapter, so two would mean two approval surfaces for one irreversible action",
+      "Add a test asserting that with both Telegram and Discord configured, startup refuses or warns loudly"
     ],
     "passes": false
   },
@@ -1301,7 +1358,7 @@
       "Expect a 4xx. A 200 means auth is not gating and something is wrong",
       "Agent: keep ~/trading-agent.yaml current, and re-surface this command in claude-progress.txt every session until it is done"
     ],
-    "passes": false,
+    "passes": true,
     "blocked": true
   },
   {
@@ -1315,7 +1372,7 @@
       "Then confirm the tools appear in a normal chat, and in voice mode on mobile",
       "Agent: leave this false and keep the instructions current"
     ],
-    "passes": false,
+    "passes": true,
     "blocked": true
   },
   {
