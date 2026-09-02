@@ -54,7 +54,7 @@
       "Update CLAUDE.md, which currently documents 2.0.16",
       "Note the fleet split (local 2.0.18, coolify 2.0.18, supermcp 2.0.12) in claude-progress.txt"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M1-05",
@@ -68,7 +68,7 @@
       "Confirm collection succeeds with no import errors (this is the only check that catches missing transitive deps like tradingview_screener and fastmcp)",
       "Remove the throwaway venv"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M1-06",
@@ -80,7 +80,7 @@
       "Confirm the suite is green with at least 570 passing",
       "Write the exact number into claude-progress.txt as the floor for later sessions"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M1-07",

@@ -16,7 +16,7 @@ uvicorn
 # Webull broker API — reads AND the order path (see rule 3 in CLAUDE.md).
 # Pulls in paho-mqtt and grpcio for the streaming clients, which stream.py does
 # use; both need build tools on some Pythons.
-webull-openapi-python-sdk
+webull-openapi-python-sdk==2.0.18
 
 # TraderDaddy Pro JSON-RPC, Telegram, and ntfy all go over plain HTTP
 requests

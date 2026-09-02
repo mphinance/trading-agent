@@ -41,8 +41,9 @@ Related repos, and why this isn't merged into them:
 - **Agent:** Python + LangGraph. `vesper/graph.py` compiles the node pipeline;
   `vesper/runner.py` drives a session. Disk-backed SQLite checkpointer, so a
   run paused at the approval gate survives a restart.
-- **Broker:** `webull-openapi-python-sdk` 2.0.16 — `webull.core` /
-  `webull.trade` / `webull.data`. Public.com is a second, partial adapter.
+- **Broker:** `webull-openapi-python-sdk` 2.0.18 (pinned in `requirements.txt`)
+  — `webull.core` / `webull.trade` / `webull.data`. Public.com is a second,
+  partial adapter.
 - **Signals/data:** TraderDaddy Pro over plain JSON-RPC (`td.py`), TickerTrace
   (`tickertrace_mcp.py`), yfinance, TradingView screener.
 - **Approval channels:** Telegram (long-poll) and Discord (gateway bot).
@@ -274,7 +275,7 @@ being spent.
   filter at all, it always returns the full market-wide slate.
 - **TDPro doesn't declare a charset**, so `requests` decodes UTF-8 as
   ISO-8859-1 and em-dashes arrive as `â€"`. `td.py` pins it.
-- **Python 3.14 works.** SDK 2.0.16 declares `python_requires='>=3.8,<3.15'`
+- **Python 3.14 works.** SDK 2.0.18 declares `python_requires='>=3.8,<3.15'`
   with explicit cryptography/grpcio pins for 3.14.
 
 ## Layout
