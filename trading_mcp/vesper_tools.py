@@ -346,14 +346,19 @@ def register_vesper_tools(mcp: Any) -> list[str]:
 
         `PositionMonitor.status()` only reflects a `vesper loop` process's
         in-memory instance, which this MCP server is not, so this instead
-        constructs its own `PositionMonitor`, polls live Webull positions
+        constructs `core.position_preview.PositionPreviewMonitor` -- a
+        guard-free read-only twin of `vesper.monitor.PositionMonitor` (see
+        that module's docstring for why: importing `vesper.monitor` itself
+        would pull `vesper.execution_guard`'s live `guard` singleton into
+        `sys.modules` as an import side effect, which this read-only server
+        must never do) -- polls live Webull positions
         (`poll_webull_positions()`) and runs the same deterministic
-        `evaluate_position()` used by the real cascade -- reporting, not
-        executing, whatever trigger comes back. It NEVER calls
+        `evaluate_position()` rules used by the real cascade -- reporting,
+        not executing, whatever trigger comes back. It NEVER calls
         `execute_exit` or anything else that sells: this is read-only by
         construction, not by omission.
 
-        Because a fresh `PositionMonitor` starts with no history, the
+        Because a fresh `PositionPreviewMonitor` starts with no history, the
         peak-gain / breakeven-lock tracking `evaluate_position()` depends on
         for the trailing-stop rule always starts at 0.0 / unlocked here --
         this reports what the cascade would do on price/time/level rules
@@ -361,11 +366,11 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         would have accumulated.
         """
         try:
-            from vesper.monitor import PositionMonitor
+            from core.position_preview import PositionPreviewMonitor
         except Exception as e:
             return {"available": False, "reason": str(e)}
 
-        monitor = PositionMonitor()
+        monitor = PositionPreviewMonitor()
         try:
             positions = await monitor.poll_webull_positions()
         except Exception as e:
@@ -396,7 +401,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
             "note": (
                 "Stateless snapshot: trailing-stop peak-gain/breakeven-lock "
                 "tracking resets every call, since this is a fresh "
-                "PositionMonitor rather than vesper loop's long-running one."
+                "PositionPreviewMonitor rather than vesper loop's long-running one."
             ),
             "position_count": len(out),
             "positions": out,

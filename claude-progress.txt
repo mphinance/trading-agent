@@ -659,3 +659,153 @@ confirmed unrelated (no approval_registry/inbound reference in its diff).
   importers listed above were deliberately left alone because redirecting
   them bought nothing (they already pull in vesper.bot elsewhere on the
   same codepath).
+
+## M0-05 -- trading_mcp's position-monitor-preview tool stops importing vesper.monitor
+
+**The concern this feature names is narrower than "guard.preview()/guard.place()
+gets called"** -- rule 3's AST pin already covers that. The actual problem:
+`vesper/monitor.py` module-scope does
+`from vesper.execution_guard import guard, GuardError, TradingDisabled`, so
+merely IMPORTING `vesper.monitor` -- which `get_position_monitor_status`
+used to do just to reach `PositionMonitor.poll_webull_positions()` and
+`.evaluate_position()` -- pulls the live `execution_guard.guard` singleton
+into `sys.modules` as an import side effect. No call site, so the AST pin
+can't see it; the exposure is the import itself.
+
+**Verified step 1 first, against the source, not assumed:** grepped
+`vesper/monitor.py` for `guard\.|GuardError|TradingDisabled` -- all three
+hits (lines 402/405/429) are inside `execute_exit_cascade`, not
+`evaluate_position` (pure rule logic, no guard reference at all) or
+`poll_webull_positions` (already imports `core.wb.Webull` locally, not
+`vesper.execution_guard`). So the read side genuinely doesn't need the guard
+at runtime -- only the module's own top-of-file import statement does.
+
+**core/position_preview.py** is a new, self-contained, guard-free module:
+`PreviewPosition`/`PreviewExitTrigger` dataclasses and a
+`PositionPreviewMonitor` class whose `evaluate_position()` (all 8 rules --
+peak-gain/breakeven-lock, take-profit, breakeven stop, stop-loss, the
+underlying-keyed swing stop, the SPY gamma-flip crossing, the 0DTE time
+stop, the earnings-exit date) and `poll_webull_positions()` (against
+`core.wb.Webull`, the same guard-free client `vesper.monitor`'s own version
+already used) are a byte-for-byte copy of `PositionMonitor`'s read-only
+methods. This is a deliberate DUPLICATION, not a refactor-and-share: the
+feature's step 3 says "leave vesper/monitor.py's own PositionMonitor
+untouched for the live loop," and `vesper/monitor.py` has zero lines changed
+in this commit (confirmed via `git diff --stat`). Splitting the read/write
+halves out of `PositionMonitor` into a shared base *would* be the cleaner
+long-term shape, but that edits the live-loop file this feature explicitly
+says not to touch -- flagging for whoever picks up a future
+consolidation pass, not doing it here.
+
+`execute_exit_cascade` (the guard-calling method) was deliberately NOT
+duplicated -- this module has no path that can sell anything, by omission
+this time (there's no method to call), not just by contract.
+
+**trading_mcp/vesper_tools.py**: `get_position_monitor_status`'s
+`from vesper.monitor import PositionMonitor` / `PositionMonitor()` became
+`from core.position_preview import PositionPreviewMonitor` /
+`PositionPreviewMonitor()`. Nothing else in the tool changed -- same
+degrade-on-failure shape, same output fields, docstring updated to explain
+why.
+
+**tests/test_trading_mcp.py**: `test_get_position_monitor_status_degrades_on_poll_failure`
+now monkeypatches `core.position_preview.PositionPreviewMonitor` instead of
+`vesper.monitor.PositionMonitor` (the old target no longer backs the tool,
+so patching it would have silently stopped testing anything).
+
+**New test (feature's step 4):**
+`test_calling_every_vesper_tool_never_imports_execution_guard` registers all
+13 vesper tools via the same `_CollectingMCP`-style stand-in the file
+already uses, calls every one of them, and asserts
+`'vesper.execution_guard' not in sys.modules` afterward. Run as a REAL
+subprocess (fresh interpreter) -- same reasoning `tests/test_approval_registry.py`'s
+import-boundary test documents: within the same pytest session, other test
+files (test_execution_guard.py, test_monitor.py, ...) have already imported
+`vesper.execution_guard` long before this test runs, so an in-process check
+would pass for the wrong reason regardless of what this feature did.
+
+Made the subprocess hermetic on purpose, since it runs outside pytest with
+none of `tests/conftest.py`'s autouse isolation fixtures applied:
+- `core.halt` / `core.circuit_breaker` / `core.paper_ledger` /
+  `core.audit_chain` / `core.approval_registry` / `core.conviction`'s
+  `_DATA_DIR` (and per-module `_STATE_PATH`/`_HALT_STATE_PATH`/etc.)
+  redirected to a temp dir by direct attribute assignment inside the probe
+  script -- the same values `conftest.py`'s `_isolated_vesper_state` fixture
+  sets via `monkeypatch.setattr`, just done by hand since there's no pytest
+  in a bare subprocess.
+- `SIDECAR_STATE_DIR` env var pointed at an empty temp dir so `list_alerts`
+  sees zero armed alerts and never calls out to TDPro for a dynamic level
+  (a REAL armed alert in the developer's actual alert store would otherwise
+  have triggered a real network call from inside this test).
+- `mcp_server.knowledge` forced unavailable via
+  `sys.modules["mcp_server.knowledge"] = None`, the exact technique
+  `test_recall_similar_setups_degrades_without_chromadb` (same file) already
+  uses -- keeps `recall_similar_setups` from touching the real on-disk
+  ChromaDB index (`data/chromadb/`, which is live production data on this
+  machine -- `ls` showed it modified today) or triggering an embedding-model
+  network call.
+- `core.wb` needed no special handling: the real `webull-openapi-python-sdk`
+  package is not installed in `.venv` at all (only stubbed via
+  `sys.modules` injection inside `tests/conftest.py`, which a bare
+  subprocess never imports), so `from webull.core.client import ApiClient`
+  raises `ModuleNotFoundError` immediately and every wb-dependent tool
+  degrades to `{"available": False, ...}` on its own -- verified this is
+  true, not assumed, by grepping conftest.py's `_install_stubs()`.
+
+Every tool is actually CALLED (`get_proposal`/`get_playbook_calibration`/
+`recall_similar_setups` get minimal kwargs so they don't TypeError on a
+missing required arg first) -- the assertion is on `sys.modules` after the
+fact, not on each tool's return value, so a tool raising internally doesn't
+fail this test (each tool's own contract to degrade rather than raise is
+already covered by the per-tool degrade tests elsewhere in this file). A
+sanity check (`called >= 13`) guards against the assertion being vacuously
+true because registration silently returned nothing.
+
+**tests/test_import_boundaries.py**: `EXPECTED_VESPER_TOOLS_REFS` (the
+M0-01 characterization baseline) drops `"vesper.monitor"`, now that
+`vesper_tools.py` has zero references to it -- verified against the actual
+scan, not assumed from the diff (the full suite run is what actually caught
+this; the baseline test failed first, exactly as its own docstring warns it
+will on a deliberate change, and got updated deliberately here rather than
+loosened).
+
+**No new on-disk state.** `core/position_preview.py` is stateless -- reads
+through `core.wb.Webull` the same way `vesper.monitor`'s version already
+does, writes nothing.
+
+**Full suite: 587 passed** (`.venv/bin/python -m pytest -q`) -- 586 before
+this feature (M0-04's handoff note) + 1 new test.
+
+**feature_list.json housekeeping, not this feature's doing:** the working
+tree already carried a large uncommitted drift in `feature_list.json`
+(new M8-15..M8-18 entries, reworded M5-01..M5-06 for a Discord-only
+approval channel, an added `"blocked": true` on M5-01) when this session
+started -- present before any edit here, confirmed by diffing against
+M0-04's own commit (`5f4f339`) of the file. Per the standing rule ("NEVER
+edit any field of feature_list.json except your own feature's 'passes'"),
+only the M0-05 `passes` line was staged for this commit -- via
+`git add -p`, picking just that one hunk -- leaving the rest of the file's
+working-tree changes unstaged and untouched, exactly as prior sessions left
+`trading_mcp/server.py`'s pre-existing OAuth-provider dirty state unstaged.
+Whoever picks up that drift next should treat it as someone else's
+in-progress edit, not evidence of anything M0-05 did.
+
+### For the next agent
+
+- `core/` now holds 20 modules: the 19 from M0-02/M0-03/M0-04 plus
+  `position_preview.py` this session. Unlike most of `core/`'s other
+  modules, this one is a deliberate duplicate of logic that still lives
+  elsewhere (`vesper/monitor.py`) rather than a moved-and-shimmed original
+  -- if `vesper/monitor.py`'s `evaluate_position()` rules ever change, this
+  file needs the same change by hand, and nothing currently enforces that
+  they stay in sync beyond this note and the shared docstring cross-reference.
+- If a future feature wants to eliminate that duplication risk for real (a
+  shared base class both `PositionMonitor` and `PositionPreviewMonitor`
+  inherit from, living in `core/`), that's a bigger, unscoped-here change --
+  it would mean editing `vesper/monitor.py`, which this feature's own steps
+  explicitly said to leave untouched.
+- `feature_list.json`'s uncommitted drift (M8-15..M8-18, reworded
+  M5-01..M5-06) described above is still sitting in the working tree,
+  unstaged, exactly as this session found it. Not this feature's scope to
+  resolve, but worth a look by whoever picks up M0-06+ in case it's actually
+  wanted and just never got committed.

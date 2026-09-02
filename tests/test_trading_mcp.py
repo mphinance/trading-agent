@@ -427,6 +427,141 @@ def test_mcp_server_never_calls_execution_guard():
     assert offenders == {}
 
 
+def test_calling_every_vesper_tool_never_imports_execution_guard():
+    """M0-05: the AST pins above catch a `guard.preview(`/`guard.place(`
+    call site in the source text, but M0-05's actual concern is narrower and
+    easier to miss -- `vesper/monitor.py` module-scope does `from
+    vesper.execution_guard import guard, GuardError, TradingDisabled`, so
+    merely IMPORTING that module (which `get_position_monitor_status` used
+    to do, to reach its two read-only methods) pulls the live `guard`
+    singleton into `sys.modules` as a side effect, with no call site for the
+    AST pin to catch at all. `core/position_preview.py` exists so that
+    doesn't happen.
+
+    Run as a REAL subprocess (fresh interpreter), the same pattern
+    `tests/test_approval_registry.py`'s import-boundary test and this file's
+    own token-guard test use: within this same pytest session, other test
+    files (e.g. test_execution_guard.py, test_monitor.py) have already
+    imported `vesper.execution_guard` long before this test runs, which
+    would make an in-process `sys.modules` check pass for the wrong reason
+    regardless of what this feature actually did.
+
+    State paths are redirected to a temp dir the same way
+    `tests/conftest.py`'s `_isolated_vesper_state` fixture does (that
+    fixture doesn't apply here -- this runs outside pytest, in its own
+    interpreter) so this reads empty/no state rather than the developer's
+    real `data/` files, and `SIDECAR_STATE_DIR` is pointed at an empty temp
+    dir so `list_alerts` sees zero armed alerts and never calls out to
+    TDPro. `mcp_server.knowledge` (the chromadb-backed trade-memory module)
+    is forced unavailable via the same `sys.modules[...] = None` technique
+    `test_recall_similar_setups_degrades_without_chromadb` above uses, so
+    `recall_similar_setups` degrades cleanly instead of touching the real
+    on-disk chroma index or an embedding model. Every tool is still
+    genuinely CALLED -- these just keep the call hermetic, matching what
+    each tool's own docstring already promises it does on a missing
+    dependency.
+    """
+    script = '''
+import asyncio
+import inspect
+import sys
+import tempfile
+from pathlib import Path
+
+tmp = Path(tempfile.mkdtemp())
+data_dir = tmp / "data"
+data_dir.mkdir()
+
+import os
+os.environ["SIDECAR_STATE_DIR"] = str(tmp / "alert_state")
+
+# Force the chromadb-backed trade-memory module unavailable, same technique
+# tests/test_trading_mcp.py's test_recall_similar_setups_degrades_without_chromadb
+# uses -- keeps this hermetic without needing the real on-disk chroma index.
+sys.modules["mcp_server.knowledge"] = None
+
+import core.halt as _halt
+_halt._DATA_DIR = data_dir
+_halt._HALT_STATE_PATH = data_dir / "halt_state.json"
+
+import core.circuit_breaker as _cb
+_cb._DATA_DIR = data_dir
+_cb._STATE_PATH = data_dir / "circuit_breaker_state.json"
+
+import core.paper_ledger as _pl
+_pl._DATA_DIR = data_dir
+_pl._LEDGER_PATH = data_dir / "paper_ledger.json"
+
+import core.audit_chain as _ac
+_ac._DATA_DIR = data_dir
+_ac._CHAIN_PATH = data_dir / "audit_chain.jsonl"
+
+import core.approval_registry as _ar
+_ar._DATA_DIR = data_dir
+_ar._APPROVAL_STATE_PATH = data_dir / "approval_registry_state.json"
+
+import core.conviction as _conv
+_conv._DATA_DIR = data_dir
+
+from trading_mcp.vesper_tools import register_vesper_tools
+
+
+class _Collecting:
+    def __init__(self):
+        self.tools = {}
+
+    def tool(self, *_a, **_kw):
+        def _decorator(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+        return _decorator
+
+
+mcp = _Collecting()
+register_vesper_tools(mcp)
+assert mcp.tools, "no tools registered -- nothing to call"
+
+kwargs_by_name = {
+    "get_proposal": {"proposal_id": "does-not-exist"},
+    "get_playbook_calibration": {"playbook": "wheel"},
+    "recall_similar_setups": {"query_thesis": "test setup, forced unavailable above"},
+}
+
+
+async def _call_every_tool():
+    for name, fn in mcp.tools.items():
+        try:
+            result = fn(**kwargs_by_name.get(name, {}))
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            pass  # every tool's own contract is to degrade, not raise -- but
+                  # even if one doesn't, the import-boundary check below is
+                  # this test's actual assertion, not each tool's return value.
+
+
+asyncio.run(_call_every_tool())
+
+assert "vesper.execution_guard" not in sys.modules, (
+    "calling a trading_mcp tool pulled vesper.execution_guard into "
+    "sys.modules: " + repr(sorted(m for m in sys.modules if m.startswith("vesper")))
+)
+print("OK", len(mcp.tools))
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"probe failed (rc={result.returncode})\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+    assert result.stdout.strip().startswith("OK"), result.stdout
+    # Sanity: the probe actually iterated a non-trivial tool set, not an
+    # empty registration that would make the sys.modules assertion vacuous.
+    called = int(result.stdout.strip().split()[1])
+    assert called >= 13, f"expected at least the 13 documented vesper tools, probe only saw {called}"
+
+
 def test_execution_guard_order_path_confined_to_known_call_sites():
     """Across the whole non-test source tree, `guard.preview()` /
     `guard.place()` may only be called from the two places CLAUDE.md's rule 3
@@ -616,9 +751,9 @@ async def test_recall_similar_setups_degrades_without_chromadb(vtools, monkeypat
 
 
 async def test_get_position_monitor_status_degrades_on_poll_failure(vtools, monkeypatch):
-    from vesper.monitor import PositionMonitor
+    from core.position_preview import PositionPreviewMonitor
 
-    monkeypatch.setattr(PositionMonitor, "poll_webull_positions", _aboom)
+    monkeypatch.setattr(PositionPreviewMonitor, "poll_webull_positions", _aboom)
     result = await vtools["get_position_monitor_status"]()
     assert result["available"] is False
 

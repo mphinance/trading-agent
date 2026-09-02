@@ -106,13 +106,19 @@ def _scan_vesper_refs(root: Path) -> dict[str, set[str]]:
 # longer need to import vesper.bot at all (that package's __init__ eagerly
 # constructs TelegramAdapter/DiscordAdapter/WebhookAdapter/ChannelManager).
 # So vesper.bot.inbound drops out here too.
-# vesper.alerts_runner and vesper.monitor stay: those two modules still live
-# under vesper/ (they pull in LangGraph/broker machinery this split isn't
-# moving) and vesper_tools.py legitimately reads through them as a viewer
-# over vesper's own state.
+# vesper.alerts_runner stays: that module still lives under vesper/ (it
+# pulls in LangGraph/broker machinery this split isn't moving) and
+# vesper_tools.py legitimately reads through it as a viewer over vesper's
+# own state.
+# vesper.monitor dropped out as of M0-05: importing it -- even just to reach
+# its two read-only methods -- pulls `vesper.execution_guard`'s live `guard`
+# singleton into sys.modules as an import side effect (module-scope `from
+# vesper.execution_guard import guard, GuardError, TradingDisabled`), which
+# this read-only server must never do. The position-monitor-preview tool now
+# reads through core/position_preview.py, a guard-free duplicate of just the
+# read-only rules, instead.
 EXPECTED_VESPER_TOOLS_REFS = {
     "vesper.alerts_runner",
-    "vesper.monitor",
 }
 
 

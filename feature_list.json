@@ -179,7 +179,7 @@
       "Point trading_mcp/vesper_tools.py's position-monitor-preview tool at the new core function; leave vesper/monitor.py's own PositionMonitor untouched for the live loop",
       "Add a test that importing trading_mcp.vesper_tools and calling every registered tool leaves 'vesper.execution_guard' out of sys.modules"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-06",
