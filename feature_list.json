@@ -94,7 +94,7 @@
       "Run: git push",
       "Confirm: git status is clean apart from deliberately-ignored files"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-01",
@@ -109,7 +109,7 @@
       "Run the new tests and confirm they pass against the CURRENT implementation",
       "These are the regression net for everything that follows"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M2-02",

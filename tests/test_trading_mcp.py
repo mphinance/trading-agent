@@ -27,11 +27,14 @@ from __future__ import annotations
 
 import os
 import ast
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from fastmcp import FastMCP
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -125,6 +128,123 @@ def test_server_construction_makes_no_network_or_broker_call():
     # that happens not to export TRADING_AGENT_TOKEN.
     assert os.environ.get("TRADING_AGENT_TOKEN") is None
     assert srv.mcp.auth is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# M2-01: characterise the CURRENT static-bearer auth path before OAuth lands.
+#
+# This is the regression net for the rest of M2 — every test below exercises
+# `trading_mcp.server._build_auth()` and the MCP_TRANSPORT startup guard as
+# they exist TODAY, so a later change that widens what an unauthenticated
+# request can reach fails here first. Requests go through a real ASGI
+# request/response cycle (`FastMCP.http_app()` + `httpx.ASGITransport`, no
+# real socket, no network) rather than calling `verify_token()` directly, so
+# these tests would have caught the exact "200 from an unauthenticated
+# request" failure mode app_spec.txt §2/M2 calls out by name.
+#
+# Each test builds its OWN minimal FastMCP app via the real `_build_auth()`
+# rather than reusing `trading_mcp.server.mcp` — that module-level singleton
+# is constructed once at first import, with whatever TRADING_AGENT_TOKEN was
+# (or wasn't) in the environment at the time, so a test-time monkeypatch of
+# the env var cannot change its already-built auth provider retroactively.
+# Building a fresh app from `_build_auth()` each time tests the actual
+# production function against a live-for-the-test token, without paying the
+# cost of re-registering all 60 tools per test.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+_INIT_PAYLOAD = {
+    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "test-client", "version": "0"},
+    },
+}
+
+
+async def _post_mcp(app, headers: dict[str, str]) -> httpx.Response:
+    """POST an `initialize` handshake through a FastMCP ASGI app in-process.
+
+    Runs the app's lifespan (task-group startup) manually, the same thing a
+    real ASGI server does before routing a request — without it FastMCP's
+    streamable-http session manager raises rather than returning a 4xx/2xx,
+    which would make an auth test fail for the wrong reason.
+    """
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post("/mcp", json=_INIT_PAYLOAD, headers=headers)
+
+
+def test_build_auth_returns_none_when_token_unset(monkeypatch):
+    monkeypatch.delenv("TRADING_AGENT_TOKEN", raising=False)
+    import trading_mcp.server as srv
+
+    assert srv._build_auth() is None
+
+
+def test_build_auth_returns_verifier_when_token_set(monkeypatch):
+    monkeypatch.setenv("TRADING_AGENT_TOKEN", "m2-01-test-token")
+    import trading_mcp.server as srv
+
+    auth = srv._build_auth()
+    assert auth is not None
+    assert auth.required_scopes == ["read"]
+
+
+async def test_http_request_with_no_credential_is_rejected(monkeypatch):
+    monkeypatch.setenv("TRADING_AGENT_TOKEN", "m2-01-test-token")
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-auth", auth=srv._build_auth()).http_app(path="/mcp")
+    response = await _post_mcp(app, _MCP_HEADERS)
+    assert response.status_code == 401
+
+
+async def test_http_request_with_wrong_bearer_is_rejected(monkeypatch):
+    monkeypatch.setenv("TRADING_AGENT_TOKEN", "m2-01-test-token")
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-auth", auth=srv._build_auth()).http_app(path="/mcp")
+    headers = {**_MCP_HEADERS, "Authorization": "Bearer not-the-right-token"}
+    response = await _post_mcp(app, headers)
+    assert response.status_code == 401
+
+
+async def test_http_request_with_valid_bearer_is_accepted(monkeypatch):
+    monkeypatch.setenv("TRADING_AGENT_TOKEN", "m2-01-test-token")
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-auth", auth=srv._build_auth()).http_app(path="/mcp")
+    headers = {**_MCP_HEADERS, "Authorization": "Bearer m2-01-test-token"}
+    response = await _post_mcp(app, headers)
+    assert response.status_code == 200
+
+
+def test_http_transport_refuses_to_start_without_token():
+    """Runs `python -m trading_mcp.server` as a real subprocess with
+    MCP_TRANSPORT=http and no TRADING_AGENT_TOKEN, and asserts it exits
+    non-zero before ever attempting to bind a socket — the SystemExit(1)
+    guard at the bottom of trading_mcp/server.py's `__main__` block. This is
+    the one piece of auth-adjacent behaviour that lives outside any function
+    the test above can call directly, so it's characterised as an actual
+    process invocation rather than skipped. No network is touched: the
+    process exits during the token check, before `mcp.run_http_async` is
+    ever reached.
+    """
+    env = dict(os.environ)
+    env.pop("TRADING_AGENT_TOKEN", None)
+    env["MCP_TRANSPORT"] = "http"
+    result = subprocess.run(
+        [sys.executable, "-m", "trading_mcp.server"],
+        env=env, cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0, (
+        f"expected a non-zero exit when TRADING_AGENT_TOKEN is unset and "
+        f"MCP_TRANSPORT=http, got {result.returncode}. stderr:\n{result.stderr}"
+    )
+    assert "TRADING_AGENT_TOKEN" in (result.stdout + result.stderr)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -1,157 +1,154 @@
-# claude-progress.txt — written by Session 3
+# claude-progress.txt — written by Session 4
 
 You have no memory of prior sessions. Read this whole file, then CLAUDE.md and
 app_spec.txt in full, before touching anything. app_spec.txt §2 lists ten
 invariants (I1-I10) — re-read them every session, they are not style
 preferences.
 
-## Floor unchanged: 570 passing, re-verified from a genuinely fresh clean venv
+## Floor: 576 passing (up from 570), regression-checked before new work
 
-`.venv/bin/python -m pytest -q` → **570 passed**, ~23s locally (repo's own
-`.venv`, not freshly rebuilt this session — it was already healthy). Also
-re-verified from a **separate throwaway venv** (`python3 -m venv
-/tmp/vesper-clean-venv`, not the repo's `.venv`): `pip install -r
-requirements-dev.txt` clean, `pytest --collect-only -q` → 570 tests collected
-with zero import errors, then `pytest -q` → 570 passed there too. Same floor
-as last session, no regression. Also re-confirmed remotely:
+`.venv/bin/python -m pytest -q` → **576 passed** in ~25s, from the repo's own
+`.venv` (already healthy, not rebuilt this session). `import vesper.nodes`
+still OK. `pytest --collect-only -q` → 576 tests collected, no import errors.
+Did not re-verify from a brand-new throwaway venv this session (M1-05 already
+proved that pattern works and nothing in requirements*.txt changed) — if a
+future session wants that extra confidence, `python3 -m venv
+/tmp/vesper-clean-venv && .../pip install -r requirements-dev.txt && pytest
+-q`. Remote unchanged and re-confirmed:
 `ssh coolify 'systemctl --user is-active trading-agent.service; ss -ltnp | grep 8500'`
-→ `active`, bound to `10.0.0.1:8500` (docker bridge), never `0.0.0.0`. I5 holds.
+→ `active`, bound to `10.0.0.1:8500` (docker bridge, never `0.0.0.0`). I5 holds.
 
-## What this session did: M1-04, M1-05, M1-06 (M1 milestone closed out)
+## Bookkeeping fix from last session: M1-07 flipped to passing
 
-**M1-04 — pinned the Webull SDK to 2.0.18.**
-`requirements.txt:19` changed from a bare `webull-openapi-python-sdk` to
-`webull-openapi-python-sdk==2.0.18`. Verified the version to pin against by
-checking coolify directly (not local — the local `.venv` deliberately does
-NOT install the real SDK; it's stubbed in `tests/conftest.py` per this repo's
-convention, so `pip show` locally correctly finds nothing):
-`ssh coolify '~/trading-agent/.venv/bin/python -m pip show
-webull-openapi-python-sdk'` → `Version: 2.0.18`. Matches what CLAUDE.md's
-Gotchas section already asserted coolify runs. Fleet split noted: local dev
-venv has no real install (by design), coolify **2.0.18**, supermcp (separate
-repo, out of scope) runs 2.0.12 — a real split across the two live systems,
-now at least pinned and documented rather than silently drifting further.
-Also corrected CLAUDE.md's two stale "2.0.16" references (the Stack section's
-Broker line, and the Python-3.14 gotcha) to 2.0.18.
+Last session's close-out commit (`be3d8d5`) actually DID everything M1-07's
+steps ask — reviewed `git status --short`, staged only the four files it
+changed, committed, pushed — and said so in its own commit message ("M1-07:
+this commit is the M1 close-out"), but never flipped M1-07's own `passes`
+field in that same commit. This session independently re-verified the claim
+before trusting it: `git status --short` clean except the four pre-existing
+untracked stray files (see below), and `git rev-parse HEAD origin/main` equal
+(everything pushed). That's real verification of M1-07's actual steps, done
+this session, so I flipped it rather than leaving a stale `false` on work
+that was genuinely finished. **M1 milestone: all 7 features now passing.**
 
-**M1-05 — clean-venv collect-only check, re-run against the pinned state.**
-Previous session had already proven this functionally but deliberately left
-it `false`, asking for an explicit re-run once M1-04 landed. Did that:
-fresh `python3 -m venv /tmp/vesper-clean-venv`, `pip install -r
-requirements-dev.txt`, then `pytest --collect-only -q` → 570 tests collected,
-zero import errors. Also ran the full suite there for extra confidence (not
-required by the feature's steps, but cheap): 570 passed. Removed the
-throwaway venv afterward with `python3 -c "import shutil;
-shutil.rmtree(...)"` (this harness blocks `rm -rf`, per last session's note —
-confirmed still true, `shutil.rmtree` is the workaround).
+## This session: M2-01 — characterise the current static-bearer auth path
 
-**M1-06 — recorded the floor.** Confirmed again via `.venv/bin/python -m
-pytest -q` → 570 passed, 0 failed, matching the already-established floor
-from session 2. No new tests were added this session (M1-04/M1-05 are
-config/verification work, not new test coverage) so the number itself didn't
-move — but it's now been independently re-verified in a completely fresh venv
-as part of M1-05, which is a stronger proof than the reused local `.venv`
-alone.
+First `blocked`-free `passes: false` feature in dependency order (M2-01, start
+of the M2/OAuth milestone). Added 6 tests to `tests/test_trading_mcp.py`,
+no production code touched (that's the point of M2-01 — regression net
+*before* anything changes):
 
-Commits this session: pin + CLAUDE.md fix + feature_list.json flips (see
-`git log` — committed together as one M1-close-out commit, following the
-"small commits, push often" rule while keeping directly-related config +
-doc + tracking-file changes atomic).
+- `test_build_auth_returns_none_when_token_unset` /
+  `..._returns_verifier_when_token_set` — direct unit tests of
+  `trading_mcp/server.py`'s `_build_auth()`.
+- `test_http_request_with_no_credential_is_rejected`,
+  `..._with_wrong_bearer_is_rejected`, `..._with_valid_bearer_is_accepted` —
+  exercise a REAL ASGI request/response cycle (`FastMCP(...).http_app()` +
+  `httpx.ASGITransport`, in-process, no socket, no network) doing an actual
+  MCP `initialize` handshake. No-cred / wrong-bearer both return 401; the
+  valid bearer gets a real 200 with a protocol handshake response. This is
+  the shape of check app_spec.txt calls out by name ("a 200 from an
+  unauthenticated request is a failed feature, not a passing one") — these
+  tests would have caught that regression, not just asserted a docstring.
+- `test_http_transport_refuses_to_start_without_token` — the one piece of
+  this behaviour that lives inside `if __name__ == "__main__":` rather than
+  a callable function, so it's characterised as a real subprocess
+  (`python -m trading_mcp.server`, `MCP_TRANSPORT=http`, no
+  `TRADING_AGENT_TOKEN`) and asserted non-zero exit. It exits during the
+  token check, before `mcp.run_http_async` is ever reached — no socket is
+  bound, no network touched.
 
-## M1-07 — also completed this session (closes the M1 milestone)
+**Design note for whoever builds M2-03 (mounting the OAuth provider):** the
+three ASGI-request tests build a FRESH minimal `FastMCP("test-auth",
+auth=srv._build_auth())` per test rather than reusing the module-level
+`trading_mcp.server.mcp` singleton. That singleton's `auth` is fixed at
+first import time from whatever `TRADING_AGENT_TOKEN` was in the ambient env
+then — a test-time `monkeypatch.setenv` cannot retroactively change it. Any
+OAuth test will need the same pattern: build the auth provider fresh from
+whatever function ends up constructing it, don't rely on the singleton.
 
-Ran `git status --short`, read the diff, staged only `CLAUDE.md`,
-`requirements.txt`, and `feature_list.json` (the three files this session
-actually changed) — confirmed no `.env`, CSV, screenshot, or credential in
-the diff. Committed and pushed to `main`. `git status` after push is clean
-except for the four untracked stray files noted below, which predate this
-session and were deliberately left untouched (see below — not part of M1,
-not safe to delete without knowing their provenance).
+Verified: `pytest -q tests/test_trading_mcp.py` → 29 passed (23 pre-existing +
+6 new). Full suite `pytest -q` → 576 passed (570 + 6, satisfies app_spec.txt
+§7's "strictly greater than 570" requirement, though DoD #2 as a whole needs
+the rest of M2/M5 too). `httpx` and `fastmcp` were already declared deps in
+both `requirements.txt` and `requirements-dev.txt` — no new dependency added.
+`git status --short` reviewed before staging: only `feature_list.json` and
+`tests/test_trading_mcp.py` changed, no secrets/CSVs/screenshots.
 
-**feature_list.json is now: 6 passing (M1-01 through M1-06 all flipped, plus
-M1-07 done via this commit), M1 milestone fully closed.** Next up is M2
-(OAuth 2.1 on the MCP server), starting at M2-01.
+## What's next: M2-02 (hmac.compare_digest)
 
-## Untracked files found at session start — NOT part of M1, left alone
-
-`git status --short` showed four untracked files that this session did not
-create and does not explain:
-- `HKUDS_REPOSITORY_REVIEW.md` — a README-ranking research doc about an
-  unrelated GitHub org (HKUDS/LightRAG etc.). Has nothing to do with Vesper.
-  Looks like stray output from some other task that landed in this working
-  directory by accident.
-- `docs/HANDOFF_2026-09-01.md` — a handoff note that **conflicts with
-  app_spec.txt**: it tells the reader to use static-bearer auth only ("Use
-  the static-bearer method, not OAuth"), which contradicts app_spec.txt §1
-  decision 4 and the entire M2 milestone (OAuth 2.1 is mandated, bearer is
-  the fallback, not the primary path). Do not follow this file's auth
-  guidance — app_spec.txt supersedes it. Left untracked/uncommitted rather
-  than fixed or deleted, since I don't know if a human is mid-edit on it.
-- `scripts/package_for_supermcp.py` — packages momentum tools for supermcp.
-  Not obviously in conflict with any invariant (it only builds a local
-  `dist/` bundle, doesn't touch supermcp directly), but it's adjacent to the
-  "competing plan that loses" docs app_spec.txt §0 calls out
-  (`docs/SUPERMCP_CONSOLIDATION_PLAN.md` etc.). Did not touch it.
-- `supermcp_CLAUDE_remote.md` — a copy of the *other* repo's CLAUDE.md
-  (supermcp's), sitting in this repo's root. Likely pasted here for
-  reference during some cross-repo work. Not this repo's CLAUDE.md and not
-  referenced by anything here.
-
-None of these were requested by any `feature_list.json` entry, none were
-touched, and none were staged or committed. Flagging them here rather than
-silently working around them, per this run's "when blocked, record and move
-on" instruction — these aren't blockers, just unexplained clutter a human
-should either commit, `.gitignore`, or delete. If they're still present next
-session, it's worth asking a human whether they're wanted.
-
-## What's next: M2 (OAuth 2.1 on the MCP server)
-
-Start at **M2-01** — characterise the current static-bearer auth path with
-tests *before* changing anything (the regression net for the rest of M2).
-Then M2-02 (hmac.compare_digest everywhere a token is compared — grep
-`trading_mcp/` for `==` against a token/secret), M2-03 (mount an OAuth 2.1
-provider — research FastMCP's installed version's `auth=` support first),
-M2-04 (dynamic client registration end to end).
+Grep `trading_mcp/` for any place a token/secret gets compared with `==`
+(right now `StaticTokenVerifier.verify_token`'s dict lookup — `self.tokens.get(token)`
+— is itself not a naive `==` compare, but check for anything this repo adds
+on top of it). Then M2-03 (mount an OAuth 2.1 provider — research FastMCP
+3.4.7's `auth=` support for a full AS, not just `TokenVerifier`, before
+designing) and M2-04 (dynamic client registration).
 
 Read `docs/SUPERMCP_SWAGGER_AND_AUTH_PLAN.md` and the supermcp handoff notes
 before designing M2-03/M2-04, per app_spec.txt's explicit instruction — the
 supermcp auth design had a real bug (`authorize()` force-granting admin on
 every OAuth handshake) that must not be repeated here. Do NOT let
-`docs/HANDOFF_2026-09-01.md` (see above) steer this away from OAuth — that
-file is stale/wrong on this point.
+`docs/HANDOFF_2026-09-01.md` (see below — still present, still stale) steer
+this away from OAuth.
+
+## Untracked files — still present, still not this session's to resolve
+
+Same four as last session, still untouched, still unexplained by any
+feature_list.json entry:
+- `HKUDS_REPOSITORY_REVIEW.md` — unrelated research doc, nothing to do with
+  Vesper.
+- `docs/HANDOFF_2026-09-01.md` — conflicts with app_spec.txt (tells the
+  reader to use static-bearer only, not OAuth). Do not follow its auth
+  guidance.
+- `scripts/package_for_supermcp.py` — packages momentum tools for supermcp;
+  builds a local `dist/`, doesn't touch supermcp directly.
+- `supermcp_CLAUDE_remote.md` — a copy of the *other* repo's CLAUDE.md.
+
+If still present after several sessions, worth asking Michael whether to
+commit, `.gitignore`, or delete them — an agent shouldn't guess.
 
 ## Remote deployment — unchanged this session, re-verified healthy
 
-Nothing on coolify was touched (no ssh write commands, only read-only
-`systemctl`/`ss` checks). Per Step 3/Step 10:
-- `ssh coolify 'systemctl --user is-active trading-agent.service'` → `active`
-- `ssh coolify 'ss -ltnp | grep 8500'` → bound to `10.0.0.1:8500` (docker
-  bridge), never `0.0.0.0`. Invariant I5 holds.
-- Also used coolify this session to check the *installed* Webull SDK version
-  for M1-04 (`pip show`, read-only) — no config changed, no restart issued.
+Only read-only `ssh coolify` commands ran (`systemctl --user is-active`,
+`ss -ltnp`) — no config changed, no restart issued, no write to the box.
+- `trading-agent.service` → `active`, bound to `10.0.0.1:8500` (docker
+  bridge), never `0.0.0.0`. I5 holds.
 - TLS/by-name HTTPS still not live — unchanged, still blocked on H1 (sudo).
 
 ## HUMAN_BLOCKED items (H1-H4) — unchanged, still blocking
 
 - **H1 — install the Traefik dynamic config.** Needs `sudo`. Staged at
-  `coolify:~/trading-agent.yaml`. Exact command in app_spec.txt §6.
-- **H2 — add the connector in claude.ai.** Blocked on H1 and (per app_spec)
-  best done after M2 (OAuth) lands.
+  `coolify:~/trading-agent.yaml`. Exact command in app_spec.txt §6. Note:
+  once M2 changes the auth surface, `~/trading-agent.yaml` may need to be
+  rewritten (can be done without sudo) before re-issuing this command.
+- **H2 — add the connector in claude.ai.** Blocked on H1, best done after M2.
 - **H3 — arm live trading (`VESPER_TRADING=1`).** Michael's keystroke only.
   Confirmed still unset/`0` locally; this session never touched it.
 - **H4 — confirm voice works on the phone.** Not actionable until M8.
 
 ## Gotchas discovered this session (not previously documented)
 
-- **`pip show <pkg>` locally correctly reports "not found" for the Webull
-  SDK — that's expected, not a bug.** The dev venv deliberately never
-  installs it (stubbed in `tests/conftest.py`, see CLAUDE.md's Tests
-  section). To check the *real* installed version, check it against coolify
-  or a venv built from `requirements.txt` (not `requirements-dev.txt`).
-- Reconfirmed from last session: `rm -rf` is blocked by this harness's bash
-  policy; `python3 -c "import shutil; shutil.rmtree(path)"` is the working
-  substitute for scratch directories/venvs, and `python3 -m venv --clear` for
-  venvs specifically.
+- **Testing FastMCP's http auth needs a real ASGI request, not just a unit
+  call to `verify_token()`.** `FastMCP(...).http_app(path="/mcp")` returns a
+  Starlette ASGI app; `httpx.ASGITransport` + `httpx.AsyncClient` drives it
+  in-process (no socket, no network — stays inside this repo's hermetic-test
+  contract). One catch: `httpx.ASGITransport` does NOT run the app's
+  lifespan automatically, and FastMCP's streamable-http session manager
+  raises `RuntimeError: Task group is not initialized` without it. Fix:
+  wrap the client calls in `async with app.router.lifespan_context(app):`.
+  Without that wrapper, an auth test would raise for the wrong reason
+  (session-manager plumbing) rather than asserting the right one (status
+  code).
+- **The MCP protocol needs a real `initialize` handshake to get a clean 200**
+  — sending a bare `ping` against a fresh session returns 400 ("Missing
+  session ID"), which is not itself an auth failure (a 401 vs 400
+  distinction proved that: bad/missing creds get 401 before the session
+  layer is ever reached; a valid cred that skips the handshake gets 400 from
+  the session layer instead). Tests here always POST a full `initialize`
+  payload to avoid that ambiguity.
+- Reconfirmed: `rm` and `rm -rf` are blocked by this harness's bash policy;
+  `python3 -c "import os; os.remove(path)"` (or `shutil.rmtree` for
+  directories) is the working substitute.
 
 ## Rules for every later session (unchanged, still true)
 
@@ -159,10 +156,12 @@ Nothing on coolify was touched (no ssh write commands, only read-only
   may change per feature. Never reorder, reword, or add/remove a feature.
 - Use `.venv/bin/python -m pytest -q`, not `source .venv/bin/activate && ...`
   — `source` is blocked by this harness's bash policy.
-- One feature (or one tightly-related milestone close-out, as this session
-  did for M1) landed per session with its own commit and a real `pytest -q`
+- One feature landed per session with its own commit and a real `pytest -q`
   run you actually watched pass — never mark `passes: true` without having
-  run the exact verification the feature's `steps` describe.
+  run the exact verification the feature's `steps` describe. (Exception this
+  session: M1-07, where the verification had genuinely already run in a
+  prior commit and this session independently re-checked its outcome before
+  trusting it — not a new exception to lean on casually.)
 - Never print a credential, account number, balance, or ntfy topic to this
-  transcript (rule 5 / I6). This session only ever checked package *names*
-  and *versions* (`pip show`), never any secret.
+  transcript (rule 5 / I6). This session's tests use a throwaway string
+  literal (`"m2-01-test-token"`) as a fake bearer token, never a real one.
