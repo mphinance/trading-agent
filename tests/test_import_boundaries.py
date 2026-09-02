@@ -98,13 +98,20 @@ def _scan_vesper_refs(root: Path) -> dict[str, set[str]]:
 # corresponding function-local imports were repointed at core.X per that
 # feature's own steps -- so vesper.halt, vesper.circuit_breaker,
 # vesper.paper_ledger and vesper.audit_chain drop out of this baseline.
-# vesper.alerts_runner, vesper.bot.inbound and vesper.monitor stay: those
-# three modules still live under vesper/ (they pull in LangGraph/broker
-# machinery this split isn't moving) and vesper_tools.py legitimately reads
-# through them as a viewer over vesper's own state.
+# M0-04 did the same to vesper.bot.inbound: ApprovalRegistry moved to
+# core/approval_registry.py, and vesper_tools.py's two `from
+# vesper.bot.inbound import approval_registry` sites (list_pending_proposals,
+# get_proposal) became `from core.approval_registry import
+# approval_registry` -- the whole point being that these read-only tools no
+# longer need to import vesper.bot at all (that package's __init__ eagerly
+# constructs TelegramAdapter/DiscordAdapter/WebhookAdapter/ChannelManager).
+# So vesper.bot.inbound drops out here too.
+# vesper.alerts_runner and vesper.monitor stay: those two modules still live
+# under vesper/ (they pull in LangGraph/broker machinery this split isn't
+# moving) and vesper_tools.py legitimately reads through them as a viewer
+# over vesper's own state.
 EXPECTED_VESPER_TOOLS_REFS = {
     "vesper.alerts_runner",
-    "vesper.bot.inbound",
     "vesper.monitor",
 }
 

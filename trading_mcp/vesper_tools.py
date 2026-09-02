@@ -212,7 +212,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         Read-only view of `ApprovalRegistry` -- never calls
         `submit_decision()` (see module docstring)."""
         try:
-            from vesper.bot.inbound import approval_registry
+            from core.approval_registry import approval_registry
         except Exception as e:
             return {"available": False, "reason": str(e)}
         try:
@@ -226,7 +226,7 @@ def register_vesper_tools(mcp: Any) -> list[str]:
         """One proposal's pending record and, if it has already been acted
         on, its recorded decision. Read-only -- never submits a decision."""
         try:
-            from vesper.bot.inbound import approval_registry
+            from core.approval_registry import approval_registry
         except Exception as e:
             return {"available": False, "reason": str(e)}
         try:

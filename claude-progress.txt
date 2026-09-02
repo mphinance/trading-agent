@@ -522,3 +522,140 @@ behavior change, exactly as the feature's step 5 asks to confirm.
 - If you're hunting for a place a `from vesper.halt import` still exists
   outside the shim and outside execution_guard.py, there shouldn't be
   one -- re-grep before assuming.
+
+## M0-04 — ApprovalRegistry extracted from vesper/bot/inbound.py into core/approval_registry.py
+
+Moved the `ApprovalRegistry` class, its disk persistence
+(`_load_approval_state`/`_save_approval_state`, `_DATA_DIR`,
+`_APPROVAL_STATE_PATH`), the module-level `approval_registry =
+ApprovalRegistry()` singleton, and -- deliberately going a little further
+than the feature's literal "class and its persistence logic" wording --
+`handle_callback_payload()` plus the two per-user authorization helpers it
+depends on (`_is_telegram_user_authorized`/`_is_discord_user_authorized`,
+`_AUTHORIZED_TELEGRAM_USER_IDS`/`_AUTHORIZED_DISCORD_USER_IDS`) into the new
+core/approval_registry.py.
+
+**Why `handle_callback_payload` moved too, not just the CRUD methods.** It's
+a method of `ApprovalRegistry`, so "the class" already includes it, but the
+more important reason is behavioural: it is not actually
+webhook-HTTP-specific. `vesper/bot/telegram_polling.py`'s outbound long-poll
+loop calls `approval_registry.handle_callback_payload(update)` directly --
+no aiohttp webhook involved at all -- so leaving that method behind in
+vesper/bot/inbound.py while moving everything else would have split one
+piece of registry-parsing logic across two files for no reason tied to the
+actual dependency graph. What's genuinely webhook-specific and stayed in
+vesper/bot/inbound.py: the HMAC/Ed25519/bearer-token guards
+(`verify_telegram_webhook_secret`, `verify_discord_signature`,
+`verify_bearer_token`) that authenticate an inbound HTTP request as really
+coming from Telegram/Discord/a REST client, and `create_inbound_app()`'s
+aiohttp Application + routes.
+
+**vesper/bot/inbound.py re-exports `ApprovalRegistry` and `approval_registry`**
+(`from core.approval_registry import ApprovalRegistry, approval_registry`)
+rather than every existing caller being forced to switch import paths.
+Verified this is the SAME object, not a copy
+(`vesper.bot.inbound.ApprovalRegistry is core.approval_registry.ApprovalRegistry`
+and same for the singleton) -- new test
+`test_vesper_bot_inbound_still_re_exports_approval_registry` pins this.
+vesper.py, vesper/runner.py, vesper/bot/discord_gateway.py and
+vesper/bot/telegram_polling.py were deliberately left importing
+`from vesper.bot.inbound import approval_registry` -- they already live
+inside/adjacent to the vesper.bot package (discord_gateway.py and
+telegram_polling.py are themselves vesper.bot submodules; vesper.py and
+runner.py already pull in vesper.bot.manager elsewhere in the same
+codepath), so redirecting their import path bought nothing for this
+feature's actual goal. Only the three call sites explicitly named in the
+feature's step 3 that are NOT already paying that cost were repointed at
+`core.approval_registry` directly:
+- vesper/nodes/human_gate.py's `register_pending`/`get_decision` call site
+  (note: human_gate_node still separately imports vesper.bot.manager a few
+  lines later to broadcast proposal cards, so this alone doesn't make
+  human_gate.py avoid the vesper.bot package -- but the feature named this
+  specific import site, so it moved as asked).
+- trading_mcp/vesper_tools.py's two sites (`list_pending_proposals`,
+  `get_proposal`) -- these are the ones that actually matter for the
+  feature's stated outcome: a read-only MCP tool listing pending approvals
+  no longer imports vesper.bot at all.
+- executor.py was named in the feature's step 3 but grepped clean -- it has
+  no `approval_registry`/`ApprovalRegistry` reference today (only
+  `from vesper.bot.manager import channel_manager` for broadcast, unrelated).
+  Nothing to change there; noting it so the next reader doesn't wonder why
+  it's absent from the diff.
+
+**Verification that the stated outcome actually holds**, not just that the
+source doesn't say `import vesper.bot`: new
+`tests/test_approval_registry.py::test_importing_core_approval_registry_does_not_load_bot_adapters`
+runs `import core.approval_registry` in a REAL subprocess (fresh
+interpreter, same pattern trading_mcp/test_trading_mcp.py already uses for
+its token-guard subprocess test) and asserts
+`vesper.bot.telegram_adapter`/`discord_adapter`/`webhook_adapter` -- and
+`vesper.bot` itself -- never land in `sys.modules`. A source-text check
+("no `import vesper.bot` in this file") would have missed a transitive pull
+from somewhere else in the chain; this doesn't, because
+core/approval_registry.py has zero vesper.* references at module scope (its
+two `from core.halt import halt`/`resume` calls are function-local, lazy,
+same convention core/circuit_breaker.py already uses, and core.halt itself
+has no vesper dependency post-M0-03).
+
+**Test-infrastructure follow-through** (the other half of "every caller"):
+- `tests/conftest.py`'s two autouse fixtures now patch
+  `core.approval_registry._AUTHORIZED_TELEGRAM_USER_IDS` /
+  `_AUTHORIZED_DISCORD_USER_IDS` (was `vesper.bot.inbound.*`) and
+  `core.approval_registry._DATA_DIR` / `_APPROVAL_STATE_PATH` (same) --
+  patching the old vesper.bot.inbound names would now silently no-op since
+  those attributes no longer live there, the same trap M0-03's handoff note
+  already flagged for vesper/halt.py's shim.
+- `tests/test_inbound_bot.py`'s six per-user-authorization tests
+  (`test_telegram_callback_rejects/allows_authorized_user`,
+  `test_telegram_halt_rejects/allows_authorized_user`,
+  `test_discord_callback_rejects/allows_authorized_user`) patched
+  `vesper.bot.inbound._AUTHORIZED_*_USER_IDS` directly (not through the
+  string-literal monkeypatch.setattr conftest uses) -- these had to be
+  repointed at `core.approval_registry` too, or they'd `AttributeError`
+  (caught by the full-suite run, not assumed).
+- `tests/test_import_boundaries.py`'s `EXPECTED_VESPER_TOOLS_REFS` baseline
+  (an M0-01 characterization test) drops `"vesper.bot.inbound"` now that
+  vesper_tools.py's two sites no longer reference it at all -- verified
+  against the actual AST-scanned set (there is genuinely zero
+  `vesper.bot.inbound` reference left in trading_mcp/vesper_tools.py), not
+  assumed from the diff.
+- Two existing tests (`test_list_pending_proposals_degrades_on_error`,
+  `test_get_proposal_degrades_on_error` in tests/test_trading_mcp.py) still
+  do `from vesper.bot.inbound import approval_registry` and
+  `monkeypatch.setattr(approval_registry, "list_pending", _boom)` --
+  deliberately left untouched. That monkeypatches the METHOD ON THE OBJECT
+  ITSELF, and because `vesper.bot.inbound.approval_registry is
+  core.approval_registry.approval_registry` (verified, see above), it's the
+  same object regardless of which module name reached it -- no change
+  needed, confirmed by the full suite passing, not by inspection alone.
+
+**No new on-disk state.** Same `data/approval_registry_state.json` file,
+same schema -- this was a pure move, not a behavior or format change.
+
+**Full suite: 586 passed** (`.venv/bin/python -m pytest -q`) -- 584 before
+this feature (M0-03's handoff note) + 2 new tests in
+tests/test_approval_registry.py.
+
+`trading_mcp/server.py`'s pre-existing dirty state (OAuth-provider work,
+flagged by every prior session) was again left untouched and unstaged --
+confirmed unrelated (no approval_registry/inbound reference in its diff).
+
+### For the next agent
+
+- core/ now holds 19 modules (18 from M0-02/M0-03 plus approval_registry.py
+  this session). Unlike M0-02's residual mcp_server-import modules,
+  core/approval_registry.py is a genuinely clean leaf on the mcp_server
+  front -- it imports nothing from mcp_server. It does still lazily import
+  `core.halt` (fine, same layer) and, transitively through nothing else.
+- `vesper/bot/inbound.py` is now ~185 lines (was ~467) and re-exports
+  `ApprovalRegistry`/`approval_registry` from core for backward
+  compatibility -- this is intentional, not a leftover to clean up later.
+  Don't "simplify" it by removing the re-export; vesper.py, runner.py,
+  discord_gateway.py, telegram_polling.py and several tests still import
+  through it and are meant to.
+- If a future feature wants EVERY vesper.bot.inbound import path repointed
+  at core.approval_registry (not just the three this feature named), that's
+  a bigger, unscoped-here change -- the four remaining `vesper.bot.inbound`
+  importers listed above were deliberately left alone because redirecting
+  them bought nothing (they already pull in vesper.bot elsewhere on the
+  same codepath).

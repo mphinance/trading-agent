@@ -26,7 +26,7 @@ async def human_gate_node(state: TradingState) -> Dict[str, Any]:
         }
 
     # Register in ApprovalRegistry for inbound webhook / bot resolution
-    from vesper.bot.inbound import approval_registry
+    from core.approval_registry import approval_registry
     session_id = state.get("session_id", "vesper-session")
     for p in proposals:
         approval_registry.register_pending(

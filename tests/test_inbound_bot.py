@@ -103,8 +103,8 @@ async def test_telegram_halt_command(clean_registry):
 
 @pytest.mark.asyncio
 async def test_telegram_callback_rejects_unauthorized_user(clean_registry, monkeypatch):
-    import vesper.bot.inbound as inbound
-    monkeypatch.setattr(inbound, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
+    import core.approval_registry as core_approval
+    monkeypatch.setattr(core_approval, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
 
     clean_registry.register_pending("prop-tg-unauth", "session-tg")
     payload = {
@@ -122,8 +122,8 @@ async def test_telegram_callback_rejects_unauthorized_user(clean_registry, monke
 
 @pytest.mark.asyncio
 async def test_telegram_callback_allows_authorized_user(clean_registry, monkeypatch):
-    import vesper.bot.inbound as inbound
-    monkeypatch.setattr(inbound, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
+    import core.approval_registry as core_approval
+    monkeypatch.setattr(core_approval, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
 
     clean_registry.register_pending("prop-tg-auth-ok", "session-tg")
     payload = {
@@ -141,8 +141,8 @@ async def test_telegram_callback_allows_authorized_user(clean_registry, monkeypa
 
 @pytest.mark.asyncio
 async def test_telegram_halt_rejects_unauthorized_user(clean_registry, monkeypatch):
-    import vesper.bot.inbound as inbound
-    monkeypatch.setattr(inbound, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
+    import core.approval_registry as core_approval
+    monkeypatch.setattr(core_approval, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
 
     assert not is_halted()[0]
     payload = {
@@ -158,8 +158,8 @@ async def test_telegram_halt_rejects_unauthorized_user(clean_registry, monkeypat
 
 @pytest.mark.asyncio
 async def test_telegram_halt_allows_authorized_user(clean_registry, monkeypatch):
-    import vesper.bot.inbound as inbound
-    monkeypatch.setattr(inbound, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
+    import core.approval_registry as core_approval
+    monkeypatch.setattr(core_approval, "_AUTHORIZED_TELEGRAM_USER_IDS", {"111"})
 
     payload = {
         "message": {
@@ -177,8 +177,8 @@ async def test_telegram_halt_allows_authorized_user(clean_registry, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_discord_callback_rejects_unauthorized_user(clean_registry, monkeypatch):
-    import vesper.bot.inbound as inbound
-    monkeypatch.setattr(inbound, "_AUTHORIZED_DISCORD_USER_IDS", {"55555"})
+    import core.approval_registry as core_approval
+    monkeypatch.setattr(core_approval, "_AUTHORIZED_DISCORD_USER_IDS", {"55555"})
 
     clean_registry.register_pending("prop-dc-unauth", "session-dc")
     payload = {
@@ -194,8 +194,8 @@ async def test_discord_callback_rejects_unauthorized_user(clean_registry, monkey
 
 @pytest.mark.asyncio
 async def test_discord_callback_allows_authorized_user(clean_registry, monkeypatch):
-    import vesper.bot.inbound as inbound
-    monkeypatch.setattr(inbound, "_AUTHORIZED_DISCORD_USER_IDS", {"55555"})
+    import core.approval_registry as core_approval
+    monkeypatch.setattr(core_approval, "_AUTHORIZED_DISCORD_USER_IDS", {"55555"})
 
     clean_registry.register_pending("prop-dc-auth-ok", "session-dc")
     payload = {

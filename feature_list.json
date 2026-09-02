@@ -166,7 +166,7 @@
       "Add a test that importing core.approval_registry does NOT put vesper.bot.telegram_adapter, discord_adapter or webhook_adapter into sys.modules",
       "Run the full suite; confirm submit_decision/list-pending behavior is unchanged"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "M0-05",

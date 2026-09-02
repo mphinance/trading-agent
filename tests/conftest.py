@@ -95,8 +95,12 @@ def _isolated_state(tmp_path, monkeypatch):
     # same names explicitly, which still works on top of this reset.
     monkeypatch.delenv("TELEGRAM_AUTHORIZED_USER_IDS", raising=False)
     monkeypatch.delenv("DISCORD_AUTHORIZED_USER_IDS", raising=False)
-    monkeypatch.setattr("vesper.bot.inbound._AUTHORIZED_TELEGRAM_USER_IDS", set())
-    monkeypatch.setattr("vesper.bot.inbound._AUTHORIZED_DISCORD_USER_IDS", set())
+    # M0-04 moved these two sets (and the per-user authorization checks that
+    # read them) from vesper/bot/inbound.py into core/approval_registry.py --
+    # patch core.approval_registry, not vesper.bot.inbound, or this silently
+    # no-ops against a module attribute that no longer exists there.
+    monkeypatch.setattr("core.approval_registry._AUTHORIZED_TELEGRAM_USER_IDS", set())
+    monkeypatch.setattr("core.approval_registry._AUTHORIZED_DISCORD_USER_IDS", set())
     try:
         monkeypatch.setattr("vesper.bot.discord_gateway._AUTHORIZED_USER_IDS", set())
     except (ImportError, AttributeError):
@@ -155,10 +159,12 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     monkeypatch.setattr("core.audit_chain._DATA_DIR", vesper_data_dir)
     monkeypatch.setattr("core.audit_chain._CHAIN_PATH", vesper_data_dir / "audit_chain.jsonl")
 
-    # ApprovalRegistry (vesper/bot/inbound.py) became disk-backed the same
-    # way -- same reasoning, same fix.
-    monkeypatch.setattr("vesper.bot.inbound._DATA_DIR", vesper_data_dir)
-    monkeypatch.setattr("vesper.bot.inbound._APPROVAL_STATE_PATH", vesper_data_dir / "approval_registry_state.json")
+    # ApprovalRegistry became disk-backed the same way -- same reasoning,
+    # same fix. M0-04 moved the class (and this module-level state) from
+    # vesper/bot/inbound.py into core/approval_registry.py; patch the new
+    # home, not the re-export.
+    monkeypatch.setattr("core.approval_registry._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("core.approval_registry._APPROVAL_STATE_PATH", vesper_data_dir / "approval_registry_state.json")
 
     # vesper/metrics.py's cross-process snapshot file (Health/observability
     # metrics module) -- same reasoning as the state files above: a
