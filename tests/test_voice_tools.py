@@ -288,3 +288,127 @@ def test_find_pending_setup_ambiguous(mock_clean_registry):
     else:
         # If scored higher on exact match, resolved_symbol must be GOOG
         assert res["resolved_symbol"] in ("GOOG", "GOOGL")
+
+
+@pytest.mark.asyncio
+async def test_snooze_proposal(mock_clean_registry):
+    """M8-06: snooze_proposal sets suppress_until without altering price, quantity, or status."""
+    from trading_mcp.voice_tools import snooze_proposal
+
+    prop_id = "prop-snooze-test"
+    mock_clean_registry.register_pending(
+        proposal_id=prop_id,
+        session_id="s1",
+        details={"ticker": "NVDA", "side": "BUY", "limit_price": 130.0, "quantity": 10},
+    )
+
+    res = snooze_proposal(prop_id, minutes=30)
+    assert res["available"] is True
+    assert res["proposal_id"] == prop_id
+    assert "suppress_until" in res
+
+    # Verify state in registry
+    record = mock_clean_registry.get_pending(prop_id)
+    assert record is not None
+    assert record["status"] == "PENDING"
+    assert record["suppress_until"] == res["suppress_until"]
+    assert record["details"]["limit_price"] == 130.0
+    assert record["details"]["quantity"] == 10
+
+    # Proposal is still fully approvable by button tap / submit_decision at any time
+    dec_res = await mock_clean_registry.submit_decision(prop_id, "APPROVE")
+    assert dec_res["decision"] == "APPROVE"
+
+
+def test_tag_proposal(mock_clean_registry, tmp_path, monkeypatch):
+    """M8-06: tag_proposal appends a note visible in queue and audit trail."""
+    from trading_mcp.voice_tools import tag_proposal
+    import core.audit_chain as ac
+
+    # Isolate audit chain file
+    chain_file = tmp_path / "audit_chain.jsonl"
+    monkeypatch.setattr(ac, "_CHAIN_PATH", chain_file)
+
+    prop_id = "prop-tag-test"
+    mock_clean_registry.register_pending(
+        proposal_id=prop_id,
+        session_id="s-tag",
+        details={"ticker": "TSLA", "side": "BUY", "limit_price": 200.0},
+    )
+
+    res = tag_proposal(prop_id, "Watching 5m VWAP test before approving")
+    assert res["available"] is True
+    assert len(res["notes"]) == 1
+    assert "VWAP" in res["latest_note"]["note"]
+
+    # Verify note is present in pending record
+    record = mock_clean_registry.get_pending(prop_id)
+    assert record["notes"][0]["note"] == "Watching 5m VWAP test before approving"
+
+    # Verify note is appended to audit trail
+    lines = chain_file.read_text(encoding="utf-8").splitlines()
+    entries = [json.loads(line) for line in lines if line.strip()]
+    tag_entries = [e for e in entries if e.get("node") == "tag_proposal"]
+    assert len(tag_entries) == 1
+    assert tag_entries[0]["entry"]["proposal_id"] == prop_id
+    assert tag_entries[0]["entry"]["note"] == "Watching 5m VWAP test before approving"
+
+
+def test_arm_and_disarm_alert(tmp_path, monkeypatch):
+    """M8-07: arm_alert and disarm_alert over AlertStore.
+    Arm an alert -> verify in store -> disarm -> verify removed.
+    """
+    from trading_mcp.voice_tools import arm_alert, disarm_alert
+    import alerts
+
+    store_file = tmp_path / "alerts.json"
+    monkeypatch.setattr(alerts, "STORE_PATH", store_file)
+
+    # 1. Arm a dynamic gamma flip alert
+    arm_res = arm_alert(
+        symbol="SPY",
+        level="flip",
+        direction="below",
+        note="Notify when SPY breaks below gamma flip",
+    )
+    assert arm_res["available"] is True
+    alert_id = arm_res["alert_id"]
+    assert arm_res["symbol"] == "SPY"
+    assert arm_res["level_ref"] == "flip"
+
+    # Verify it exists in store
+    store = alerts.AlertStore(store_file)
+    alert_list = store.list()
+    assert any(a["id"] == alert_id for a in alert_list)
+
+    # 2. Disarm the alert
+    disarm_res = disarm_alert(alert_id)
+    assert disarm_res["available"] is True
+    assert disarm_res["disarmed"] is True
+
+    # Verify it is removed from store on disk
+    alert_list_after = alerts.AlertStore(store_file).list()
+    assert not any(a["id"] == alert_id for a in alert_list_after)
+
+
+def test_voice_tools_has_no_execution_guard_or_submit_decision():
+    """Confirm AST of trading_mcp.voice_tools has zero references to order execution."""
+    import ast
+    from pathlib import Path
+    import trading_mcp.voice_tools as mod
+
+    source_path = Path(mod.__file__)
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    # Assert no vesper import
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not alias.name.startswith("vesper"), f"Forbidden import: {alias.name}"
+        elif isinstance(node, ast.ImportFrom):
+            assert not (node.module or "").startswith("vesper"), f"Forbidden import from: {node.module}"
+
+        # Assert no call to submit_decision
+        if isinstance(node, ast.Attribute) and node.attr == "submit_decision":
+            raise AssertionError("voice_tools must not call submit_decision")
+

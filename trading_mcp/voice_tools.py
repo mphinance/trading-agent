@@ -341,12 +341,161 @@ def find_pending_setup(query: str) -> dict[str, Any]:
     }
 
 
+def snooze_proposal(proposal_id: str, minutes: float = 60.0) -> dict[str, Any]:
+    """Annotate a pending proposal with a suppress-until timestamp.
+
+    M8-06. Does NOT alter price, quantity, or approval status ('PENDING').
+    The proposal remains fully approvable by button tap at any time.
+    """
+    from datetime import datetime, timezone, timedelta
+    from core.approval_registry import _load_approval_state, _save_approval_state
+
+    state = _load_approval_state()
+    pending = state["pending"].get(proposal_id)
+    if not pending:
+        return {
+            "available": False,
+            "proposal_id": proposal_id,
+            "reason": f"Proposal '{proposal_id}' not found in pending approvals",
+        }
+
+    now = datetime.now(timezone.utc)
+    suppress_until = now + timedelta(minutes=float(minutes))
+    suppress_iso = suppress_until.isoformat()
+
+    # Record suppress timestamp on the proposal without touching price/quantity/status
+    pending["suppress_until"] = suppress_iso
+    _save_approval_state(state)
+
+    logger.info(f"Snoozed proposal {proposal_id} for {minutes}m until {suppress_iso}")
+    return {
+        "available": True,
+        "proposal_id": proposal_id,
+        "status": pending.get("status", "PENDING"),
+        "snoozed_minutes": minutes,
+        "suppress_until": suppress_iso,
+        "message": f"Proposal {proposal_id} snoozed until {suppress_iso}",
+    }
+
+
+def tag_proposal(proposal_id: str, note: str) -> dict[str, Any]:
+    """Append a short text note to a pending proposal and record it in the audit trail.
+
+    M8-06. Appends to notes without modifying price, quantity, or invoking submit_decision.
+    """
+    from datetime import datetime, timezone
+    from core.approval_registry import _load_approval_state, _save_approval_state
+    from core.audit_chain import append_entry
+
+    clean_note = (note or "").strip()
+    if not clean_note:
+        return {"available": False, "proposal_id": proposal_id, "reason": "Note must be non-empty"}
+
+    state = _load_approval_state()
+    pending = state["pending"].get(proposal_id)
+    if not pending:
+        return {
+            "available": False,
+            "proposal_id": proposal_id,
+            "reason": f"Proposal '{proposal_id}' not found in pending approvals",
+        }
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    note_entry = {"timestamp": now_iso, "note": clean_note}
+
+    # Append to proposal's notes list
+    notes = pending.setdefault("notes", [])
+    notes.append(note_entry)
+    _save_approval_state(state)
+
+    # Append to hash-chained tamper-evident audit ledger
+    session_id = pending.get("session_id", "mcp-voice")
+    append_entry(
+        session_id=session_id,
+        node="tag_proposal",
+        entry={"proposal_id": proposal_id, "note": clean_note, "timestamp": now_iso},
+    )
+
+    logger.info(f"Tagged proposal {proposal_id}: {clean_note}")
+    return {
+        "available": True,
+        "proposal_id": proposal_id,
+        "notes": notes,
+        "latest_note": note_entry,
+    }
+
+
+def _get_alert_store():
+    import alerts
+    path = getattr(alerts, "STORE_PATH", None)
+    return alerts.AlertStore(path) if path else alerts.AlertStore()
+
+
+def arm_alert(
+    symbol: str,
+    level: str | float,
+    direction: str,
+    note: str = "",
+    repeat: bool = False,
+) -> dict[str, Any]:
+    """Arm a price or dealer-gamma alert in the shared alert store.
+
+    M8-07. Level can be static number or dynamic reference ('flip', 'pin', 'wall_above', 'wall_below').
+    """
+    from alerts import make_alert, AlertError
+
+    try:
+        alert = make_alert(
+            symbol=symbol,
+            level=level,
+            direction=direction,
+            note=note,
+            repeat=repeat,
+        )
+        store = _get_alert_store()
+        saved = store.add(alert)
+        return {
+            "available": True,
+            "alert_id": saved["id"],
+            "symbol": saved["symbol"],
+            "level_ref": saved["level_ref"],
+            "level_static": saved["level_static"],
+            "direction": saved["direction"],
+            "state": saved["state"],
+        }
+    except AlertError as e:
+        return {"available": False, "reason": str(e)}
+    except Exception as e:
+        return {"available": False, "reason": f"Failed to arm alert: {e}"}
+
+
+def disarm_alert(alert_id: str) -> dict[str, Any]:
+    """Disarm and remove an alert from the shared alert store.
+
+    M8-07. Once removed, the alert no longer evaluates.
+    """
+    try:
+        store = _get_alert_store()
+        removed = store.remove(alert_id)
+        return {
+            "available": True,
+            "disarmed": removed,
+            "alert_id": alert_id,
+        }
+    except Exception as e:
+        return {"available": False, "alert_id": alert_id, "reason": str(e)}
+
+
 _find_pending_setup_impl = find_pending_setup
 _watch_setup_impl = watch_setup
+_snooze_proposal_impl = snooze_proposal
+_tag_proposal_impl = tag_proposal
+_arm_alert_impl = arm_alert
+_disarm_alert_impl = disarm_alert
 
 
 def register_voice_tools(mcp: Any) -> list[str]:
-    """Register voice co-pilot watch tools onto `mcp` and return their names."""
+    """Register voice co-pilot watch and safe-write tools onto `mcp` and return their names."""
 
     @mcp.tool()
     def watch_setup(proposal_id: str, force_full: bool = False) -> dict[str, Any]:
@@ -366,5 +515,38 @@ def register_voice_tools(mcp: Any) -> list[str]:
         """
         return _find_pending_setup_impl(query)
 
-    return ["watch_setup", "find_pending_setup"]
+    @mcp.tool()
+    def snooze_proposal(proposal_id: str, minutes: float = 60.0) -> dict[str, Any]:
+        """Snooze a pending proposal for `minutes` without modifying its price, quantity, or approval state."""
+        return _snooze_proposal_impl(proposal_id, minutes=minutes)
+
+    @mcp.tool()
+    def tag_proposal(proposal_id: str, note: str) -> dict[str, Any]:
+        """Append a note to a pending proposal visible in queue and audit trail, without deciding it."""
+        return _tag_proposal_impl(proposal_id, note=note)
+
+    @mcp.tool()
+    def arm_alert(
+        symbol: str,
+        level: str | float,
+        direction: str,
+        note: str = "",
+        repeat: bool = False,
+    ) -> dict[str, Any]:
+        """Arm a price or gamma alert (flip/pin/wall_above/wall_below) in the shared alert store."""
+        return _arm_alert_impl(symbol, level, direction, note=note, repeat=repeat)
+
+    @mcp.tool()
+    def disarm_alert(alert_id: str) -> dict[str, Any]:
+        """Disarm and remove an alert from the store."""
+        return _disarm_alert_impl(alert_id)
+
+    return [
+        "watch_setup",
+        "find_pending_setup",
+        "snooze_proposal",
+        "tag_proposal",
+        "arm_alert",
+        "disarm_alert",
+    ]
 
