@@ -282,6 +282,21 @@ class SingleOperatorOAuthProvider(OAuthProvider):
                 )
             else:
                 gated.append(route)
+
+        # RFC 9728 follow-up: FastMCP mounts /.well-known/oauth-protected-resource{mcp_path}.
+        # RFC 9728 clients and discovery checks also query the root
+        # /.well-known/oauth-protected-resource directly. Alias it to the same endpoint.
+        for route in list(gated):
+            if isinstance(route, Route) and route.path.startswith("/.well-known/oauth-protected-resource/"):
+                gated.append(
+                    Route(
+                        "/.well-known/oauth-protected-resource",
+                        endpoint=route.endpoint,
+                        methods=route.methods,
+                    )
+                )
+                break
+
         return gated
 
     def _gated_authorize(self, sdk_handler: AuthorizationHandler):

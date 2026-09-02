@@ -572,6 +572,7 @@ async def test_discovery_endpoints_404_without_public_url(monkeypatch):
     for path in (
         "/.well-known/oauth-authorization-server",
         "/.well-known/oauth-protected-resource/mcp",
+        "/.well-known/oauth-protected-resource",
     ):
         response = await _get(app, path)
         assert response.status_code == 404, (
@@ -609,22 +610,26 @@ async def test_oauth_authorization_server_metadata_is_well_formed(monkeypatch):
 
 
 async def test_oauth_protected_resource_metadata_is_well_formed(monkeypatch):
-    """RFC 9728: /.well-known/oauth-protected-resource/mcp must point back
-    at this server's own /mcp endpoint and name the authorization server
-    that issues tokens for it -- this is the document a CIMD/DCR client
-    reads first, from the 401's WWW-Authenticate challenge, to find the
-    authorization server at all."""
+    """RFC 9728: /.well-known/oauth-protected-resource/mcp and its root alias
+    /.well-known/oauth-protected-resource must point back at this server's own
+    /mcp endpoint and name the authorization server that issues tokens for it --
+    this is the document a CIMD/DCR client reads first, from the 401's
+    WWW-Authenticate challenge or root discovery, to find the AS."""
     _set_oauth_env(monkeypatch)
     import trading_mcp.server as srv
 
     app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
-    response = await _get(app, "/.well-known/oauth-protected-resource/mcp")
-    assert response.status_code == 200
+    for path in (
+        "/.well-known/oauth-protected-resource/mcp",
+        "/.well-known/oauth-protected-resource",
+    ):
+        response = await _get(app, path)
+        assert response.status_code == 200, f"{path} returned {response.status_code}"
 
-    metadata = response.json()
-    assert metadata["resource"] == "https://agent.mphinance.test/mcp"
-    assert metadata["authorization_servers"] == ["https://agent.mphinance.test/"]
-    assert "read" in metadata["scopes_supported"]
+        metadata = response.json()
+        assert metadata["resource"] == "https://agent.mphinance.test/mcp"
+        assert metadata["authorization_servers"] == ["https://agent.mphinance.test/"]
+        assert "read" in metadata["scopes_supported"]
 
 
 async def test_unauthenticated_request_advertises_resource_metadata(monkeypatch):
