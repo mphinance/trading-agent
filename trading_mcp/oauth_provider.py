@@ -258,6 +258,32 @@ class SingleOperatorOAuthProvider(OAuthProvider):
                 error_description=f"Client {client.client_id!r} is not registered.",
             )
 
+        # M2-06: this is the exact function whose supermcp counterpart
+        # force-granted admin scope on every OAuth handshake — treating "an
+        # authorization request arrived, naming some scope" as itself
+        # sufficient to grant that scope, rather than checking it against
+        # what the caller was actually entitled to. `params.scopes` is
+        # attacker-controlled input (a query/form field on `/authorize`);
+        # `client.scope` is what THIS client was actually registered for,
+        # itself already bounded to `valid_scopes` at registration time by
+        # the SDK's `RegistrationHandler` (`ClientRegistrationOptions` in
+        # `__init__` above). The intersection below is the escalation
+        # guard: a requested scope never in the client's registration is
+        # silently dropped, never honoured, no matter how it got here. The
+        # mcp SDK's `AuthorizationHandler` already rejects an out-of-scope
+        # request before this method is even called (redirects with
+        # `error=invalid_scope`), but that upstream check is a second layer,
+        # not a substitute for this one — this method must never assume a
+        # caller reached it only through that front door. Do not replace
+        # this filter with an unconditional `scopes_list = params.scopes`;
+        # that is precisely supermcp's bug, reproduced here.
+        # Pinned by tests/test_trading_mcp.py's
+        # test_authorize_itself_filters_scope_beyond_client_registration
+        # (calls this method directly, bypassing the SDK's own upstream
+        # check, to prove this line — not just the layer in front of it —
+        # is what stops the escalation) and
+        # test_authorize_request_for_unregistered_scope_never_issues_a_code
+        # (the end-to-end HTTP path).
         scopes_list = params.scopes or []
         if client.scope:
             allowed = set(client.scope.split())

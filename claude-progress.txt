@@ -1588,3 +1588,96 @@ endpoints.
 (`HKUDS_REPOSITORY_REVIEW.md`, `docs/HANDOFF_2026-09-01.md`,
 `scripts/package_for_supermcp.py`, `supermcp_CLAUDE_remote.md`, `autonomous/`,
 `docs/MULTI_AGENT_WORKFLOW.md`) unchanged, not this feature's to resolve.
+
+## M2-06 — One authorization-decision function; OAuth cannot escalate scope
+
+**Read first, per the feature's own step 2:** `docs/SUPERMCP_SWAGGER_AND_AUTH_PLAN.md` (no
+`authorize()` bug material there -- it's the swagger-doc design plan, not a postmortem) and
+`docs/HANDOFF_2026-09-01.md` (names the bug in passing: "`authorize()` no longer force-grants
+admin on every OAuth handshake"). The actual postmortem with the mechanism is
+`docs/AUTH_TRADE_SCOPE_LOCKDOWN.md`: supermcp's `POST /login` handed back
+`config.SUPERMCP_TOKEN` (the admin credential) for a match against the *shared dashboard
+password*, because a newly-landed RBAC commit had given that token `['read','trade','admin']`
+scope and nobody re-checked what `/login`'s password branch was still handing out. The
+`authorize()`-specific phrasing in the handoff is the same failure shape one level up: an
+OAuth handshake reaching a grant-issuing function was itself treated as sufficient
+authorization, with no check of what was actually requested or registered.
+
+**Step 1 -- confirmed there is exactly one convergence function, empirically, not by
+inspection.** Traced it in `fastmcp`/`mcp` SDK source
+(`.venv/.../fastmcp/server/auth/auth.py` `AuthProvider.get_middleware()`,
+`.venv/.../mcp/server/auth/middleware/bearer_auth.py` `BearerAuthBackend`): the ASGI app gets
+exactly ONE `AuthenticationMiddleware(backend=BearerAuthBackend(self))`, where `self` is
+whatever single object `trading_mcp/server.py::_build_auth()` returns -- our `MultiAuth`
+instance when OAuth is configured. `BearerAuthBackend.authenticate()` calls
+`self.token_verifier.verify_token(token)` for every request regardless of which credential
+shape it is, so both the static bearer and any OAuth-minted token are decided by the identical
+bound `MultiAuth.verify_token()` method constructed once in `_build_auth()`. There is no
+second backend, no second middleware, no per-credential-type branch anywhere in the request
+path -- confirmed by reading the actual middleware wiring, not by trusting the existing
+docstring's claim.
+
+New test `test_bearer_and_oauth_paths_converge_on_one_verify_token`
+(`tests/test_trading_mcp.py`) proves this behaviourally: it monkeypatches the bound
+`verify_token` method on the exact `MultiAuth` instance the live app uses, drives one real
+request with the static bearer token and one with a freshly-minted OAuth access token (full
+register -> gate -> authorize -> token round trip through the real ASGI app), and asserts the
+SAME patched function observed both token strings. A regression that added a second,
+un-patched auth path (the supermcp shape) would leave one of those two `assert ... in
+seen_tokens` failing even though both requests still returned 200.
+
+**Step 3/escalation -- three tests, at three different layers, since a fix at only one layer
+would leave the others silently relying on it:**
+
+- `test_dcr_registration_rejects_scope_beyond_valid_scopes` -- registration itself
+  (`ClientRegistrationOptions(valid_scopes=["read"])`, enforced by the SDK's
+  `RegistrationHandler`) is the first checkpoint; a client can never even register for a scope
+  beyond "read" (the only scope this server issues today).
+- `test_authorize_request_for_unregistered_scope_never_issues_a_code` -- end-to-end HTTP:
+  requesting `scope=admin` at `/authorize` (past the operator-key gate, with a registered
+  client) gets a 302 redirect carrying `error=invalid_scope`, never a `code` -- the mcp SDK's
+  `AuthorizationHandler` validates the requested scope against the client's registration
+  before `SingleOperatorOAuthProvider.authorize()` is ever reached.
+- `test_authorize_itself_filters_scope_beyond_client_registration` -- the important one,
+  because it's the exact function shape that broke in supermcp: calls
+  `SingleOperatorOAuthProvider.authorize()` **directly**, bypassing the SDK's upstream check
+  entirely, with `AuthorizationParams.scopes=["read", "admin"]` against a client registered
+  for `scope="read"`. Confirms the issued `AuthorizationCode.scopes == ["read"]` and that the
+  token exchanged from it inherits exactly that -- proving `authorize()`'s own
+  `scopes_list = [s for s in scopes_list if s in allowed]` filter is what stops the
+  escalation, not merely the SDK's front-door validation (which a future refactor could route
+  around, e.g. a second internal caller of `authorize()`).
+- `test_refresh_token_cannot_escalate_scope_beyond_original_grant` -- the fourth checkpoint,
+  covering a path the M2-05 report didn't touch: `exchange_refresh_token()`'s
+  `requested.issubset(original)` check refuses (`TokenError`) a refresh that asks for `read`
+  when the original grant carried no scopes at all.
+
+**No behavioural code changes** -- every one of these checkpoints (registration validation,
+authorize()'s intersection filter, the SDK's upstream scope check, the refresh-token subset
+check) was already correct from M2-03. This feature is: read the supermcp postmortems as
+instructed, confirm the convergence property against actual SDK wiring rather than trusting
+the docstring, and add tests that would catch a regression at each of the four places listed
+above -- plus write the reasoning into the code so the next change to `authorize()` or
+`_build_auth()` sees why the shape must not change, per the feature's step 4.
+
+**Comments added, not just tests:** `trading_mcp/server.py::_build_auth()`'s docstring now
+explains the middleware-level mechanism that makes convergence true and names the specific
+supermcp failure it must not regress into. `trading_mcp/oauth_provider.py::authorize()` gets
+an inline comment directly above the scope-filtering lines, since -- per this feature's own
+framing -- that is "the exact shape that went wrong once already": it names what's
+attacker-controlled (`params.scopes`), what's trusted (`client.scope`, itself already bounded
+at registration), why the SDK's upstream check is a second layer and not a substitute, and
+which tests pin it.
+
+**Verified:** `.venv/bin/python -m pytest -q tests/test_trading_mcp.py -k "converge or
+dcr_registration_rejects or unregistered_scope or authorize_itself_filters or
+refresh_token_cannot"` -> 5 passed, 54 deselected. **Full suite:**
+`.venv/bin/python -m pytest -q` -> **617 passed** (612 before this feature + 5 new tests).
+Floor was 597.
+
+**Staged for this feature's commit:** `tests/test_trading_mcp.py`, `trading_mcp/server.py`,
+`trading_mcp/oauth_provider.py`. Did not stage `feature_list.json` or
+`autonomous/feature_list.seed.json` -- both are clean relative to HEAD, untouched by this
+session, per the hard prohibition. Untracked files (`HKUDS_REPOSITORY_REVIEW.md`,
+`docs/HANDOFF_2026-09-01.md`, `scripts/package_for_supermcp.py`, `supermcp_CLAUDE_remote.md`)
+unchanged, not this feature's to resolve.

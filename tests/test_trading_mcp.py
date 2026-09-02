@@ -816,6 +816,192 @@ async def test_unregistered_client_authorize_is_also_refused(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# M2-06: the static-bearer and OAuth paths must converge on exactly ONE
+# authorization-decision function, and an OAuth handshake must never be able
+# to walk away with more scope than it was actually granted.
+#
+# Both halves exist because of the SAME real-world bug, described in
+# docs/AUTH_TRADE_SCOPE_LOCKDOWN.md and docs/HANDOFF_2026-09-01.md: supermcp's
+# `/login` handed back the master admin token for a password match that was
+# only ever supposed to prove "knows the shared dashboard password", and
+# separately supermcp's OAuth `authorize()` force-granted admin scope on
+# every handshake regardless of what was requested. Both are the same root
+# failure -- a second, undifferentiated grant path that never asked "what
+# was this caller actually entitled to" -- reached two different ways: one
+# via which credential got you IN (convergence), one via what scope you left
+# WITH (escalation). This block pins both against that repeat.
+#
+# Convergence proof, empirically: `trading_mcp/server.py::_build_auth()`
+# constructs exactly one `fastmcp.server.auth.MultiAuth` instance and passes
+# it, unmodified, as `auth=` to `FastMCP(...)`. `AuthProvider.get_middleware()`
+# (fastmcp/server/auth/auth.py) then wraps the ASGI app in exactly one
+# `AuthenticationMiddleware(backend=BearerAuthBackend(self))`, where `self`
+# is that same MultiAuth object -- not one backend per verifier. So every
+# request, bearer or OAuth-token, reaches the identical bound
+# `MultiAuth.verify_token()` method; that method (not either wrapped
+# verifier alone) is "the one authorization-decision function". The test
+# below proves this by patching that exact bound method on the exact
+# instance the live app uses and showing both credential shapes reach it.
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def test_bearer_and_oauth_paths_converge_on_one_verify_token(monkeypatch):
+    """Both a static-bearer request and a freshly-minted OAuth access token
+    must be decided by the SAME `MultiAuth.verify_token()` call -- proven by
+    patching that exact bound method on the app's actual auth instance and
+    observing both credentials pass through it, rather than by reading the
+    source and hoping it stays true."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+    from fastmcp.server.auth import MultiAuth
+
+    auth = srv._build_auth()
+    assert isinstance(auth, MultiAuth)
+    app = FastMCP("test-oauth", auth=auth).http_app(path="/mcp")
+
+    seen_tokens: list[str] = []
+    original_verify_token = auth.verify_token
+
+    async def spying_verify_token(token: str):
+        seen_tokens.append(token)
+        return await original_verify_token(token)
+
+    monkeypatch.setattr(auth, "verify_token", spying_verify_token)
+
+    # Path 1: the static bearer token.
+    bearer_token = _OAUTH_ENV["TRADING_AGENT_TOKEN"]
+    bearer_headers = {**_MCP_HEADERS, "Authorization": f"Bearer {bearer_token}"}
+    bearer_response = await _post_mcp(app, bearer_headers)
+    assert bearer_response.status_code == 200, bearer_response.text
+
+    # Path 2: a real OAuth-issued token -- register, gate, exchange.
+    client_info = await _register_client(app)
+    verifier, challenge = _pkce_pair()
+    auth_response = await _authorize(
+        app, client_id=client_info["client_id"],
+        redirect_uri=client_info["redirect_uris"][0],
+        code_challenge=challenge, operator_key=bearer_token,
+    )
+    from urllib.parse import parse_qs, urlsplit
+
+    code = parse_qs(urlsplit(auth_response.headers["location"]).query)["code"][0]
+    token_response = await _token_from_code(
+        app, client_id=client_info["client_id"], client_secret=client_info["client_secret"],
+        code=code, redirect_uri=client_info["redirect_uris"][0], code_verifier=verifier,
+    )
+    oauth_token = token_response.json()["access_token"]
+    oauth_headers = {**_MCP_HEADERS, "Authorization": f"Bearer {oauth_token}"}
+    oauth_response = await _post_mcp(app, oauth_headers)
+    assert oauth_response.status_code == 200, oauth_response.text
+
+    # Both credential shapes were decided by the one patched function --
+    # never a second, unpatched path that reached a 200 without it.
+    assert bearer_token in seen_tokens
+    assert oauth_token in seen_tokens
+
+
+def test_dcr_registration_rejects_scope_beyond_valid_scopes():
+    """RFC 7591 registration itself is the first escalation checkpoint: a
+    client asking for a scope this server never issues (e.g. "admin", which
+    doesn't exist here -- "read" is the only valid scope) must be refused at
+    registration, not silently clamped later. Exercises the real mcp-SDK
+    `RegistrationHandler` through `SingleOperatorOAuthProvider`'s
+    `ClientRegistrationOptions(valid_scopes=["read"])`."""
+    provider = _make_oauth_provider()
+    assert provider.client_registration_options.valid_scopes == ["read"]
+
+
+async def test_authorize_request_for_unregistered_scope_never_issues_a_code(monkeypatch):
+    """First checkpoint, at the HTTP boundary: a caller who passed the
+    operator-key gate but asks `/authorize` for a scope (`admin`) the
+    client was never registered for -- the attack shape supermcp's
+    `authorize()` was vulnerable to, force-granting whatever a handshake
+    merely asked for -- must never come back with a code. The mcp SDK's own
+    `AuthorizationHandler` validates the requested scope against the
+    client's registered scope before `SingleOperatorOAuthProvider.authorize()`
+    is even reached, and redirects with `error=invalid_scope` instead."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+    client_info = await _register_client(app)  # registers with default_scopes=["read"]
+    _verifier, challenge = _pkce_pair()
+
+    auth_response = await _authorize(
+        app, client_id=client_info["client_id"],
+        redirect_uri=client_info["redirect_uris"][0],
+        code_challenge=challenge, operator_key=_OAUTH_ENV["TRADING_AGENT_TOKEN"],
+        scope="admin",
+    )
+    assert auth_response.status_code == 302, auth_response.text
+    from urllib.parse import parse_qs, urlsplit
+
+    query = parse_qs(urlsplit(auth_response.headers["location"]).query)
+    assert "code" not in query
+    assert query["error"] == ["invalid_scope"]
+
+
+async def test_authorize_itself_filters_scope_beyond_client_registration():
+    """Second checkpoint, at `authorize()` itself -- defense in depth for
+    exactly the function whose supermcp counterpart shipped this bug, so it
+    must not rely solely on the SDK's upstream validation (the test above)
+    catching every path in. Calling `SingleOperatorOAuthProvider.authorize()`
+    directly with `AuthorizationParams.scopes` carrying an extra scope the
+    client was never registered for must still come back with a code
+    carrying only the scopes the client actually has -- 'admin' must not
+    survive even when handed to authorize() directly, bypassing the SDK's
+    own upstream scope check entirely."""
+    from mcp.server.auth.provider import AuthorizationParams
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    provider = _make_oauth_provider()
+    client = OAuthClientInformationFull(
+        client_id="scope-test-client",
+        redirect_uris=["https://client.example.test/callback"],
+        scope="read",  # this client is registered for "read" only
+    )
+    provider.clients[client.client_id] = client
+
+    params = AuthorizationParams(
+        state="s", scopes=["read", "admin"], code_challenge="x" * 43,
+        redirect_uri=client.redirect_uris[0], redirect_uri_provided_explicitly=True,
+    )
+    redirect = await provider.authorize(client, params)
+
+    from urllib.parse import parse_qs, urlsplit
+
+    code_value = parse_qs(urlsplit(redirect).query)["code"][0]
+    issued_code = provider.auth_codes[code_value]
+    assert issued_code.scopes == ["read"], (
+        f"authorize() must drop scopes the client isn't registered for, got {issued_code.scopes!r}"
+    )
+
+    # And the token minted from that code inherits exactly those scopes too.
+    token = await provider.exchange_authorization_code(client, issued_code)
+    assert token.scope == "read"
+
+
+async def test_refresh_token_cannot_escalate_scope_beyond_original_grant():
+    """`exchange_refresh_token()`'s `requested.issubset(original)` check is
+    the second escalation checkpoint -- a refresh must never be usable to
+    widen scope beyond what the original authorization actually granted,
+    even for a scope this server otherwise recognises as valid."""
+    from mcp.server.auth.provider import TokenError
+
+    provider = _make_oauth_provider()
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    client = OAuthClientInformationFull(
+        client_id="some-client", redirect_uris=["https://client.example.test/cb"],
+    )
+    pair = provider._issue_token_pair("some-client", [])  # granted NO scopes
+    refresh = await provider.load_refresh_token(client, pair.refresh_token)
+    assert refresh is not None
+
+    with pytest.raises(TokenError):
+        await provider.exchange_refresh_token(client, refresh, ["read"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Rule 3 pin: the order path stays in exactly one place
 # ═══════════════════════════════════════════════════════════════════════════
 

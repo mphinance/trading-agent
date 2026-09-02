@@ -87,6 +87,35 @@ def _build_auth() -> HmacStaticTokenVerifier | MultiAuth | None:
     one check: it tries the OAuth server's own token store first, then the
     static bearer, and a token is valid if either says so. There are not two
     independent authorization decisions here, only one, fed by two sources.
+
+    M2-06: this convergence is load-bearing, not incidental, and here is
+    exactly why. `fastmcp`'s `AuthProvider.get_middleware()` wraps the ASGI
+    app in exactly one `AuthenticationMiddleware(backend=BearerAuthBackend(
+    self))`, where `self` is whatever single object this function returns —
+    never one backend per credential type. So every request this server
+    receives, whether it carries `TRADING_AGENT_TOKEN` or an OAuth-minted
+    access token, is decided by the identical bound `MultiAuth.verify_token`
+    call constructed right here; there is no second code path a future
+    change could add that reaches the MCP tools without going through it.
+    That property is exactly what supermcp's `/login` bug (see
+    docs/AUTH_TRADE_SCOPE_LOCKDOWN.md) lacked: its password-based branch
+    handed back `config.SUPERMCP_TOKEN` — the admin credential — directly,
+    a second grant path that never ran through `require_trade_scope()` at
+    all. If this function is ever changed to build more than one `AuthProvider`
+    and pass them to more than one `FastMCP`/route, or to hand-roll a second
+    header check anywhere in this module, that is this exact bug again:
+    don't. `tests/test_trading_mcp.py`'s
+    `test_bearer_and_oauth_paths_converge_on_one_verify_token` pins this by
+    patching the live `MultiAuth.verify_token` bound method and proving both
+    credential shapes are observed by it, empirically, not by re-reading
+    this comment.
+
+    Convergence at the credential-verification layer is only half of M2-06.
+    The other half — that an OAuth-issued token can never carry more scope
+    than it was granted — lives in `oauth_provider.py`'s `authorize()`; see
+    the comment there for the matching half of supermcp's bug (its
+    `authorize()` force-granted admin scope on every OAuth handshake, no
+    matter what was requested).
     """
     token = os.environ.get("TRADING_AGENT_TOKEN")
     if not token:
