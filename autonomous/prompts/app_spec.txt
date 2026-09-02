@@ -1,0 +1,439 @@
+# app_spec.txt — Vesper on Coolify, end to end
+
+You are working in an EXISTING repository, not a greenfield project. Nothing here
+asks you to invent an application. Everything asks you to finish one.
+
+Read `/CLAUDE.md` in the project root before you touch anything. It is dense,
+authoritative, and encodes decisions that were expensive to learn. This spec
+AMENDS it in two specific places, named below. Everywhere else, CLAUDE.md wins.
+
+---
+
+## 0. What exists today
+
+**Repo:** `github.com/mphinance/trading-agent` (local checkout is the project dir).
+Vesper — a LangGraph autonomous trading agent for Webull. It scans, analyses,
+drafts orders, enforces risk deterministically, asks a human for approval over
+Telegram, executes, and monitors open positions for exits. Single operator. No
+user model, no multi-tenancy, no authentication anywhere inside the agent itself.
+
+**Two hosts, and they are not the same system. Do not merge them.**
+
+| | `supermcp` | `trading-agent` |
+|---|---|---|
+| box | vultr, `mcp.mphinance.com` | coolify, `agent.mphinance.com` |
+| audience | subscriber-facing | owner-only (Michael) |
+| this spec | **OUT OF SCOPE — do not touch it** | in scope |
+
+**The coolify box, as verified at the start of this run:**
+
+- `ssh coolify` works, no sudo. Public IP `5.161.247.12`. Ubuntu 24.04, 3.8 GB RAM
+  (~2.4 GB available), 22 GB disk free, Python 3.12.3.
+- It also runs Coolify itself plus ~10 unrelated containers. **You are a guest on
+  a busy box.** Do not restart docker, do not touch `coolify-*` containers, do not
+  fill the disk.
+- `~/trading-agent` is a git clone at `c2e2004`. `.venv` is 1.1 GB.
+- `trading-agent.service` is a systemd **user** unit, lingering enabled, `active`,
+  serving the read-only MCP server on `10.0.0.1:8500` (docker bridge only — not
+  `0.0.0.0`, and it must stay that way).
+- `~/trading-agent/.env` exists, 0600, and contains exactly one key:
+  `TRADING_AGENT_TOKEN`. Every account/market tool therefore returns
+  `{"available": false}` right now. The server is healthy; it just cannot see
+  anything.
+- DNS `agent.mphinance.com` → `5.161.247.12` is correct and propagated.
+- **TLS is not live.** Traefik answers on the box but has no router for that
+  hostname: `curl -k -H 'Host: agent.mphinance.com' https://5.161.247.12/mcp`
+  returns **503**, and by-name HTTPS fails the handshake outright. The Traefik
+  dynamic config is staged at `coolify:~/trading-agent.yaml` and installing it
+  needs `sudo`, which you do not have. See §6 — this is a HUMAN_BLOCKED item.
+
+**Tooling already on that server:** 60 MCP tools — 47 momentum tools registered by
+`mcp_server/registry.py`'s `register_momentum_tools()` (tiers 1–3), plus 13
+read-only Vesper tools in `trading_mcp/vesper_tools.py`. `trading_mcp/server.py`
+builds one `FastMCP("trading-agent")` at import time; `MCP_TRANSPORT` picks stdio
+(default) or http, and the http path refuses to start without `TRADING_AGENT_TOKEN`.
+
+**What is deployed there is Phase 0 only** — the read-only MCP viewer. The agent
+graph itself (`vesper.py loop`, `vesper.py listen`, `execution_guard`) has never
+run on that box. Milestone M4 is therefore new deployment work, not a config
+change.
+
+**A competing plan exists in this repo. It loses.** `docs/SUPERMCP_CONSOLIDATION_PLAN.md`,
+`docs/SUPERMCP_EXECUTION_PLAN.md`, `docs/SUPERMCP_VS_VESPER_TOOLS.md` and
+`docs/SUPERMCP_REMOTE_STATE.md` describe folding Vesper's tools into the
+subscriber-facing `supermcp` hub. **Do not do that.** `trading-agent` stays its
+own process, its own connector, its own host entry. When you touch those docs,
+mark them superseded with a one-line pointer to this decision rather than
+silently leaving two plans pointing opposite ways.
+
+---
+
+## 1. The end state you are building toward
+
+One sentence: **Michael talks to Claude on his phone, asks what the market and his
+book are doing, and a full Vesper agent running unattended on the coolify box
+pushes trade proposals to Telegram for a button press — with no laptop involved.**
+
+Four decisions were made explicitly before this run. They are settled. Do not
+re-open them, do not propose alternatives, do not "improve" them into something
+safer without being asked:
+
+1. **The full agent moves to coolify, order path included.** Scanner → playbooks →
+   risk gate → Telegram approval → `execution_guard.place()` → monitor. That box
+   will hold live Webull credentials and will be able to move money.
+2. **You have full deployment autonomy.** You may `ssh coolify`, edit files there,
+   write `.env`, restart the systemd user unit, and `curl` the live endpoint to
+   verify. You may commit and push to GitHub. You cannot `sudo`.
+3. **Voice is claude.ai voice mode over the MCP connector.** CLAUDE.md rule 4d —
+   Telegram voice notes transcribed via OpenRouter STT, answered with `sendVoice`
+   — is **CANCELLED**. Do not build it. Telegram keeps the inline approval buttons
+   and nothing else gains a voice surface.
+4. **Connector auth is OAuth 2.1 with the static bearer kept as a fallback.**
+   Anthropic's request-headers connector auth is beta and has open reports of the
+   header silently not being sent; OAuth is the path that survives web, mobile and
+   voice. The bearer stays so `curl` and the test suite have a way in.
+
+5. **`trading-agent` and `supermcp` stay separate systems.** Nothing in this run
+   modifies, deploys to, or consolidates into `supermcp`. If a change looks like
+   it belongs there, write it down and leave it.
+
+---
+
+## 2. Invariants — violating any of these fails the round
+
+These are not style preferences. Each one is load-bearing and most were learned
+the hard way. If a feature seems to require breaking one, mark the feature
+`blocked` with a reason and move on; do not break it.
+
+**I1. `vesper/execution_guard.py` is the only module that may move money.**
+Rule 3. If you are adding a broker write, it goes there or it does not go in.
+
+**I2. The preview → confirm → place handshake stays intact.** `preview()` runs the
+guards and stages a ticket carrying a SHA-256 of the exact payload; `place()`
+takes a `ticket_id`, never an order. No single call may both construct and fire.
+Tickets are single-use, 120 s expiry.
+
+**I3. No MCP tool may reach the order path.** No module under `trading_mcp/` or
+`mcp_server/` may reference `guard.preview`, `guard.place`, `halt()`, `resume()`,
+or `ApprovalRegistry.submit_decision()` — including by passing a bound method
+(`asyncio.to_thread(guard.place, …)`). `tests/test_trading_mcp.py` pins this with
+an AST check that matches attribute *access*, not just calls. **Never narrow that
+test.** If you add a new MCP surface, it must be covered by the same pin.
+
+**I4. `VESPER_TRADING=0` is the kill switch and it defaults off.** It stays off on
+the remote box until a milestone explicitly turns it on, and even then only after
+the paper-mode soak in M6 passes.
+
+**I5. The remote service never binds `0.0.0.0`.** Docker bridge (`10.0.0.1`) or
+loopback, fronted by Traefik, gated by auth. Verify with `ss -ltnp` after every
+restart, not by reading config.
+
+**I6. Nothing secret is ever committed, printed to a transcript, or written into a
+file that gets committed.** Rule 5: this work gets streamed. No account numbers,
+balances, API keys, bearer tokens, or ntfy topics. When you need to confirm a key
+is present, check that the *name* is in `.env`, never echo the value. `.env.example`
+carries placeholders only.
+
+**I7. The LLM may narrate, reject, or shrink — never originate or increase.**
+Rule 6. `audit_proposal_risk()` runs only after the deterministic gate passed and
+may only REJECT or halve quantity. Strategies stay deterministic Python.
+
+**I8. The test suite must be green at the end of every round.** `pytest -q` from
+the project root. It is hermetic — no network, no broker, no credentials — and it
+must stay that way. If you add state that touches disk, register it in
+`tests/conftest.py`'s `_isolated_vesper_state` autouse fixture.
+
+**I9. Degradation, not breakage.** A missing optional dependency (chromadb), an
+unreachable feed (TDPro, the gRPC push stream), or an absent credential must
+degrade to `{"available": false}` or a slower poll — never crash the process.
+
+**I10. Never restart or reconfigure anything on the coolify box that is not
+`trading-agent.service`.** Other people's production runs there.
+
+---
+
+## 3. Amendments to CLAUDE.md you must write
+
+CLAUDE.md is currently wrong in two places. Fixing it is part of the work, not
+bookkeeping, and it must land in the same change that makes it wrong.
+
+**A1 — Rule 1 needs a carve-out.** It currently claims "nothing in this repo
+currently serves HTTP" and that both approval paths are outbound-only. Once the
+MCP server is internet-facing that is false. Rewrite it as what it actually is:
+bound to the docker bridge, fronted by Traefik with TLS, gated by OAuth 2.1 with
+a static-bearer fallback, owner-only. Do not dress it up as loopback. State
+plainly that the box holds live broker credentials and can place orders, and name
+the controls that make that survivable (I1–I4).
+
+**A2 — Rule 4d is cancelled and replaced.** Rewrite it as the claude.ai voice-mode
+design: voice is a client concern, the server exposes read-only tools, no STT
+lives in this repo, no audio endpoint exists, and **approvals never become a voice
+command** — the inline Telegram buttons remain the only way a proposal is
+approved. That last constraint is the one part of the old rule 4d that survives,
+and it survives for the same reason: a transcript is ambiguous in exactly the
+wrong place ("approve" — *which* proposal?), while a button is unambiguous,
+per-user authorised and restart-safe.
+
+Also update: the Status section (order path, deployment), the Layout tree, the
+test count, and the `deploy/` description once M7 lands.
+
+---
+
+## 4. Milestones
+
+Work them roughly in order; later ones depend on earlier ones. Within a
+milestone, order is yours.
+
+### M1 — Make the repo cloneable again
+`vesper/nodes/__init__.py` is tracked-and-modified and imports `swarm_node` /
+`synthesis_node`, which are untracked. A fresh clone gets a `vesper.nodes` package
+that fails to import — which means the coolify box cannot be updated from git
+until this is fixed. Along with it: `vesper/agents/*`, `vesper/nodes/swarm_node.py`,
+`vesper/nodes/synthesis_node.py`, and edits to `graph.py`, `state.py`,
+`reflection.py`, plus `tests/test_agents_specialists.py` and
+`tests/test_multi_agent_graph.py`.
+
+Decide per-file: finish and commit it, or revert the `__init__.py` change so the
+package imports without it. Prefer finishing — this is real multi-agent analysis
+work — but a green, importable tree beats a half-wired one. Whatever you commit
+must import cleanly and be covered by passing tests.
+
+Also in M1: pin the Webull SDK. `requirements.txt:19` currently lists
+`webull-openapi-python-sdk` bare, with no specifier. Local and coolify both run
+**2.0.18**, CLAUDE.md documents 2.0.16, a fresh resolve gets 2.0.19, and supermcp
+runs 2.0.12 — a four-way split. Pin **2.0.18** and correct CLAUDE.md. Verify with a clean-venv
+`pip install -r requirements-dev.txt && pytest --collect-only`, which is the only
+check that catches missing transitive deps.
+
+Do NOT commit: `Cash Secured Puts-2026-08-30.csv`, `Screenshot 2026-09-01 14.05.52.png`.
+Rule 5. Add them to `.gitignore`.
+
+### M2 — OAuth 2.1 on the MCP server
+Add an OAuth 2.1 authorization-server implementation to `trading_mcp/` with
+dynamic client registration, so claude.ai can add the connector without a pasted
+header. Keep `StaticTokenVerifier` off `TRADING_AGENT_TOKEN` working in parallel
+for `curl` and tests.
+
+Hard requirements:
+- Single-operator by construction. There is no user model in this codebase and you
+  are not adding one. Authorization is "does this request carry a credential
+  Michael provisioned" — nothing more. An unauthenticated request to `/mcp`
+  returns 4xx, always. **A `200` from an unauthenticated request is a failed
+  feature, not a passing one.**
+- Tokens are revocable and stored server-side, outside git, 0600.
+- Both auth paths converge on one authorization check. Two code paths that each
+  decide access independently is how supermcp shipped a bug where
+  `authorize()` force-granted admin on every OAuth handshake. Read
+  `docs/SUPERMCP_SWAGGER_AND_AUTH_PLAN.md` and the handoff notes before designing
+  this, and do not repeat that shape.
+- `hmac.compare_digest` for every token comparison.
+- The server must still refuse to start on the http transport without a token.
+- Tests: unauthenticated 4xx, bad token 4xx, good bearer 200, full OAuth
+  handshake, token revocation, and the rule-3 AST pin extended to any new module.
+
+### M3 — Credentials and live data on coolify
+`~/trading-agent/.env` needs the trimmed set — **not** the whole local `.env`:
+`WEBULL_APP_KEY`, `WEBULL_APP_SECRET`, `WEBULL_KEY`, `WEBULL_SECRET`,
+`WEBULL_REGION_ID`, `WEBULL_ENVIRONMENT`, `TD_API_KEY`, `TDPRO_API_KEY`,
+`SEC_USER_AGENT`, plus `TELEGRAM_BOT_TOKEN` and `TELEGRAM_AUTHORIZED_USER_IDS`
+for M5. Keep `VESPER_TRADING=0`.
+
+Copy them from the local `.env` over ssh **without ever printing a value to the
+transcript** — pipe or scp, never `echo`. Verify by name only:
+`ssh coolify 'sed -n "s/^\([A-Z_]*\)=.*/\1/p" ~/trading-agent/.env'`.
+
+Then restart the unit and prove the account tools return real data instead of
+`{"available": false}` — by *shape*, e.g. asserting the response has an
+`equity` key, **never by echoing a balance**. Rule 5.
+
+Note the rate limit while you are here: order query (balances, positions) is
+**2 req / 2 s**; market data is 600/min. Route new quote reads through
+`md.Market`, and do not merge `wb.py` and `md.py`.
+
+### M4 — Full Vesper on coolify
+This is **two** processes, not one, and missing that is the easiest way to ship a
+half-working deployment:
+
+- `vesper.py loop --live` — `vesper/loop.py`'s unattended daemon. Starts the
+  position monitor as a background task, best-effort-starts the alert watcher,
+  and fires scheduled scans at 09:30 / 11:00 / 14:00 ET on weekdays with a 300 s
+  catch-up window. `mode="live"` always runs `interactive=True`, so a drafted
+  proposal always pauses at `human_gate_node` — it can never auto-execute.
+- `vesper.py listen` — the `TelegramPoller`. **Separate process.** Without it,
+  proposals are sent but no button press ever comes back and the graph waits
+  forever.
+
+Run them as two systemd user units alongside the MCP server (three total):
+
+- Separate units (e.g. `vesper-loop.service`, `vesper-listen.service`), separate
+  logs, independently restartable. Do not fold either into the MCP server
+  process; the MCP server must stay a read-only viewer (I3).
+- Both units read the same `.env` and the same on-disk state (halt file, circuit
+  breaker, paper ledger, approval registry, SQLite checkpoints). Confirm the paths
+  agree and that concurrent access is safe — two processes touching one SQLite
+  file is a real failure mode, not a theoretical one.
+- Memory: the box has ~2.4 GB free, the venv is already 1.1 GB, and roughly ten
+  unrelated containers share the machine. Measure each unit's RSS before and
+  after. `chromadb>=0.5` is already declared in `requirements.txt:53` but is not
+  installed on coolify, so trade memory silently no-ops there — the sync at
+  `mcp_server/conviction.py:194` is inside a `try`. Install it only if the memory
+  numbers allow; if not, leave it out and assert the quiet degradation with a
+  test rather than assuming it.
+- `VESPER_TRADING` stays `0`.
+
+### M5 — Telegram approvals from the remote box
+The approval queue must reach Michael's phone from coolify, not from the laptop.
+Telegram long-polls, so it is outbound-only and needs no inbound port — keep it
+that way; do not start `vesper/bot/inbound.py`'s aiohttp app.
+
+- Exactly one poller may hold the bot token at a time. Two (laptop + coolify)
+  silently steal each other's updates. Make it impossible to run both by accident:
+  detect and refuse, or make the local one opt-in.
+- Approval state must survive a restart — a proposal pending at the human gate
+  when the unit restarts is still pending afterwards, and the button still works.
+  The SQLite checkpointer exists for this; prove it with a test that restarts.
+- `TELEGRAM_AUTHORIZED_USER_IDS` is enforced on every callback, not just the
+  first — and it must **fail closed**. Today `vesper/bot/inbound.py:57-77`
+  defaults to allow-with-a-warning when the variable is unset. That was tolerable
+  on a laptop; on a box that can place orders it is not. Unset means deny, and a
+  test pins it.
+- End-to-end proof: a proposal generated on coolify produces a Telegram message
+  with working Approve/Reject buttons, and a press is recorded in the audit trail.
+  Use paper mode for this.
+
+### M6 — Paper soak, then arm
+Run the whole thing in paper mode across at least one full session and check:
+proposals generated, approvals round-tripped, monitor exits fired, audit chain
+verifies (`verify_audit_chain`), circuit breaker armed, no unhandled exception in
+the journal, RSS stable.
+
+Only then write the arming procedure — do **not** flip it yourself. Turning
+`VESPER_TRADING=1` on an internet-facing box holding live credentials is Michael's
+call and Michael's keystroke. Produce `docs/ARMING.md`: preconditions, the exact
+commands, what to watch in Webull Desktop, and how to abort (`vesper.py halt`).
+Remember the standing rule from CLAUDE.md: the first live order is one share of
+something cheap, placed with Webull Desktop open.
+
+### M7 — Deployment that is not a lie
+`deploy/` still describes the pre-migration `run.sh` / port-8787 layout and is
+stale. `deploy/install.sh` refuses to run without a Tailscale IP — which is
+correct for the old shape and wrong for this one.
+
+Replace it with what actually exists: both systemd user units, the venv build, the
+`.env` contract (names only), the Traefik dynamic config, the DNS record, and the
+sudo step that installs it. Make it re-runnable and idempotent. Delete or clearly
+retire `deploy/sidecar.service` and the stale `SIDECAR_HOST` assumptions rather
+than leaving them to mislead the next reader.
+
+### M8 — Voice-shaped tools
+claude.ai voice mode is the client; this repo's job is to expose tools that answer
+well when spoken. Two things make voice fail here, both observed rather than
+hypothetical:
+
+- **Ticker mis-transcription** (NVDA → "in video"). Aim the tools at *current
+  context* — P&L, the gamma flip, what's open, what's pending — so common
+  questions need no ticker at all. Where a symbol is unavoidable, resolve fuzzily
+  and say back what you matched.
+- **Payload size.** A tool that returns 40 KB is unusable aloud. `get_gex_ticker`
+  returns ~200 strikes / ~40 KB on SPY; `td.levels()` compacts it to ~1.3 KB. Every
+  voice-facing tool returns the compacted shape.
+
+Add a small number of high-value spoken-question tools. There is no
+"how am I doing" tool today: answering it means chaining `get_account_state` +
+`list_alerts` + `list_pending_proposals` client-side, which is three round trips
+for the single most common spoken question. One composed summarizer is worth more
+than ten granular tools. While you are there, bound the two known-verbose
+responses: `get_account_state` returns Webull's raw `positions` list unbounded
+(`trading_mcp/vesper_tools.py:83-93`), and `get_audit_trail` defaults to 20 full
+JSON entries (`:243`). Keep everything read-only (I3), and extend
+`tests/test_trading_mcp.py`'s pin to any new module.
+
+Also: every voice-originated tool call gets logged to the audit trail like any
+other path. Audio is ephemeral and unauditable; the log is what makes it
+reviewable afterwards.
+
+---
+
+## 5. Standing engineering rules for this run
+
+- **Tests are the other half of a decision.** If you change a rule, change its
+  test. `test_execution_guard.py`, `test_alerts.py`, `test_notify.py`,
+  `test_stream_runner.py` and `test_trading_mcp.py` each pin a decision, not just
+  behaviour.
+- **Fake the LLM with one pattern.** `tests/llm_fakes.py`'s `DeterministicProvider`,
+  wired via `monkeypatch.setattr("vesper.llm.call_openrouter", provider)`. For
+  keeping the LLM out entirely, `patch("vesper.llm.is_llm_enabled", return_value=False)`.
+  Do not invent a third pattern.
+- **`requirements-dev.txt` is not a superset of `requirements.txt`.** The Webull
+  and Agent SDKs are stubbed in `tests/conftest.py` on purpose. Do not "fix" that
+  by installing the real ones.
+- **Small commits, conventional messages, push often.** Each feature that lands
+  green gets its own commit. A round that ends with an unpushed 40-file diff is a
+  round that lost work.
+- **Verify remotely by observation, not by assumption.** After a restart:
+  `systemctl --user is-active`, `ss -ltnp | grep 8500`, then an actual HTTP call.
+  A config file that says the right thing is not evidence.
+- **When you are blocked on something needing `sudo` or a human key press, mark
+  the feature `human_blocked` with the exact command to run, and keep going on
+  something else.** Do not spin. Do not try to work around the lack of sudo.
+
+## 6. Known HUMAN_BLOCKED items
+
+These cannot be completed by the agent. Record them, write the exact command, and
+route around them.
+
+**H1 — Install the Traefik dynamic config (needs sudo).** Staged at
+`coolify:~/trading-agent.yaml`. Until this runs there is no TLS and the connector
+cannot be added:
+
+```
+ssh coolify 'sudo cp ~/trading-agent.yaml /data/coolify/proxy/dynamic/trading-agent.yaml \
+  && sudo chown root:root /data/coolify/proxy/dynamic/trading-agent.yaml \
+  && sleep 8 && curl -s -o /dev/null -w "https: %{http_code}\n" https://agent.mphinance.com/mcp'
+```
+Expect a **4xx**. A `200` means auth is not gating and something is wrong.
+If M2 changes what that file must contain, rewrite `~/trading-agent.yaml` (you can
+write it without sudo) and re-issue this command for Michael.
+
+**H2 — Add the connector in claude.ai.** Settings → Connectors, URL
+`https://agent.mphinance.com/mcp`. Once M2 lands this is the OAuth flow; the
+bearer method stays documented as the fallback. Requires a browser login.
+
+**H3 — Arm live trading.** `VESPER_TRADING=1`. M6 writes the procedure; Michael
+runs it.
+
+**H4 — Wildcard DNS footgun, for awareness.** `*.mphinance.com` points at vultr, so
+a typo'd hostname never fails loudly — it lands on vultr's Apache and returns a
+confusing 503 from the wrong machine. If you see an unexplained 503, check you
+typed the hostname right before you debug Traefik.
+
+---
+
+## 7. Definition of done
+
+Every one of these is objectively checkable. The run is complete when all hold:
+
+1. A fresh `git clone` + `pip install -r requirements-dev.txt` + `pytest -q` is
+   green, and `python -c "import vesper.nodes"` succeeds.
+2. `pytest -q` passes with a test count strictly greater than the 570 this run
+   started from, including new tests for OAuth, remote approvals, and restart
+   persistence.
+3. `curl https://agent.mphinance.com/mcp` with no credential returns 4xx; with a
+   valid bearer returns 200; the OAuth discovery endpoints respond correctly.
+   (Depends on H1.)
+4. `ss -ltnp` on coolify shows the MCP server bound to the docker bridge, never
+   `0.0.0.0`.
+5. Both systemd user units are `active`, survive `systemctl --user restart`, and
+   come back after a simulated crash.
+6. The account/market tools on coolify return real data — verified by response
+   *shape*, with no value echoed anywhere.
+7. A paper-mode proposal generated on coolify arrives on Telegram with working
+   buttons; a press is recorded; the audit chain verifies.
+8. `CLAUDE.md` rules 1 and 4d are rewritten per §3, and its Status, Layout and
+   test count are accurate.
+9. `deploy/` reproduces the live deployment from scratch and contains no
+   pre-migration leftovers.
+10. `docs/ARMING.md` exists and `VESPER_TRADING` is still `0`.
+11. Everything is committed and pushed; `git status` is clean apart from the
+    deliberately-ignored files in M1.
+12. Nothing in the git history contains a credential, a balance, or an ntfy topic.

@@ -1,0 +1,184 @@
+# claude-progress.txt — written by the initializer session (Session 1)
+
+You have no memory of the session that wrote this. Read this whole file before
+touching anything, then read CLAUDE.md and app_spec.txt in full — this file is
+a map, not a substitute for them.
+
+## What this run is
+
+Vesper (LangGraph autonomous trading agent for Webull) is moving from
+"deployed read-only MCP viewer on coolify" to "full agent on coolify, order
+path included, with an OAuth-gated MCP connector claude.ai can talk to."
+app_spec.txt (repo root) is the spec: 4 settled decisions, 10 invariants
+(I1-I10), milestones M1-M8, a checkable definition of done in section 7. It
+AMENDS CLAUDE.md in exactly two places (rule 1, rule 4d) — everywhere else
+CLAUDE.md wins on conflict.
+
+## Baseline captured 2026-09-01 (Session 1) — this is the floor, not a target
+
+- `pytest -q` (via `.venv/bin/python -m pytest -q`, NOT `source` — the bash
+  policy in this harness blocks `source`): **570 passed**, 32.39s. Matches the
+  count app_spec.txt and the human handoff doc both cite. If a later session
+  sees fewer than 570, stop and fix the regression before building anything.
+- `python -c "import vesper.nodes"` — **succeeds today**, because the untracked
+  files it needs (`vesper/agents/`, `vesper/nodes/swarm_node.py`,
+  `vesper/nodes/synthesis_node.py`) are present on disk even though they are
+  not committed. **A fresh `git clone` of this repo right now would NOT
+  import** — that's M1's actual bug. Don't be reassured by the local import
+  working; it's checking out-of-band untracked state, not git state.
+- `git status --short` at baseline:
+  ```
+   M .gitignore
+   M ROADMAP.md
+   M vesper/graph.py
+   M vesper/nodes/__init__.py
+   M vesper/nodes/reflection.py
+   M vesper/state.py
+  ?? HKUDS_REPOSITORY_REVIEW.md
+  ?? autonomous/                        (this harness — gitignored, see below)
+  ?? docs/HANDOFF_2026-09-01.md
+  ?? docs/MULTI_AGENT_WORKFLOW.md
+  ?? feature_list.json                  (this session's copy — now committed)
+  ?? scripts/package_for_supermcp.py
+  ?? supermcp_CLAUDE_remote.md
+  ?? tests/test_agents_specialists.py
+  ?? tests/test_multi_agent_graph.py
+  ?? vesper/agents/
+  ?? vesper/nodes/swarm_node.py
+  ?? vesper/nodes/synthesis_node.py
+  ```
+  `git log --oneline -5` tip: `c2e2004 feat(trading_mcp): owner-only
+  read-only MCP server over Vesper state`.
+- Remote (`ssh coolify`):
+  - `trading-agent.service` — `active`.
+  - `ss -ltnp | grep 8500` — bound to `10.0.0.1:8500` (docker bridge), NOT
+    `0.0.0.0`. Invariant I5 currently holds. Re-check with `ss` after every
+    restart, not by reading a config file.
+  - `~/trading-agent/.env` on coolify has exactly one key today:
+    `TRADING_AGENT_TOKEN`. Every account/market tool there returns
+    `{"available": false}` until M3 lands the trimmed credential set.
+- TLS: `curl -s -o /dev/null -w "by-name: %{http_code}\n"
+  https://agent.mphinance.com/mcp` → **curl exit code 60 (SSL failure)**, not
+  even a 4xx — the handshake fails outright by name. This is expected: H1
+  (the sudo-gated Traefik dynamic-config install) has not run yet. Do not
+  treat this as a new bug; it's the documented pre-H1 state.
+
+## What's next: M1
+
+M1 ("make the repo cloneable again") is the first unblocked milestone and
+should be the next session's target. It has two independent halves:
+
+1. **The `vesper.nodes` import problem.** `vesper/nodes/__init__.py` is
+   tracked-and-modified and imports `swarm_node`/`synthesis_node`, which live
+   in untracked files. Per-file decision needed: finish and commit the
+   multi-agent work (`vesper/agents/*`, `swarm_node.py`, `synthesis_node.py`,
+   the `graph.py`/`state.py`/`reflection.py`/`nodes/__init__.py` edits, plus
+   the two new test files), or revert `__init__.py` so the package imports
+   without them. app_spec.txt says prefer finishing, but a green importable
+   tree beats a half-wired one — whatever gets committed must import cleanly
+   AND be covered by passing tests. Read the diffs (`git diff vesper/graph.py
+   vesper/state.py vesper/nodes/reflection.py vesper/nodes/__init__.py`)
+   before deciding; I have not evaluated whether the in-flight work is
+   finished or half-done.
+2. **Pin the Webull SDK.** `requirements.txt:19` has no specifier. Local and
+   coolify both run 2.0.18; CLAUDE.md still says 2.0.16; a fresh resolve gets
+   2.0.19; supermcp runs 2.0.12. Pin `2.0.18`, fix CLAUDE.md, and verify with a
+   **clean-venv** `pip install -r requirements-dev.txt && pytest
+   --collect-only` (a throwaway venv, not the repo's `.venv` — that's the only
+   check that catches a missing transitive dep).
+
+M1 also explicitly says NOT to commit `Cash Secured Puts-2026-08-30.csv` or
+`Screenshot 2026-09-01 14.05.52.png` and to gitignore them — **this is already
+done**: `.gitignore` (currently modified, uncommitted) has `Cash Secured
+Puts-*.csv` and `Screenshot *.png` entries, confirmed via `git check-ignore
+-v` against both filenames. Don't redo this; just make sure the `.gitignore`
+edit lands in M1's commit.
+
+## Surprising things found while reading the governing docs
+
+- **The `.gitignore` diff already staged for this repo also ignores
+  `/app_spec.txt`** (root-level) with a comment: "harness copy of
+  autonomous/prompts/app_spec.txt — keep one source of truth." The root
+  `app_spec.txt` you're reading is real and current (it's the file this repo
+  actually uses), it's just intentionally untracked — don't try to `git add`
+  it, and don't be alarmed that `git status` doesn't mention it.
+- **`autonomous/harness/`** (the cloned Anthropic autonomous-coding quickstart
+  plus this repo's overrides) is gitignored and disposable — never stage
+  anything from it. Its own README explains the bash policy (`ssh` reaches
+  only `coolify`, no `sudo`/`docker`/system `systemctl`, no credential
+  literals, no `git push --force`/`clean`/`filter-branch`, no `source`, no
+  command substitution). If a command gets blocked, that's very likely the
+  policy working as intended, not a bug to route around.
+- **Two competing plans exist in-repo and one of them loses.**
+  `docs/SUPERMCP_CONSOLIDATION_PLAN.md`, `SUPERMCP_EXECUTION_PLAN.md`,
+  `SUPERMCP_VS_VESPER_TOOLS.md`, `SUPERMCP_REMOTE_STATE.md` describe folding
+  Vesper's tools into the subscriber-facing `supermcp` hub on vultr.
+  app_spec.txt is explicit: **do not do that**, `trading-agent` stays its own
+  process/connector/host entry. When touching those docs, mark them
+  superseded with a one-line pointer rather than leaving two plans pointing
+  opposite ways. I have not touched them this session.
+- **`docs/HANDOFF_2026-09-01.md`** (a human's handoff, not this harness's) is
+  slightly stale versus app_spec.txt in one place: it recommends the
+  static-bearer-only method for the claude.ai connector ("Use the
+  static-bearer method, not OAuth"). app_spec.txt's M2 supersedes that —
+  OAuth 2.1 with a static-bearer fallback is now the settled design (decision
+  4 in app_spec §1). Follow app_spec, not the human handoff, where they
+  differ.
+- `supermcp` (vultr, subscriber-facing) is explicitly **out of scope** for
+  this run — a different host, different audience, do not touch it, do not
+  deploy to it, do not consolidate into it. It's mentioned throughout the
+  docs because it shares history with this repo, not because it's in scope.
+
+## HUMAN_BLOCKED items (H1-H4) — status as of this session, unchanged
+
+None of these can be completed by an agent. Re-surface them, don't attempt to
+route around the missing privilege:
+
+- **H1 — install the Traefik dynamic config.** Needs `sudo`, which the agent
+  does not have. Staged at `coolify:~/trading-agent.yaml`. Confirmed still
+  blocking this session: by-name HTTPS fails the TLS handshake outright (curl
+  exit 60). Exact command to hand to the human is in app_spec.txt §6 and
+  docs/HANDOFF_2026-09-01.md item 1.
+- **H2 — add the connector in claude.ai.** Needs a browser login. Blocked on
+  H1 (no live TLS yet) and, per app_spec, best done after M2 (OAuth) lands.
+- **H3 — arm live trading (`VESPER_TRADING=1`).** Explicitly Michael's
+  keystroke, never the agent's, and only after M6's paper soak passes.
+  `VESPER_TRADING` is confirmed still unset/`0` locally; no session should
+  ever flip this.
+- **H4 — confirm voice works on the phone.** Needs a human with the phone.
+  Not actionable until M8 lands the voice-shaped tools.
+
+## Rules for every later session (do not relearn these the hard way)
+
+- **`feature_list.json` is append-never, edit-never — only the `passes` field
+  may change per feature.** It was copied verbatim from
+  `autonomous/feature_list.seed.json` this session (75 features, all
+  `passes: false`, counts verified to match). Do not regenerate it, reorder
+  it, reword a feature, or add/remove one, no matter how tempting a "better"
+  breakdown looks.
+- Use `.venv/bin/python -m pytest -q`, not `source .venv/bin/activate && ...`
+  — `source` is blocked by the harness's bash policy in `autonomous/`. This
+  bit me at baseline capture; don't rediscover it.
+- `requirements-dev.txt` is not a superset of `requirements.txt` — the Webull
+  and Agent SDKs are stubbed in `tests/conftest.py` on purpose. Don't "fix"
+  the stubs by installing the real SDKs.
+- One feature landed per session, each with its own commit and a real
+  `pytest -q` run pasted into your own verification — never mark a feature
+  `passes: true` without having actually run its proof.
+- Never print a credential, account number, balance, or ntfy topic to this
+  transcript — it's read aloud on stream (CLAUDE.md rule 5 / app_spec I6).
+  When checking `.env` contents, only ever list key NAMES (see the `sed`
+  idiom used above), never values.
+
+## This session's diff (what actually got committed)
+
+`feature_list.json` (copied verbatim from the seed), `init.sh` (new,
+idempotent env bootstrap + printed verification commands, does not touch the
+remote box or start any long-running process), this file, and whatever is
+under `autonomous/` that isn't already gitignored (the prompts/config that
+aren't in `autonomous/harness/`). No application code was written or changed
+this session, per the initializer's brief. The pre-existing uncommitted diffs
+(`.gitignore`, `ROADMAP.md`, `vesper/graph.py`, `vesper/nodes/__init__.py`,
+`vesper/nodes/reflection.py`, `vesper/state.py`) and untracked multi-agent
+files were deliberately left untouched — they're M1's problem to resolve, not
+this session's.

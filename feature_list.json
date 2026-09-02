@@ -1,0 +1,983 @@
+[
+  {
+    "id": "M1-01",
+    "milestone": "M1",
+    "category": "repo",
+    "description": "A fresh clone of the repo imports vesper.nodes without error",
+    "steps": [
+      "Clone the repo into a scratch directory with: git clone . /tmp/vesper-clone-check",
+      "From that clone, run: python3 -c 'import vesper.nodes'",
+      "Confirm it does NOT raise ModuleNotFoundError for swarm_node or synthesis_node",
+      "If it does, either commit vesper/agents/ + swarm_node.py + synthesis_node.py, or revert the vesper/nodes/__init__.py change",
+      "Re-run the clone check and confirm a clean import",
+      "Delete the scratch clone"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M1-02",
+    "milestone": "M1",
+    "category": "repo",
+    "description": "The in-flight multi-agent work is either committed whole or reverted whole \u2014 never half-wired",
+    "steps": [
+      "Review git diff for vesper/graph.py, vesper/state.py, vesper/nodes/reflection.py, vesper/nodes/__init__.py",
+      "Review the untracked vesper/agents/*.py, vesper/nodes/swarm_node.py, vesper/nodes/synthesis_node.py",
+      "Run: python3 -m pytest -q tests/test_agents_specialists.py tests/test_multi_agent_graph.py",
+      "Confirm 11 tests pass",
+      "Decide: commit the whole set, or revert the graph/state/reflection/__init__ edits so the tree is consistent",
+      "Whichever you choose, the tree must import cleanly and the full suite must stay green",
+      "Record the decision and its reason in claude-progress.txt"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M1-03",
+    "milestone": "M1",
+    "category": "repo",
+    "description": "The two rule-5 artefacts are gitignored and never staged",
+    "steps": [
+      "Add 'Cash Secured Puts-*.csv' and 'Screenshot *.png' to .gitignore",
+      "Run: git status --short",
+      "Confirm neither the CSV nor the screenshot appears as untracked or staged",
+      "Confirm neither file has ever been committed: git log --all --oneline -- '*.csv' '*.png'"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M1-04",
+    "milestone": "M1",
+    "category": "repo",
+    "description": "The Webull SDK is pinned to 2.0.18 in requirements.txt",
+    "steps": [
+      "Edit requirements.txt line 19: webull-openapi-python-sdk==2.0.18",
+      "Confirm the locally installed version matches: python3 -m pip show webull-openapi-python-sdk",
+      "Update CLAUDE.md, which currently documents 2.0.16",
+      "Note the fleet split (local 2.0.18, coolify 2.0.18, supermcp 2.0.12) in claude-progress.txt"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M1-05",
+    "milestone": "M1",
+    "category": "repo",
+    "description": "A clean-venv install of requirements-dev.txt can still collect the whole test suite",
+    "steps": [
+      "Create a throwaway venv: python3 -m venv /tmp/vesper-clean-venv",
+      "Install into it: /tmp/vesper-clean-venv/bin/pip install -r requirements-dev.txt",
+      "Run: /tmp/vesper-clean-venv/bin/python -m pytest --collect-only -q",
+      "Confirm collection succeeds with no import errors (this is the only check that catches missing transitive deps like tradingview_screener and fastmcp)",
+      "Remove the throwaway venv"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M1-06",
+    "milestone": "M1",
+    "category": "repo",
+    "description": "The full test suite passes and the count is recorded as the new floor",
+    "steps": [
+      "Run: python3 -m pytest -q",
+      "Confirm the suite is green with at least 570 passing",
+      "Write the exact number into claude-progress.txt as the floor for later sessions"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M1-07",
+    "milestone": "M1",
+    "category": "repo",
+    "description": "Everything from M1 is committed and pushed",
+    "steps": [
+      "Run git status --short and read it before staging",
+      "Stage specific paths only; confirm no .env, CSV, screenshot or .claude_settings.json is included",
+      "Commit with a conventional message describing the M1 changes",
+      "Run: git push",
+      "Confirm: git status is clean apart from deliberately-ignored files"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-01",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "The current static-bearer auth path is characterised by tests before anything changes",
+    "steps": [
+      "Read trading_mcp/server.py's _build_auth() and the MCP_TRANSPORT handling",
+      "Write tests asserting: no TRADING_AGENT_TOKEN plus http transport refuses to start",
+      "Write a test asserting a request with no credential is rejected",
+      "Write a test asserting a request with a valid bearer is accepted",
+      "Run the new tests and confirm they pass against the CURRENT implementation",
+      "These are the regression net for everything that follows"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-02",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "Token comparison uses hmac.compare_digest everywhere",
+    "steps": [
+      "Search trading_mcp/ for any == comparison against a token or secret",
+      "Replace each with hmac.compare_digest",
+      "Add a test that the comparison helper is used (import-level or behavioural)",
+      "Run: python3 -m pytest -q"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-03",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "An OAuth 2.1 authorization server is mounted on the MCP app",
+    "steps": [
+      "Research FastMCP's auth= parameter and its OAuth provider support for the installed version",
+      "Implement the OAuth 2.1 provider in a new module under trading_mcp/",
+      "Mount the standard discovery endpoints so a client can find the authorization and token endpoints",
+      "Do NOT add a user model \u2014 this is a single-operator system; authorization means 'carries a credential Michael provisioned'",
+      "Add tests covering the discovery endpoints returning well-formed metadata"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-04",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "Dynamic client registration works end to end",
+    "steps": [
+      "Implement the dynamic client registration endpoint",
+      "Write a test that registers a client, receives credentials, and completes the authorization code exchange",
+      "Confirm the resulting access token is accepted by the MCP endpoint",
+      "Confirm an unregistered client cannot obtain a token"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-05",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "Both auth paths converge on a single authorization decision",
+    "steps": [
+      "Confirm there is exactly ONE function that decides whether a request is authorized",
+      "Confirm the static bearer verifier and the OAuth verifier both route through it",
+      "Read docs/SUPERMCP_SWAGGER_AND_AUTH_PLAN.md and the handoff notes on supermcp's authorize() bug, where an OAuth handshake force-granted admin",
+      "Add a test asserting that an OAuth handshake cannot escalate beyond the scopes it was granted",
+      "Write the reasoning into a comment at the decision function, since this is the exact shape that went wrong once already"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-06",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "The static bearer still works as a fallback after OAuth lands",
+    "steps": [
+      "Run the M2-01 characterisation tests again unchanged",
+      "Confirm all still pass",
+      "Confirm the server still refuses to start on http without TRADING_AGENT_TOKEN"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-07",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "Tokens are revocable and stored outside git with 0600 permissions",
+    "steps": [
+      "Implement token storage under the existing data/ state directory pattern (atomic write, same as halt.py)",
+      "Confirm the path is gitignored",
+      "Implement revocation and add a test: issue a token, use it successfully, revoke it, confirm it is then rejected",
+      "Register the new state file in tests/conftest.py's _isolated_vesper_state autouse fixture"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-08",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "The rule-3 AST pin covers every new module added in M2",
+    "steps": [
+      "Read tests/test_trading_mcp.py and confirm how it discovers modules to scan",
+      "Confirm the new OAuth module(s) are inside its scan set",
+      "Confirm the pin still matches attribute access, aliased imports and dotted access \u2014 do NOT narrow it to ast.Call",
+      "Run: python3 -m pytest -q tests/test_trading_mcp.py"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-09",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "An unauthenticated request to /mcp returns 4xx on the live box",
+    "steps": [
+      "Deploy the M2 changes to coolify (git pull in ~/trading-agent, install any new deps into its venv)",
+      "Restart: ssh coolify 'systemctl --user restart trading-agent.service'",
+      "Confirm active: ssh coolify 'systemctl --user is-active trading-agent.service'",
+      "Confirm the bind is still the docker bridge and never 0.0.0.0: ssh coolify 'ss -ltnp | grep 8500'",
+      "From the box, request the endpoint with no credential and confirm a 4xx",
+      "A 200 here is a FAILED feature, not a passing one"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-10",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "The Traefik dynamic config is rewritten to match whatever M2 changed",
+    "steps": [
+      "Read the staged config at coolify:~/trading-agent.yaml",
+      "If OAuth added routes outside /mcp that must be reachable, update the router rules to cover them",
+      "Write the updated file to coolify:~/trading-agent.yaml (this needs no sudo)",
+      "Record in claude-progress.txt that H1 must be re-run by a human for the change to take effect"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M3-01",
+    "milestone": "M3",
+    "category": "deploy",
+    "description": "The trimmed credential set is defined and written to .env.example",
+    "steps": [
+      "List exactly the variables coolify needs: WEBULL_APP_KEY, WEBULL_APP_SECRET, WEBULL_KEY, WEBULL_SECRET, WEBULL_REGION_ID, WEBULL_ENVIRONMENT, TD_API_KEY, TDPRO_API_KEY, SEC_USER_AGENT, TELEGRAM_BOT_TOKEN, TELEGRAM_AUTHORIZED_USER_IDS, TRADING_AGENT_TOKEN, VESPER_TRADING",
+      "Confirm no OpenRouter, Discord or ntfy variable is included \u2014 that box does not need them",
+      "Write .env.example with names and placeholder values only, never a real value",
+      "Confirm .env.example is safe to commit and commit it"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M3-02",
+    "milestone": "M3",
+    "category": "deploy",
+    "description": "Credentials reach coolify without any value appearing in the transcript",
+    "steps": [
+      "Build the trimmed env file locally by filtering the local .env to the names from M3-01, writing to a temp file",
+      "Transfer it with scp \u2014 never echo, cat or print a value",
+      "Set permissions: ssh coolify 'chmod 600 ~/trading-agent/.env'",
+      "Remove the local temp file",
+      "Verify by NAME only: ssh coolify 'sed -n \"s/^\\\\([A-Z_]*\\\\)=.*/\\\\1/p\" ~/trading-agent/.env'",
+      "Confirm VESPER_TRADING=0 is present"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M3-03",
+    "milestone": "M3",
+    "category": "deploy",
+    "description": "The account tools return real data, verified by shape and never by value",
+    "steps": [
+      "Restart the service: ssh coolify 'systemctl --user restart trading-agent.service'",
+      "Call get_account_state through the MCP endpoint",
+      "Assert the response has available: true and contains an 'equity' key",
+      "Do NOT print the equity value, the account number, or any position detail",
+      "Record only 'account tools returning live data: yes' in claude-progress.txt"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M3-04",
+    "milestone": "M3",
+    "category": "deploy",
+    "description": "The TDPro-backed momentum tools return live data on coolify",
+    "steps": [
+      "Call a tier-1 momentum tool that depends on TD_API_KEY",
+      "Confirm it no longer returns available: false",
+      "Confirm the response decodes cleanly with no mojibake (td.py pins the charset because TDPro does not declare one)"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M3-05",
+    "milestone": "M3",
+    "category": "deploy",
+    "description": "The EDGAR tools work on coolify",
+    "steps": [
+      "Confirm SEC_USER_AGENT is set on the box",
+      "Call an EDGAR-backed tool and confirm a successful response shape",
+      "Confirm a missing SEC_USER_AGENT degrades rather than crashing"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M3-06",
+    "milestone": "M3",
+    "category": "deploy",
+    "description": "Rate-limit discipline is preserved on the remote box",
+    "steps": [
+      "Confirm account reads still go through wb.py's locked, backed-off client (2 req/2s bucket)",
+      "Confirm market data reads still go through md.Market (600/min bucket)",
+      "Confirm wb.py and md.py remain separate modules",
+      "Add or confirm a test that a burst of account reads does not exceed the scarce bucket"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M3-07",
+    "milestone": "M3",
+    "category": "deploy",
+    "description": "A missing credential still degrades rather than crashing",
+    "steps": [
+      "Add a test that constructs a tool call with the relevant env var unset",
+      "Confirm the result is {'available': false, ...} and no exception escapes",
+      "Run: python3 -m pytest -q"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-01",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "The repo on coolify is updated to the current pushed HEAD",
+    "steps": [
+      "ssh coolify 'git -C ~/trading-agent fetch && git -C ~/trading-agent status'",
+      "Pull the latest pushed commit",
+      "Install any new dependencies into that box's venv",
+      "Confirm: ssh coolify '~/trading-agent/.venv/bin/python -c \"import vesper.nodes\"'"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-02",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "The full test suite passes on the coolify box itself",
+    "steps": [
+      "Run the suite remotely: ssh coolify 'cd ~/trading-agent && .venv/bin/python -m pytest -q'",
+      "Confirm the count matches the local floor",
+      "If it does not, investigate the environment difference before deploying anything that runs"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-03",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "Memory headroom is measured before adding two more processes",
+    "steps": [
+      "Record baseline: ssh coolify 'free -m'",
+      "Record the MCP server's RSS: ssh coolify 'ps -o rss=,cmd= -C python'",
+      "Estimate the additional footprint of the loop and listen processes",
+      "Confirm the box (~2.4 GB available, ~10 unrelated containers) has room",
+      "Record the numbers in claude-progress.txt"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-04",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "vesper-loop.service exists as a systemd user unit and starts cleanly",
+    "steps": [
+      "Write the unit file for 'vesper.py loop --live', reading ~/trading-agent/.env, with Restart=on-failure",
+      "Install it under the user systemd directory and reload the daemon",
+      "Enable and start it",
+      "Confirm: ssh coolify 'systemctl --user is-active vesper-loop.service'",
+      "Confirm the journal shows the monitor task started and the scan schedule registered",
+      "Confirm VESPER_TRADING is still 0"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-05",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "vesper-listen.service exists as a systemd user unit and starts cleanly",
+    "steps": [
+      "Write the unit file for 'vesper.py listen'",
+      "Install, reload, enable and start it",
+      "Confirm: ssh coolify 'systemctl --user is-active vesper-listen.service'",
+      "Confirm the journal shows Telegram long-polling started",
+      "Confirm no inbound port was opened: ssh coolify 'ss -ltnp' and check nothing new is listening"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-06",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "All three units survive a restart and come back automatically",
+    "steps": [
+      "Restart each unit in turn and confirm it returns to active",
+      "Confirm lingering is enabled so the units survive logout: ssh coolify 'loginctl show-user $USER | grep Linger'",
+      "Kill one process to simulate a crash and confirm systemd restarts it",
+      "Confirm the MCP server is still bound to the docker bridge afterwards"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-07",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "The two processes agree on state file locations and do not corrupt each other",
+    "steps": [
+      "Confirm the halt file, circuit breaker file, paper ledger, approval registry and SQLite checkpoint paths resolve identically for both units",
+      "Confirm concurrent access to the SQLite checkpoint is safe (WAL mode or serialised access)",
+      "Write a test that two processes writing the approval registry concurrently do not lose a record",
+      "Run: python3 -m pytest -q"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-08",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "The alert watcher runs inside the loop process as a thread, not an asyncio task",
+    "steps": [
+      "Confirm the watcher is started by vesper/alerts_runner.py as a background thread",
+      "Confirm it is NOT converted to an asyncio task \u2014 the Webull SDK is blocking and would stall the graph and the Telegram poller",
+      "Confirm a TDPro outage silences dynamic alerts rather than firing them on a stale level"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-09",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "The circuit breaker and halt file are honoured by the remote loop",
+    "steps": [
+      "Confirm the loop checks halt state before firing each scheduled scan",
+      "Trigger a halt remotely and confirm the next scheduled scan is skipped, not queued",
+      "Resume and confirm scanning resumes",
+      "Confirm the circuit breaker's trailing-peak drawdown threshold is configured on the box"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M4-10",
+    "milestone": "M4",
+    "category": "agent",
+    "description": "chromadb is either installed with measured headroom or its absence is asserted to be quiet",
+    "steps": [
+      "Check whether chromadb is installed on coolify",
+      "If memory allows, install it and confirm trade memory ingestion works",
+      "If not, add a test asserting recall_similar_setups returns available: false without raising when chromadb is absent",
+      "Record which path was taken and why in claude-progress.txt"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-01",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "Only one Telegram poller can hold the bot token at a time",
+    "steps": [
+      "Implement a guard that detects an already-running poller (lock file, or a startup getUpdates conflict check)",
+      "Make the second one refuse to start with a clear message rather than silently stealing updates",
+      "Add a test for the refusal",
+      "Document in CLAUDE.md that the laptop poller must be stopped when the remote one runs"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-02",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "TELEGRAM_AUTHORIZED_USER_IDS fails closed when unset",
+    "steps": [
+      "Read vesper/bot/inbound.py:57-77, which currently allows with a warning when the variable is unset",
+      "Change it to deny when unset",
+      "Add a test: unset variable plus any callback equals denied",
+      "Add a test: a user id not in the list is denied even if another is",
+      "Confirm the variable is set on coolify"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-03",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "Authorization is enforced on every callback, not only the first",
+    "steps": [
+      "Add a test that sends two callbacks from an unauthorized user and confirms both are rejected",
+      "Add a test that an authorized user's second callback still passes the check",
+      "Run: python3 -m pytest -q"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-04",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "A proposal generated on coolify reaches Telegram with working buttons",
+    "steps": [
+      "With VESPER_TRADING=0 and paper mode, trigger a scan on the box that produces a proposal",
+      "Confirm a Telegram message arrives with Approve and Reject inline buttons",
+      "Confirm the proposal is registered in the approval registry",
+      "Do not include any account value in the confirmation you record"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-05",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "A button press resolves the proposal and resumes the graph",
+    "steps": [
+      "Press Approve on the test proposal",
+      "Confirm ApprovalRegistry.submit_decision records the decision",
+      "Confirm the paused LangGraph thread resumes",
+      "Confirm the decision appears in the audit trail"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-06",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "A pending approval survives a restart of the listen unit",
+    "steps": [
+      "Create a pending proposal and leave it unanswered",
+      "Restart vesper-listen.service",
+      "Confirm the proposal is still pending",
+      "Press the button and confirm it still resolves correctly",
+      "Add an automated test covering the same restart cycle"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-07",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "A pending approval survives a restart of the loop unit",
+    "steps": [
+      "Create a pending proposal and leave it unanswered",
+      "Restart vesper-loop.service",
+      "Confirm the paused graph thread is recovered from the SQLite checkpointer",
+      "Press the button and confirm the graph resumes from where it paused"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-08",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "The approval path stays outbound-only",
+    "steps": [
+      "Confirm vesper/bot/inbound.py's aiohttp webhook app is still not started by anything",
+      "Confirm ss -ltnp on coolify shows no new listening port beyond the MCP server's bridge bind",
+      "Add or confirm a test asserting the webhook app is not wired into any entrypoint"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M5-09",
+    "milestone": "M5",
+    "category": "approval",
+    "description": "Approvals cannot be granted by anything other than a button press",
+    "steps": [
+      "Confirm no MCP tool can call submit_decision \u2014 tests/test_trading_mcp.py's AST pin covers this",
+      "Confirm no voice or text command path can approve a proposal",
+      "Confirm /halt and /resume text commands still work and are authorization-checked",
+      "Run: python3 -m pytest -q tests/test_trading_mcp.py"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M6-01",
+    "milestone": "M6",
+    "category": "safety",
+    "description": "A full paper-mode session runs on coolify without an unhandled exception",
+    "steps": [
+      "Run the loop in paper mode across at least one full scheduled session",
+      "Confirm scans fired at their scheduled times",
+      "Confirm no unhandled exception appears in the journal",
+      "Record the observation window in claude-progress.txt"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M6-02",
+    "milestone": "M6",
+    "category": "safety",
+    "description": "Proposals, approvals and exits round-trip in paper mode",
+    "steps": [
+      "Confirm at least one proposal was generated",
+      "Confirm the approval round-trip completed",
+      "Confirm the position monitor evaluated open paper positions",
+      "Confirm the exit cascade fired where its conditions were met"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M6-03",
+    "milestone": "M6",
+    "category": "safety",
+    "description": "The audit chain verifies after the soak",
+    "steps": [
+      "Call verify_audit_chain through the MCP endpoint",
+      "Confirm the chain verifies with no break",
+      "Confirm every approval decision from the soak appears in it"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M6-04",
+    "milestone": "M6",
+    "category": "safety",
+    "description": "Memory is stable across the soak",
+    "steps": [
+      "Record RSS for all three units at the start and end of the soak",
+      "Confirm no unbounded growth",
+      "If growth is present, identify the source before proceeding"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M6-05",
+    "milestone": "M6",
+    "category": "safety",
+    "description": "The kill switch and halt both work from the remote box",
+    "steps": [
+      "Confirm VESPER_TRADING=0 blocks the order path even with a valid approved ticket",
+      "Trigger halt and confirm the guard refuses before any other check",
+      "Confirm resume restores normal operation",
+      "Add a test if one does not already cover the remote configuration"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M6-06",
+    "milestone": "M6",
+    "category": "safety",
+    "description": "docs/ARMING.md exists and is precise enough to follow under pressure",
+    "steps": [
+      "Write docs/ARMING.md covering: preconditions from M6-01 to M6-05, the exact commands to set VESPER_TRADING=1 and restart, what to watch in Webull Desktop, and how to abort with vesper.py halt",
+      "State the standing rule that the first live order is one share of something cheap with Webull Desktop open",
+      "State plainly that the box holds live credentials and is internet-facing",
+      "Do NOT arm it yourself"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M6-07",
+    "milestone": "M6",
+    "category": "safety",
+    "description": "VESPER_TRADING is still 0 at the end of the run",
+    "steps": [
+      "Verify by name and value that VESPER_TRADING=0 on coolify",
+      "Confirm no commit, script or unit file sets it to 1",
+      "Record this explicitly in claude-progress.txt"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-01",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The stale deploy/ artefacts are retired rather than left to mislead",
+    "steps": [
+      "Review deploy/install.sh, deploy/sidecar.service and deploy/legacy_sidecar_mcp_server.py.bak",
+      "Delete or clearly mark as retired everything describing the pre-migration run.sh/port-8787 layout",
+      "Confirm nothing in the repo still refers to SIDECAR_HOST or port 8787 as current"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-02",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "A new install script reproduces the live deployment from scratch",
+    "steps": [
+      "Write a script that creates the venv, installs pinned requirements, installs all three systemd user units, enables lingering, and prints the .env contract by name",
+      "It must never write a credential value",
+      "It must be idempotent \u2014 running it twice changes nothing the second time"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-03",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The three systemd unit files live in the repo",
+    "steps": [
+      "Add the unit files for the MCP server, vesper-loop and vesper-listen under deploy/",
+      "Confirm each specifies the correct working directory, venv python, EnvironmentFile and Restart policy",
+      "Confirm the MCP unit's bind address is the docker bridge, never 0.0.0.0"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-04",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The Traefik dynamic config lives in the repo alongside the sudo step that installs it",
+    "steps": [
+      "Commit the dynamic config as deploy/traefik/trading-agent.yaml",
+      "Document the sudo command a human must run to install it, and that Traefik requests the cert on first hit",
+      "Document that an unauthenticated request must return 4xx and that a 200 means auth is not gating"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-05",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The DNS and hostname facts are documented, including the wildcard footgun",
+    "steps": [
+      "Document agent.mphinance.com pointing at the coolify box",
+      "Document that *.mphinance.com points at vultr, so a typo'd hostname silently lands on the wrong machine and returns a confusing 503",
+      "Put this where someone debugging a 503 will actually find it"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-06",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The install script is verified by running it against the live box",
+    "steps": [
+      "Run the script on coolify",
+      "Confirm all three units are active afterwards",
+      "Confirm the MCP bind is unchanged",
+      "Run it a second time and confirm nothing changed"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-07",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "A restart of the whole box brings everything back",
+    "steps": [
+      "Confirm lingering is enabled and all three units are enabled",
+      "Confirm the units would start on boot without a login",
+      "Document how to verify this after any future reboot"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-01",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "A single get_current_state tool answers the most common spoken question in one call",
+    "steps": [
+      "Add a read-only MCP tool composing account state, open positions, pending proposals and armed alerts",
+      "Keep the response small enough to be read aloud \u2014 a summary, not a dump",
+      "Confirm it degrades to available: false per-section rather than failing whole",
+      "Add tests for the composed shape and for partial degradation",
+      "Confirm the rule-3 AST pin covers the new module"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-02",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "get_account_state bounds its positions payload",
+    "steps": [
+      "Read trading_mcp/vesper_tools.py:83-93, which returns Webull's raw positions list unbounded",
+      "Add a limit and a summary count so a large account does not produce an unreadable response",
+      "Add a test with a large synthetic positions list"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-03",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "get_audit_trail defaults to a spoken-friendly size",
+    "steps": [
+      "Read trading_mcp/vesper_tools.py:243, where the default limit is 20 full JSON entries",
+      "Reduce the default and add a compact summary mode",
+      "Keep the full detail available when explicitly requested",
+      "Add a test"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-04",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "Dealer-gamma answers use the compacted level shape, never the raw payload",
+    "steps": [
+      "Confirm every voice-facing tool that touches gamma uses td.levels() (~1.3KB) and not get_gex_ticker's raw ~200 strikes / ~40KB",
+      "Confirm flip_split is surfaced when the two flip sources straddle spot, rather than silently picking one",
+      "Add a test asserting the compacted shape is what is returned"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-05",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "Symbol arguments resolve fuzzily and echo back what was matched",
+    "steps": [
+      "Add fuzzy resolution for tools taking a ticker, so a mis-transcription like 'in video' can still resolve to NVDA",
+      "Always include the resolved symbol in the response so a wrong match is audible before it matters",
+      "Return a clear ambiguity result rather than guessing when two candidates are close",
+      "Add tests covering a clean match, a fuzzy match and an ambiguous one"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-06",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "Gamma levels are never phrased as price targets",
+    "steps": [
+      "Review the tool descriptions and any summary text for language implying price will travel to a level",
+      "State that dealer gamma marks where hedging is concentrated, which is why price often reacts there",
+      "Confirm no tool description reads a wall above spot as a reason to be long"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-07",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "Every voice-originated tool call is logged to the audit trail",
+    "steps": [
+      "Add audit logging for MCP tool invocations, capturing the tool, arguments and timestamp",
+      "Confirm it does not log credential values",
+      "Add a test asserting an MCP call appears in the audit trail",
+      "This is the surviving requirement from the cancelled rule 4d: audio is ephemeral, the log is what makes it reviewable"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-08",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "No speech-to-text, audio endpoint or voice command path exists in this repo",
+    "steps": [
+      "Confirm no OpenRouter STT code was added",
+      "Confirm no audio upload endpoint exists",
+      "Confirm no voice path can approve, halt, resume or place anything",
+      "Add a test asserting no MCP tool can reach submit_decision, halt or resume"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M9-01",
+    "milestone": "M9",
+    "category": "docs",
+    "description": "CLAUDE.md rule 1 is rewritten to describe the real network posture",
+    "steps": [
+      "Replace the claim that nothing in this repo serves HTTP",
+      "Describe what actually exists: docker-bridge bind, Traefik-fronted with TLS, OAuth 2.1 with a static-bearer fallback, owner-only",
+      "State plainly that the box holds live broker credentials and can place orders",
+      "Name the controls that make that survivable: single order module, ticket handshake, kill switch defaulting off, halt file, circuit breaker",
+      "Do not describe it as loopback"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M9-02",
+    "milestone": "M9",
+    "category": "docs",
+    "description": "CLAUDE.md rule 4d is replaced with the claude.ai voice design",
+    "steps": [
+      "Remove the Telegram voice note plus OpenRouter STT design",
+      "Describe the replacement: voice is a client concern, this repo exposes read-only tools, no STT and no audio endpoint live here",
+      "Keep the surviving constraint verbatim in spirit: voice asks questions, buttons move money \u2014 approvals never become a voice command",
+      "Keep the two failure modes that still apply: ticker mis-transcription and oversized payloads",
+      "Mark ROADMAP.md's LLM-layer-and-voice section as superseded rather than deleting the reasoning"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M9-03",
+    "milestone": "M9",
+    "category": "docs",
+    "description": "CLAUDE.md's Status, Layout and test count are accurate",
+    "steps": [
+      "Update the test count to the real current number",
+      "Update the Layout tree with any new modules",
+      "Update the Status section to reflect what now runs on coolify",
+      "Update the deploy/ description after M7"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M9-04",
+    "milestone": "M9",
+    "category": "docs",
+    "description": "The superseded supermcp consolidation docs point at the current decision",
+    "steps": [
+      "Add a one-line superseded note at the top of docs/SUPERMCP_CONSOLIDATION_PLAN.md, SUPERMCP_EXECUTION_PLAN.md, SUPERMCP_VS_VESPER_TOOLS.md and SUPERMCP_REMOTE_STATE.md",
+      "State that trading-agent stays its own process and its own connector",
+      "Do not delete the documents \u2014 the reasoning is still useful"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M9-05",
+    "milestone": "M9",
+    "category": "docs",
+    "description": "ROADMAP.md reflects the work done and the work deliberately not done",
+    "steps": [
+      "Tick the items this run completed",
+      "Add the items this run created and deferred",
+      "Record the multi-agent follow-ups still open: live debate transcripts, and agent_conviction_weights which exists in state but is never populated"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M9-06",
+    "milestone": "M9",
+    "category": "docs",
+    "description": "No credential, balance, account number or ntfy topic exists anywhere in git history from this run",
+    "steps": [
+      "Search the diff of every commit made during this run for credential patterns",
+      "Confirm CI's credential scan passes",
+      "Confirm .env, the positions CSV and the screenshot were never committed",
+      "Record the check in claude-progress.txt"
+    ],
+    "passes": false
+  },
+  {
+    "id": "H1",
+    "milestone": "H",
+    "category": "human",
+    "description": "BLOCKED (needs sudo): install the Traefik dynamic config so TLS goes live",
+    "steps": [
+      "This cannot be done by the agent \u2014 Traefik's dynamic directory requires root",
+      "Human runs: ssh coolify 'sudo cp ~/trading-agent.yaml /data/coolify/proxy/dynamic/trading-agent.yaml && sudo chown root:root /data/coolify/proxy/dynamic/trading-agent.yaml && sleep 8 && curl -s -o /dev/null -w \"https: %{http_code}\\n\" https://agent.mphinance.com/mcp'",
+      "Expect a 4xx. A 200 means auth is not gating and something is wrong",
+      "Agent: keep ~/trading-agent.yaml current, and re-surface this command in claude-progress.txt every session until it is done"
+    ],
+    "passes": false,
+    "blocked": true
+  },
+  {
+    "id": "H2",
+    "milestone": "H",
+    "category": "human",
+    "description": "BLOCKED (needs a browser): add the connector in claude.ai",
+    "steps": [
+      "Human adds https://agent.mphinance.com/mcp under Settings then Connectors",
+      "Use the OAuth flow from M2 once it is live; the static bearer stays documented as the fallback",
+      "Then confirm the tools appear in a normal chat, and in voice mode on mobile",
+      "Agent: leave this false and keep the instructions current"
+    ],
+    "passes": false,
+    "blocked": true
+  },
+  {
+    "id": "H3",
+    "milestone": "H",
+    "category": "human",
+    "description": "BLOCKED (human decision): arm live trading",
+    "steps": [
+      "Human sets VESPER_TRADING=1 on coolify and restarts the loop unit",
+      "Only after every M6 precondition holds and docs/ARMING.md is written",
+      "First live order is one share of something cheap with Webull Desktop open",
+      "Agent: never do this"
+    ],
+    "passes": false,
+    "blocked": true
+  },
+  {
+    "id": "H4",
+    "milestone": "H",
+    "category": "human",
+    "description": "BLOCKED (verification only): confirm voice works end to end on the phone",
+    "steps": [
+      "Human opens voice mode on Claude mobile with the connector enabled",
+      "Ask: what is my current state, what is pending, where is the flip",
+      "Confirm the answers come back promptly and are short enough to be spoken",
+      "Report any tool that returns too much to read aloud so a later session can trim it"
+    ],
+    "passes": false,
+    "blocked": true
+  }
+]
