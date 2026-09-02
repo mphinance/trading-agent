@@ -1998,7 +1998,7 @@ def test_m8_13_exposure_boundary_and_no_audio_routes():
     no STT or audio endpoints exist, and resume remains strictly unreachable.
     """
     scanned_files = {p.name for p in (REPO_ROOT / "trading_mcp").rglob("*.py")}
-    expected_m8_modules = {"bar_summary.py", "gamma_summary.py", "voice_tools.py"}
+    expected_m8_modules = {"bar_summary.py", "gamma_summary.py", "voice_tools.py", "drafting.py"}
     assert expected_m8_modules.issubset(scanned_files), (
         f"Missing expected M8 modules from scanned set: {expected_m8_modules - scanned_files}"
     )
