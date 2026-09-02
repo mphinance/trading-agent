@@ -1,110 +1,96 @@
-# claude-progress.txt — written by Session 4
+# claude-progress.txt — written by Session 5
 
 You have no memory of prior sessions. Read this whole file, then CLAUDE.md and
 app_spec.txt in full, before touching anything. app_spec.txt §2 lists ten
 invariants (I1-I10) — re-read them every session, they are not style
 preferences.
 
-## Floor: 576 passing (up from 570), regression-checked before new work
+## Floor: 580 passing (up from 576), regression-checked before new work
 
-`.venv/bin/python -m pytest -q` → **576 passed** in ~25s, from the repo's own
-`.venv` (already healthy, not rebuilt this session). `import vesper.nodes`
-still OK. `pytest --collect-only -q` → 576 tests collected, no import errors.
-Did not re-verify from a brand-new throwaway venv this session (M1-05 already
-proved that pattern works and nothing in requirements*.txt changed) — if a
-future session wants that extra confidence, `python3 -m venv
-/tmp/vesper-clean-venv && .../pip install -r requirements-dev.txt && pytest
--q`. Remote unchanged and re-confirmed:
+`.venv/bin/python -m pytest -q` → **576 passed** at session start (matches
+prior session's recorded floor exactly). `import vesper.nodes` OK. Remote
+re-confirmed healthy before touching anything:
 `ssh coolify 'systemctl --user is-active trading-agent.service; ss -ltnp | grep 8500'`
-→ `active`, bound to `10.0.0.1:8500` (docker bridge, never `0.0.0.0`). I5 holds.
+→ `active`, `10.0.0.1:8500` (docker bridge, never `0.0.0.0`). I5 holds. No
+remote changes made this session — read-only checks only.
 
-## Bookkeeping fix from last session: M1-07 flipped to passing
+## This session: M2-02 — hmac.compare_digest for the static-bearer token check
 
-Last session's close-out commit (`be3d8d5`) actually DID everything M1-07's
-steps ask — reviewed `git status --short`, staged only the four files it
-changed, committed, pushed — and said so in its own commit message ("M1-07:
-this commit is the M1 close-out"), but never flipped M1-07's own `passes`
-field in that same commit. This session independently re-verified the claim
-before trusting it: `git status --short` clean except the four pre-existing
-untracked stray files (see below), and `git rev-parse HEAD origin/main` equal
-(everything pushed). That's real verification of M1-07's actual steps, done
-this session, so I flipped it rather than leaving a stale `false` on work
-that was genuinely finished. **M1 milestone: all 7 features now passing.**
+Second feature in the M2/OAuth milestone, first `blocked`-free `passes: false`
+after M2-01. Landed in commit `fb84b63`.
 
-## This session: M2-01 — characterise the current static-bearer auth path
+**What was actually wrong:** `trading_mcp/server.py`'s `_build_auth()` built a
+`fastmcp.server.auth.providers.jwt.StaticTokenVerifier`. Its `verify_token()`
+does `self.tokens.get(token)` — a plain dict lookup. CPython resolves a hash
+collision in that lookup with `str.__eq__`, which short-circuits on the first
+differing byte, so it is not constant-time. Grepped `trading_mcp/` for a literal
+`==` against a token/secret first (feature's own step 1) and found none — the
+timing leak was in the *library's* comparison, reached only through the dict
+lookup, not in this repo's source. Fixed at the point this repo controls: swap
+in a verifier that does the comparison itself with `hmac.compare_digest`.
 
-First `blocked`-free `passes: false` feature in dependency order (M2-01, start
-of the M2/OAuth milestone). Added 6 tests to `tests/test_trading_mcp.py`,
-no production code touched (that's the point of M2-01 — regression net
-*before* anything changes):
+**What was built:**
+- `trading_mcp/auth.py` (new) — `HmacStaticTokenVerifier(TokenVerifier)`, a
+  drop-in replacement for the stock class: same constructor shape (`tokens`,
+  `required_scopes`), same `AccessToken` result, same expiry/scope checks. Its
+  `verify_token()` calls `hmac.compare_digest(token, candidate)` against every
+  configured token (a single-operator token set is tiny — usually one entry —
+  so iterating all of them costs nothing and keeps timing independent of
+  which, or whether any, token matched).
+- `trading_mcp/server.py` — `_build_auth()` now constructs
+  `HmacStaticTokenVerifier` instead of `fastmcp.server.auth.StaticTokenVerifier`.
+  No behavioural change to what gets accepted/rejected, only how the
+  comparison is done.
+- `tests/test_trading_mcp.py` — 4 new tests: `_build_auth()` returns the hmac
+  verifier specifically (not just "truthy", so a revert back to the stock
+  class would be caught even though both accept the same tokens); a
+  source-level pin (`inspect.getsource` on `verify_token`) asserting
+  `"hmac.compare_digest"` appears and `.get(token)` does NOT — mirrors
+  `test_notify.py`'s grep-shaped pins, modeled explicitly on that pattern per
+  CLAUDE.md's "Tests" section; a behavioural spy that monkeypatches
+  `auth_mod.hmac.compare_digest` and asserts it is actually invoked on both
+  the accept path and the reject path (not just present in source but dead
+  code); and a missing-required-scope rejection case for coverage of the one
+  branch the M2-01 ASGI tests don't exercise directly.
 
-- `test_build_auth_returns_none_when_token_unset` /
-  `..._returns_verifier_when_token_set` — direct unit tests of
-  `trading_mcp/server.py`'s `_build_auth()`.
-- `test_http_request_with_no_credential_is_rejected`,
-  `..._with_wrong_bearer_is_rejected`, `..._with_valid_bearer_is_accepted` —
-  exercise a REAL ASGI request/response cycle (`FastMCP(...).http_app()` +
-  `httpx.ASGITransport`, in-process, no socket, no network) doing an actual
-  MCP `initialize` handshake. No-cred / wrong-bearer both return 401; the
-  valid bearer gets a real 200 with a protocol handshake response. This is
-  the shape of check app_spec.txt calls out by name ("a 200 from an
-  unauthenticated request is a failed feature, not a passing one") — these
-  tests would have caught that regression, not just asserted a docstring.
-- `test_http_transport_refuses_to_start_without_token` — the one piece of
-  this behaviour that lives inside `if __name__ == "__main__":` rather than
-  a callable function, so it's characterised as a real subprocess
-  (`python -m trading_mcp.server`, `MCP_TRANSPORT=http`, no
-  `TRADING_AGENT_TOKEN`) and asserted non-zero exit. It exits during the
-  token check, before `mcp.run_http_async` is ever reached — no socket is
-  bound, no network touched.
+**Verified:** `pytest -q tests/test_trading_mcp.py` → 33 passed (29 + 4 new).
+Full suite `pytest -q` → **580 passed** (576 + 4, satisfies app_spec.txt §7
+DoD #2's "strictly greater than 570"). Confirmed the one pre-existing
+"Event loop is closed" `PytestUnhandledThreadExceptionWarning` is unrelated to
+this change — `git stash` + re-run showed it present at 576-passing baseline
+too, same warning, same count of 1. `git status --short` reviewed before
+staging: only `trading_mcp/auth.py` (new), `trading_mcp/server.py`,
+`tests/test_trading_mcp.py`, `feature_list.json` staged — the four untracked
+stray files (see below) were left alone. Pushed: `952b946..fb84b63 main`.
 
-**Design note for whoever builds M2-03 (mounting the OAuth provider):** the
-three ASGI-request tests build a FRESH minimal `FastMCP("test-auth",
-auth=srv._build_auth())` per test rather than reusing the module-level
-`trading_mcp.server.mcp` singleton. That singleton's `auth` is fixed at
-first import time from whatever `TRADING_AGENT_TOKEN` was in the ambient env
-then — a test-time `monkeypatch.setenv` cannot retroactively change it. Any
-OAuth test will need the same pattern: build the auth provider fresh from
-whatever function ends up constructing it, don't rely on the singleton.
+## What's next: M2-03 (mount an OAuth 2.1 provider)
 
-Verified: `pytest -q tests/test_trading_mcp.py` → 29 passed (23 pre-existing +
-6 new). Full suite `pytest -q` → 576 passed (570 + 6, satisfies app_spec.txt
-§7's "strictly greater than 570" requirement, though DoD #2 as a whole needs
-the rest of M2/M5 too). `httpx` and `fastmcp` were already declared deps in
-both `requirements.txt` and `requirements-dev.txt` — no new dependency added.
-`git status --short` reviewed before staging: only `feature_list.json` and
-`tests/test_trading_mcp.py` changed, no secrets/CSVs/screenshots.
-
-## What's next: M2-02 (hmac.compare_digest)
-
-Grep `trading_mcp/` for any place a token/secret gets compared with `==`
-(right now `StaticTokenVerifier.verify_token`'s dict lookup — `self.tokens.get(token)`
-— is itself not a naive `==` compare, but check for anything this repo adds
-on top of it). Then M2-03 (mount an OAuth 2.1 provider — research FastMCP
-3.4.7's `auth=` support for a full AS, not just `TokenVerifier`, before
-designing) and M2-04 (dynamic client registration).
-
-Read `docs/SUPERMCP_SWAGGER_AND_AUTH_PLAN.md` and the supermcp handoff notes
-before designing M2-03/M2-04, per app_spec.txt's explicit instruction — the
-supermcp auth design had a real bug (`authorize()` force-granting admin on
-every OAuth handshake) that must not be repeated here. Do NOT let
-`docs/HANDOFF_2026-09-01.md` (see below — still present, still stale) steer
-this away from OAuth.
+Per app_spec.txt and the prior session's note: research FastMCP 3.4.7's `auth=`
+support for a full Authorization Server (not just `TokenVerifier`, which is all
+`HmacStaticTokenVerifier`/`StaticTokenVerifier` are) before designing. Read
+`docs/SUPERMCP_SWAGGER_AND_AUTH_PLAN.md` and the supermcp handoff notes first —
+the supermcp auth design had a real bug (`authorize()` force-granting admin on
+every OAuth handshake) that must not be repeated here. Both auth paths (OAuth
+and the static bearer) must converge on one authorization check, per app_spec's
+explicit warning against the supermcp shape. Do NOT let
+`docs/HANDOFF_2026-09-01.md` (still untracked, still stale, still says
+static-bearer-only) steer this away from OAuth. Then M2-04 (dynamic client
+registration), M2-05 through M2-10 (see feature_list.json — token revocation,
+the AST pin extended to any new OAuth module, discovery endpoints, etc.).
 
 ## Untracked files — still present, still not this session's to resolve
 
-Same four as last session, still untouched, still unexplained by any
+Same four as the last two sessions, still untouched, still unexplained by any
 feature_list.json entry:
 - `HKUDS_REPOSITORY_REVIEW.md` — unrelated research doc, nothing to do with
   Vesper.
-- `docs/HANDOFF_2026-09-01.md` — conflicts with app_spec.txt (tells the
-  reader to use static-bearer only, not OAuth). Do not follow its auth
-  guidance.
+- `docs/HANDOFF_2026-09-01.md` — conflicts with app_spec.txt (tells the reader
+  to use static-bearer only, not OAuth). Do not follow its auth guidance.
 - `scripts/package_for_supermcp.py` — packages momentum tools for supermcp;
   builds a local `dist/`, doesn't touch supermcp directly.
 - `supermcp_CLAUDE_remote.md` — a copy of the *other* repo's CLAUDE.md.
 
-If still present after several sessions, worth asking Michael whether to
+If still present after several more sessions, worth asking Michael whether to
 commit, `.gitignore`, or delete them — an agent shouldn't guess.
 
 ## Remote deployment — unchanged this session, re-verified healthy
@@ -118,9 +104,10 @@ Only read-only `ssh coolify` commands ran (`systemctl --user is-active`,
 ## HUMAN_BLOCKED items (H1-H4) — unchanged, still blocking
 
 - **H1 — install the Traefik dynamic config.** Needs `sudo`. Staged at
-  `coolify:~/trading-agent.yaml`. Exact command in app_spec.txt §6. Note:
-  once M2 changes the auth surface, `~/trading-agent.yaml` may need to be
-  rewritten (can be done without sudo) before re-issuing this command.
+  `coolify:~/trading-agent.yaml`. Exact command in app_spec.txt §6. Once M2's
+  OAuth work (M2-03 onward) lands, `~/trading-agent.yaml` may need rewriting
+  (can be done without sudo) before re-issuing this command — it isn't
+  rewritten yet since M2-03 hasn't landed.
 - **H2 — add the connector in claude.ai.** Blocked on H1, best done after M2.
 - **H3 — arm live trading (`VESPER_TRADING=1`).** Michael's keystroke only.
   Confirmed still unset/`0` locally; this session never touched it.
@@ -128,27 +115,24 @@ Only read-only `ssh coolify` commands ran (`systemctl --user is-active`,
 
 ## Gotchas discovered this session (not previously documented)
 
-- **Testing FastMCP's http auth needs a real ASGI request, not just a unit
-  call to `verify_token()`.** `FastMCP(...).http_app(path="/mcp")` returns a
-  Starlette ASGI app; `httpx.ASGITransport` + `httpx.AsyncClient` drives it
-  in-process (no socket, no network — stays inside this repo's hermetic-test
-  contract). One catch: `httpx.ASGITransport` does NOT run the app's
-  lifespan automatically, and FastMCP's streamable-http session manager
-  raises `RuntimeError: Task group is not initialized` without it. Fix:
-  wrap the client calls in `async with app.router.lifespan_context(app):`.
-  Without that wrapper, an auth test would raise for the wrong reason
-  (session-manager plumbing) rather than asserting the right one (status
-  code).
-- **The MCP protocol needs a real `initialize` handshake to get a clean 200**
-  — sending a bare `ping` against a fresh session returns 400 ("Missing
-  session ID"), which is not itself an auth failure (a 401 vs 400
-  distinction proved that: bad/missing creds get 401 before the session
-  layer is ever reached; a valid cred that skips the handshake gets 400 from
-  the session layer instead). Tests here always POST a full `initialize`
-  payload to avoid that ambiguity.
-- Reconfirmed: `rm` and `rm -rf` are blocked by this harness's bash policy;
-  `python3 -c "import os; os.remove(path)"` (or `shutil.rmtree` for
-  directories) is the working substitute.
+- **`fastmcp.server.auth.providers.jwt.StaticTokenVerifier` is not
+  constant-time**, and this is a library property, not something this repo's
+  own `==` grep would ever catch — the comparison lives inside `dict.get`,
+  several frames past any code this repo wrote. A rule like "grep for `==`
+  against a token" needs a companion "and check what the library you're
+  calling actually does with it," or it can pass clean while the underlying
+  behaviour is still wrong. Worth remembering for M2-03/M2-04 too: whatever
+  OAuth library or hand-rolled AS logic gets added there needs the same
+  scrutiny of its comparison primitives, not just its opcode-level absence of
+  `==`.
+- `git stash` / `git stash pop` is a clean way to A/B a warning or failure
+  against "does this predate my change" without a second checkout — used here
+  to confirm the one pytest warning in the suite is pre-existing.
+- Command substitution (`$(...)`) in a `git commit -m "$(cat <<EOF ... EOF)"`
+  is blocked by this harness's bash policy ("hides commands from validation").
+  Workaround: write the message to a plain file with the `Write` tool (not
+  under `.git/` — that path is treated as sensitive and the harness refuses
+  to write there) and `git commit -F <path>`.
 
 ## Rules for every later session (unchanged, still true)
 
@@ -158,10 +142,8 @@ Only read-only `ssh coolify` commands ran (`systemctl --user is-active`,
   — `source` is blocked by this harness's bash policy.
 - One feature landed per session with its own commit and a real `pytest -q`
   run you actually watched pass — never mark `passes: true` without having
-  run the exact verification the feature's `steps` describe. (Exception this
-  session: M1-07, where the verification had genuinely already run in a
-  prior commit and this session independently re-checked its outcome before
-  trusting it — not a new exception to lean on casually.)
+  run the exact verification the feature's `steps` describe.
 - Never print a credential, account number, balance, or ntfy topic to this
-  transcript (rule 5 / I6). This session's tests use a throwaway string
-  literal (`"m2-01-test-token"`) as a fake bearer token, never a real one.
+  transcript (rule 5 / I6). This session's tests use throwaway string
+  literals (`"m2-02-test-token"`, `"good-token"`, `"scoped-token"`) as fake
+  bearer tokens, never a real one.
