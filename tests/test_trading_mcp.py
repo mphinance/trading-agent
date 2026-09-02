@@ -412,6 +412,92 @@ async def test_oauth_lookup_constant_time_correctness():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# M2-09: OAuth access/refresh tokens are revocable AND persisted server-side
+# (outside git, 0600) -- not just tracked in the in-memory dicts M2-03 built.
+# `tests/conftest.py`'s autouse `_isolated_vesper_state` fixture already
+# redirects `trading_mcp.oauth_provider._DATA_DIR`/`_TOKEN_STATE_PATH` to a
+# per-test tmp dir, so every test below (like every other test in this file
+# that touches the OAuth provider) writes there, never to the developer's
+# real data/ directory.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_oauth_token_state_path_is_gitignored():
+    """data/oauth_tokens_state.json holds live bearer credentials -- rule 5
+    forbids it ever landing in a commit, the same standing .env holds."""
+    from trading_mcp.oauth_provider import _TOKEN_STATE_PATH
+
+    gitignore_text = (REPO_ROOT / ".gitignore").read_text()
+    assert f"data/{_TOKEN_STATE_PATH.name}" in gitignore_text
+
+
+def test_oauth_token_state_file_written_0600():
+    """Issuing a token pair must persist the state file with owner-only
+    permissions, not whatever the process umask would otherwise leave."""
+    import stat
+
+    from trading_mcp.oauth_provider import _TOKEN_STATE_PATH
+
+    provider = _make_oauth_provider()
+    provider._issue_token_pair("some-client", ["read"])
+
+    assert _TOKEN_STATE_PATH.exists()
+    mode = stat.S_IMODE(_TOKEN_STATE_PATH.stat().st_mode)
+    assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+
+async def test_revoked_access_token_is_rejected():
+    """The M2-09 acceptance test, verbatim: issue a token, use it
+    successfully, revoke it, confirm it is then rejected."""
+    provider = _make_oauth_provider()
+    pair = provider._issue_token_pair("some-client", ["read"])
+
+    used = await provider.load_access_token(pair.access_token)
+    assert used is not None, "token must be usable before revocation"
+
+    await provider.revoke_token(used)
+
+    assert await provider.load_access_token(pair.access_token) is None, (
+        "token must be rejected after revocation"
+    )
+
+
+async def test_revoked_refresh_token_is_rejected():
+    """Revoking the refresh half must reject it too, and must not leave the
+    paired access token usable -- _revoke_pair's whole point."""
+    provider = _make_oauth_provider()
+    pair = provider._issue_token_pair("some-client", ["read"])
+
+    refresh_obj = await provider.load_refresh_token(
+        type("C", (), {"client_id": "some-client"})(), pair.refresh_token
+    )
+    assert refresh_obj is not None
+
+    await provider.revoke_token(refresh_obj)
+
+    assert await provider.load_access_token(pair.access_token) is None
+    assert await provider.load_refresh_token(
+        type("C", (), {"client_id": "some-client"})(), pair.refresh_token
+    ) is None
+
+
+async def test_revocation_survives_a_fresh_provider_instance():
+    """Persistence, not just in-memory bookkeeping: a brand-new provider
+    instance pointed at the same on-disk store (simulating a process
+    restart) must not resurrect a revoked token, and must still honour one
+    that was never revoked."""
+    provider = _make_oauth_provider()
+    kept = provider._issue_token_pair("some-client", ["read"])
+    revoked = provider._issue_token_pair("some-client", ["read"])
+
+    revoked_obj = await provider.load_access_token(revoked.access_token)
+    await provider.revoke_token(revoked_obj)
+
+    restarted = _make_oauth_provider()  # fresh instance, same _DATA_DIR
+    assert await restarted.load_access_token(kept.access_token) is not None
+    assert await restarted.load_access_token(revoked.access_token) is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # M2-04: the OAuth 2.1 authorization server is actually MOUNTED on the MCP
 # app, and its discovery endpoints return well-formed metadata -- not just
 # that `SingleOperatorOAuthProvider` (M2-03) has the right methods in

@@ -166,6 +166,17 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     monkeypatch.setattr("core.approval_registry._DATA_DIR", vesper_data_dir)
     monkeypatch.setattr("core.approval_registry._APPROVAL_STATE_PATH", vesper_data_dir / "approval_registry_state.json")
 
+    # trading_mcp/oauth_provider.py's persisted OAuth access/refresh token
+    # store (M2-09) -- same reasoning as every state file above: a hardcoded
+    # module-level _DATA_DIR that would otherwise read/write the developer's
+    # real data/oauth_tokens_state.json (live bearer credentials) and leak
+    # tokens issued by one test into another. trading_mcp is not vesper/ or
+    # core/, but this fixture already covers non-vesper state (core.metrics,
+    # this same core.approval_registry) for the identical reason -- its name
+    # is a holdover, its job is "every on-disk state file this repo writes".
+    monkeypatch.setattr("trading_mcp.oauth_provider._DATA_DIR", vesper_data_dir)
+    monkeypatch.setattr("trading_mcp.oauth_provider._TOKEN_STATE_PATH", vesper_data_dir / "oauth_tokens_state.json")
+
     # core/metrics.py's cross-process snapshot file (Health/observability
     # metrics module) -- same reasoning as the state files above: a
     # hardcoded module-level _DATA_DIR that would otherwise read/write the

@@ -33,12 +33,15 @@ as `operator_secret` rather than inventing a second secret). Concretely:
   the credential check into `authorize()` where a route that forgets to wrap
   `/authorize` (a new mount point, a refactor) could silently skip it.
 
-STORAGE IS IN-MEMORY, deliberately incomplete: clients, auth codes, access
-and refresh tokens all live in plain dicts and are lost on restart. M2-09
-("tokens are revocable and stored server-side outside git, 0600, and the
-storage path is registered in the test suite's isolated-state fixture") is
-the follow-up that persists this to disk; do not read this module's
-presence as that feature being done.
+STORAGE: clients and auth codes live in plain in-memory dicts and are lost
+on restart -- deliberately, see __init__'s comment for why that's fine.
+Access and refresh tokens are different: M2-09 persists those to
+`data/oauth_tokens_state.json` (same atomic-write, 0600, gitignored-outside-
+git pattern as core/halt.py's state file, registered in tests/conftest.py's
+`_isolated_vesper_state` autouse fixture), because a token issued to a real
+client has to survive this process restarting, and a revoked token has to
+stay revoked after it does. See `_load_token_state()` / `_save_token_state()`
+/ `_persist_tokens()` below.
 
 No tool call, no broker reference: this module is pure OAuth bookkeeping. The
 rule-3 AST pin in `tests/test_trading_mcp.py` walks every file under
@@ -49,8 +52,12 @@ from __future__ import annotations
 
 import hmac
 import html
+import json
+import logging
+import os
 import secrets
 import time
+from pathlib import Path
 from typing import Any
 
 from mcp.server.auth.handlers.authorize import AuthorizationHandler
@@ -73,6 +80,73 @@ from fastmcp.server.auth.auth import (
     OAuthProvider,
     RevocationOptions,
 )
+
+logger = logging.getLogger(__name__)
+
+# M2-09: persisted access/refresh token store. Same pattern as every other
+# state file in this repo (core/halt.py, core/approval_registry.py, ...):
+# a hardcoded module-level path under the repo-root data/ dir, loaded fresh
+# and written back atomically (temp file + os.replace) rather than edited
+# in place. tests/conftest.py's autouse `_isolated_vesper_state` fixture
+# monkeypatches both constants below to a per-test tmp_path, the same way
+# it already does for core.halt._DATA_DIR etc. -- do not read this module's
+# data as "vesper state" just because that fixture's name says vesper; the
+# fixture already covers non-vesper modules (core.metrics, core.approval_
+# registry) for the identical cross-test-contamination reason.
+#
+# Deliberately NOT reusing core/halt.py's _DATA_DIR constant directly: this
+# module must stay import-time-coupled to nothing but the stdlib (M2-10),
+# and defining its own Path(__file__)-relative constant, rather than
+# `from core.halt import _DATA_DIR`, keeps that true without relying on
+# core/ happening to also be dependency-free today.
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_TOKEN_STATE_PATH = _DATA_DIR / "oauth_tokens_state.json"
+
+
+def _load_token_state() -> dict[str, Any]:
+    """Read the persisted access/refresh token store, or an empty one if it
+    doesn't exist yet or fails to parse (corrupt/partial write) -- same
+    fail-open-to-empty shape as core/halt.py's `_load_state`. An unreadable
+    token file must never crash server startup; it just means every
+    previously issued token is treated as gone, which is the safe direction
+    to fail (a client that lost its token re-authorizes; a client that kept
+    a token nobody meant to revoke is the actual danger, and this can't
+    cause that)."""
+    empty: dict[str, Any] = {
+        "access_tokens": {},
+        "refresh_tokens": {},
+        "access_to_refresh": {},
+        "refresh_to_access": {},
+    }
+    if not _TOKEN_STATE_PATH.exists():
+        return empty
+    try:
+        with open(_TOKEN_STATE_PATH) as f:
+            state = json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to read OAuth token state file: {e}")
+        return empty
+    for key in empty:
+        state.setdefault(key, {})
+    return state
+
+
+def _save_token_state(state: dict[str, Any]) -> None:
+    """Atomic write (temp file + os.replace, same as core/halt.py's
+    `_save_state`) with owner-only permissions -- these are live bearer
+    credentials, the same standing this repo holds .env to (CLAUDE.md rule
+    2). `os.chmod` runs on the temp file BEFORE `os.replace`: on POSIX,
+    rename preserves the source inode's mode, so the final path inherits
+    0600 too; chmod-ing only after the replace would leave a window where
+    the real path existed briefly with the umask's default (group/other
+    readable) permissions."""
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = _TOKEN_STATE_PATH.with_suffix(".tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(state, f, indent=2)
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, _TOKEN_STATE_PATH)
+
 
 # Default expiries. Access tokens are short-lived; refresh tokens are long
 # because this is a phone-in-your-pocket connector Michael reconnects to
@@ -159,10 +233,27 @@ class SingleOperatorOAuthProvider(OAuthProvider):
 
         self.clients: dict[str, OAuthClientInformationFull] = {}
         self.auth_codes: dict[str, AuthorizationCode] = {}
-        self.access_tokens: dict[str, AccessToken] = {}
-        self.refresh_tokens: dict[str, RefreshToken] = {}
-        self._access_to_refresh: dict[str, str] = {}
-        self._refresh_to_access: dict[str, str] = {}
+
+        # M2-09: access/refresh tokens are loaded from the on-disk store
+        # built above, not started empty -- a restart must not silently
+        # forget every token a client is still holding, and a token
+        # revoked before the restart must not be resurrected by it.
+        # Clients and auth codes stay in-memory only, deliberately: a
+        # client that fails to re-register after a restart just re-runs
+        # DCR (cheap and deliberately open, see the module docstring), and
+        # an authorization code is single-use and expires in 5 minutes --
+        # not worth the persistence surface.
+        _persisted = _load_token_state()
+        self.access_tokens: dict[str, AccessToken] = {
+            token: AccessToken(**data)
+            for token, data in _persisted["access_tokens"].items()
+        }
+        self.refresh_tokens: dict[str, RefreshToken] = {
+            token: RefreshToken(**data)
+            for token, data in _persisted["refresh_tokens"].items()
+        }
+        self._access_to_refresh: dict[str, str] = dict(_persisted["access_to_refresh"])
+        self._refresh_to_access: dict[str, str] = dict(_persisted["refresh_to_access"])
 
     # ── Dynamic Client Registration (RFC 7591) — stays open, see module doc ──
 
@@ -357,6 +448,25 @@ class SingleOperatorOAuthProvider(OAuthProvider):
         self._revoke_pair(refresh_token_str=refresh_token.token)  # rotate
         return self._issue_token_pair(client.client_id, scopes)
 
+    def _persist_tokens(self) -> None:
+        """Write the current access/refresh token dicts to disk (M2-09).
+        Called after every mutation -- issue, explicit revoke, and the
+        expiry-driven prunes in load_access_token/load_refresh_token, all
+        of which funnel through _issue_token_pair or _revoke_pair below --
+        so the on-disk file is never stale relative to what this instance
+        would answer a token check with, and a revocation survives this
+        process exiting."""
+        _save_token_state({
+            "access_tokens": {
+                token: obj.model_dump() for token, obj in self.access_tokens.items()
+            },
+            "refresh_tokens": {
+                token: obj.model_dump() for token, obj in self.refresh_tokens.items()
+            },
+            "access_to_refresh": dict(self._access_to_refresh),
+            "refresh_to_access": dict(self._refresh_to_access),
+        })
+
     def _issue_token_pair(self, client_id: str, scopes: list[str]) -> OAuthToken:
         access_value = f"toa_at_{secrets.token_urlsafe(32)}"
         refresh_value = f"toa_rt_{secrets.token_urlsafe(32)}"
@@ -373,6 +483,7 @@ class SingleOperatorOAuthProvider(OAuthProvider):
         )
         self._access_to_refresh[access_value] = refresh_value
         self._refresh_to_access[refresh_value] = access_value
+        self._persist_tokens()
 
         return OAuthToken(
             access_token=access_value,
@@ -410,6 +521,16 @@ class SingleOperatorOAuthProvider(OAuthProvider):
             if paired_access is not None:
                 self.access_tokens.pop(paired_access, None)
                 self._access_to_refresh.pop(paired_access, None)
+
+        if access_token_str is not None or refresh_token_str is not None:
+            # M2-09: persist the revocation (or expiry-driven prune) so it
+            # survives this process exiting -- a bare in-memory pop is not
+            # what "revocable" means once tokens are meant to outlive a
+            # restart. Runs even when neither pop above actually found
+            # anything (an unknown token, a double revoke): harmless and
+            # keeps this branch simple rather than tracking whether the
+            # pops changed anything.
+            self._persist_tokens()
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         if isinstance(token, AccessToken):

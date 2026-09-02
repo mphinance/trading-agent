@@ -38,6 +38,10 @@ data/halt_state.json
 data/circuit_breaker_state.json
 data/approval_registry_state.json
 data/checkpoints.sqlite*
+# trading_mcp/oauth_provider.py's persisted OAuth access/refresh token store
+# (M2-09) -- live bearer credentials, same standing as the rest of this
+# list; written 0600 by _save_token_state().
+data/oauth_tokens_state.json
 autonomous/harness/
 .claude_settings.json
 Cash Secured Puts-*.csv
