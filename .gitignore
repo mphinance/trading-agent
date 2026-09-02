@@ -38,3 +38,10 @@ data/halt_state.json
 data/circuit_breaker_state.json
 data/approval_registry_state.json
 data/checkpoints.sqlite*
+autonomous/harness/
+.claude_settings.json
+Cash Secured Puts-*.csv
+Screenshot *.png
+# harness copy of autonomous/prompts/app_spec.txt — keep one source of truth
+/app_spec.txt
+autonomous/logs/
