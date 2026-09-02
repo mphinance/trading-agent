@@ -97,6 +97,145 @@
     "passes": true
   },
   {
+    "id": "M0-00",
+    "milestone": "M0",
+    "category": "docs",
+    "description": "app_spec.txt's I3 and CLAUDE.md's rule 3 are amended, before M0-09 or any later feature relies on the widened exposure boundary, to state that halt() is MCP-reachable while resume(), ApprovalRegistry.submit_decision(), guard.preview and guard.place remain forbidden from every module under trading_mcp/ and mcp_server/ (including bound-method references); app_spec.txt's I10 is amended in the same change with a systemctl carve-out for the shared coolify box",
+    "steps": [
+      "Edit autonomous/prompts/app_spec.txt section 3 to add a new amendment paragraph, mirroring the A1/A2 format: 'A3 -- I3 is amended: halt() is MCP-reachable from trading_mcp/; guard.preview, guard.place, resume(), and ApprovalRegistry.submit_decision() remain forbidden from every module under trading_mcp/ and mcp_server/, including by passing a bound method. tests/test_trading_mcp.py's AST pin is updated, not narrowed, to match.'",
+      "Rewrite I3's text in app_spec.txt section 2 to state the amended rule verbatim (halt() removed from the forbidden list, the other three retained), with a pointer '(see A3)'",
+      "Edit app_spec.txt's I10 to add a carve-out clause: 'except systemctl --user start/stop/enable/restart against unit names matching trading-agent* or vesper-*, which this run owns'",
+      "Edit CLAUDE.md rule 3's trading_mcp/ description, replacing the 'read-only owner-only viewer' framing and the guard.preview()/guard.place()-only AST-pin sentence with the exposure-bounded description: halt reachable, resume/submit_decision/guard.preview/guard.place forbidden, matching A3",
+      "grep -n 'halt()' autonomous/prompts/app_spec.txt CLAUDE.md and confirm neither file's invariant text still lists halt() as categorically forbidden from trading_mcp/mcp_server",
+      "Run pytest -q and confirm the suite is still green after this doc-only change (no code touched yet)"
+    ],
+    "passes": true
+  },
+  {
+    "id": "M0-01",
+    "milestone": "M0",
+    "category": "repo",
+    "description": "An AST-based characterization test pins every current call-time `vesper.*` reference inside trading_mcp/ before any file moves, so every later commit's diff to this test is the changelog of the split",
+    "steps": [
+      "Write tests/test_import_boundaries.py that parses every .py under trading_mcp/ and mcp_server/ with ast and collects every Import/ImportFrom node targeting the vesper package, wherever it appears in the file (these are function-local imports, not top-of-file -- a plain line-anchored grep finds none of them)",
+      "Assert the current baseline matches what a fresh read of trading_mcp/vesper_tools.py shows today: vesper.halt, vesper.circuit_breaker, vesper.paper_ledger, vesper.alerts_runner, vesper.bot.inbound, vesper.audit_chain (both `from vesper import audit_chain` and `from vesper.audit_chain import verify_chain`), vesper.monitor -- and nowhere else in trading_mcp/ or mcp_server/",
+      "Assert vesper/**/*.py contains zero references to trading_mcp or mcp_server",
+      "Run pytest -q tests/test_import_boundaries.py and confirm it passes against today's tree unmodified",
+      "Commit this test alone, before any code moves"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M0-02",
+    "milestone": "M0",
+    "category": "repo",
+    "description": "wb.py, md.py, td.py, edgar.py and quotes.py are relocated into a new core/ package with zero behavior change and no upward import",
+    "steps": [
+      "Create core/ with an __init__.py; git mv wb.py md.py td.py edgar.py quotes.py into it",
+      "Update every importer across vesper/, mcp_server/, trading_mcp/ and tests/ to import from core.wb / core.md / core.td / core.edgar / core.quotes",
+      "Run: grep -rln 'langgraph\\|fastmcp' core/*.py and confirm no match",
+      "Run the full local suite and confirm the exact same pass count as before the move",
+      "Land this as one self-contained, independently revertible commit"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M0-03",
+    "milestone": "M0",
+    "category": "safety",
+    "description": "The four pure state-I/O modules (halt.py, circuit_breaker.py, paper_ledger.py, audit_chain.py) move into core/, confirmed stdlib-only so importing them never pulls in LangGraph",
+    "steps": [
+      "Confirm by grep that each of the four modules imports only stdlib (json/os/pathlib/fcntl/datetime/logging/typing/uuid) at module level -- already verified true",
+      "git mv them into core/; update vesper/'s own callers (execution_guard.py, executor.py, monitor.py, circuit-breaker consumers) to import from core",
+      "Update trading_mcp/vesper_tools.py's four corresponding function-local imports to `from core.X import Y`",
+      "Register the moved state-file paths in tests/conftest.py's _isolated_vesper_state fixture under their new module path",
+      "Run the full suite; confirm the same pass count and that file paths/formats are byte-for-byte unchanged"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M0-04",
+    "milestone": "M0",
+    "category": "repo",
+    "description": "ApprovalRegistry (currently defined inline in vesper/bot/inbound.py) is extracted into core/approval_registry.py, so reading pending approvals no longer executes vesper/bot/__init__.py's eager TelegramAdapter/DiscordAdapter/WebhookAdapter/ChannelManager imports",
+    "steps": [
+      "Move the ApprovalRegistry class and its persistence logic (and the module-level `approval_registry = ApprovalRegistry()` singleton) into core/approval_registry.py",
+      "Update vesper/bot/inbound.py to import the class from core and keep only its Telegram-webhook-specific glue",
+      "Update every other caller (vesper/nodes/human_gate.py, executor.py, trading_mcp/vesper_tools.py's two sites) to import from core.approval_registry",
+      "Add a test that importing core.approval_registry does NOT put vesper.bot.telegram_adapter, discord_adapter or webhook_adapter into sys.modules",
+      "Run the full suite; confirm submit_decision/list-pending behavior is unchanged"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M0-05",
+    "milestone": "M0",
+    "category": "safety",
+    "description": "trading_mcp's position-monitor-preview tool reads through a guard-free core function instead of importing vesper.monitor.PositionMonitor, which transitively constructs the live execution_guard.guard singleton at import time",
+    "steps": [
+      "Confirm which of PositionMonitor's methods the preview tool actually needs (poll_webull_positions, evaluate_position) and that neither calls guard/GuardError at runtime, only vesper.monitor's own module-level import does",
+      "Add core/position_preview.py exposing just those read methods against core.wb, with zero import of vesper.execution_guard or vesper.bot",
+      "Point trading_mcp/vesper_tools.py's position-monitor-preview tool at the new core function; leave vesper/monitor.py's own PositionMonitor untouched for the live loop",
+      "Add a test that importing trading_mcp.vesper_tools and calling every registered tool leaves 'vesper.execution_guard' out of sys.modules"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M0-06",
+    "milestone": "M0",
+    "category": "repo",
+    "description": "trading_mcp/vesper_tools.py's remaining alerts_runner import is resolved or explicitly justified, and zero import path in trading_mcp can reach execution_guard or the bot adapter stack",
+    "steps": [
+      "Confirm vesper/alerts_runner.py's module-level imports stay light (logging/typing) and check what _build_levels_of() pulls in at call time -- it should resolve to core.td after M0-02",
+      "Either move the read-only levels-summary helper into core/ alongside core.td, or leave the existing import and document why it is provably side-effect-free",
+      "Update tests/test_import_boundaries.py from M0-01 to the NEW, smaller allowlist and explicitly forbid regressing to vesper.monitor, vesper.bot.inbound or vesper.execution_guard",
+      "Run the full suite plus tests/test_trading_mcp.py's existing pins and confirm both green"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M0-07",
+    "milestone": "M0",
+    "category": "safety",
+    "description": "A discovery-based AST test enforces the layering for all four packages: core has zero upward dependency, vesper never imports trading_mcp/mcp_server, and mcp_server never imports vesper or trading_mcp",
+    "steps": [
+      "Add tests/test_import_direction.py asserting no file under core/ imports vesper, mcp_server, or trading_mcp",
+      "Assert no file under vesper/ imports mcp_server or trading_mcp",
+      "Assert no file under mcp_server/ imports vesper.* or trading_mcp.*",
+      "Assert trading_mcp/'s vesper.* imports match exactly the allowlist maintained in test_import_boundaries.py from M0-06",
+      "Run pytest -q tests/test_import_direction.py and confirm all assertions pass"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M0-08",
+    "milestone": "M0",
+    "category": "safety",
+    "description": "trading_mcp.server still imports, constructs, and serves every registered tool when vesper's LangGraph agent code cannot import at all -- the mechanical proof that the MCP server stays up when the agent is down",
+    "steps": [
+      "Add a test that monkeypatches sys.modules so importing vesper.graph (or 'langgraph' itself) raises ImportError, before importing trading_mcp.server",
+      "Assert trading_mcp.server still imports cleanly and FastMCP('trading-agent') still constructs",
+      "Register the full tool set under that condition and call get_halt_status, list_pending_approvals, get_audit_trail, and the position-monitor-preview tool",
+      "Assert each returns its normal shape (available:true where backed only by core, available:false with a reason where a genuine vesper-only surface remains) rather than an unhandled exception",
+      "Run pytest -q -k process_independence and confirm pass"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M0-09",
+    "milestone": "M0",
+    "category": "safety",
+    "description": "tests/test_trading_mcp.py's forbidden-import pin is rewritten from strictly-read-only to the exposure boundary set by M0-00's A3 amendment: halt becomes a permitted import; resume and submit_decision remain permanently forbidden, matched with the same aliased/dotted/bound-method-robust shape guard.place/preview already use. This proves the pin MECHANISM only -- the positive proof that halt is actually reachable from a real tool is deferred to M8-08, where the halt tool is built",
+    "steps": [
+      "Edit test_no_vesper_tool_can_reach_halt_or_resume's forbidden set: remove 'halt' from the forbidden id set, keep {'resume', 'submit_decision'}",
+      "Extend the resume/submit_decision check to the same four-shape matcher test_guard_pin_catches_indirect_call_shapes already proves for guard.place (direct import, aliased import, bound-method reference via asyncio.to_thread, dotted-module access)",
+      "Add a mirrored regression test: write resume( into a throwaway module under trading_mcp/, confirm the pin fails (catches it), then delete the throwaway module",
+      "Confirm this test file does NOT assert that any registered tool actually calls or can reach halt -- that positive reachability proof belongs to M8-08, not here",
+      "Run pytest -q tests/test_trading_mcp.py and confirm both the widened (halt permitted) and still-forbidden (resume/submit_decision) halves pass"
+    ],
+    "passes": false
+  },
+  {
     "id": "M2-01",
     "milestone": "M2",
     "category": "auth",
@@ -128,13 +267,13 @@
     "id": "M2-03",
     "milestone": "M2",
     "category": "auth",
-    "description": "An OAuth 2.1 authorization server is mounted on the MCP app",
+    "description": "The uncommitted trading_mcp/oauth_provider.py and its trading_mcp/server.py diff are reviewed and their disposition -- finish, keep-as-is, or discard -- is decided and acted on",
     "steps": [
-      "Research FastMCP's auth= parameter and its OAuth provider support for the installed version",
-      "Implement the OAuth 2.1 provider in a new module under trading_mcp/",
-      "Mount the standard discovery endpoints so a client can find the authorization and token endpoints",
-      "Do NOT add a user model \u2014 this is a single-operator system; authorization means 'carries a credential Michael provisioned'",
-      "Add tests covering the discovery endpoints returning well-formed metadata"
+      "Read the full oauth_provider.py file and the modification it made to trading_mcp/server.py",
+      "Check it against M2's hard requirements: dynamic client registration, exactly one authorization-decision function shared by both auth paths, hmac.compare_digest for every token comparison, no user model added",
+      "If it meets the bar: keep and finish it under the remaining features below; if not: discard it -- and if discarding, also revert server.py's oauth import (`from trading_mcp.oauth_provider import SingleOperatorOAuthProvider`), `_build_oauth_provider`, and the `MultiAuth` wiring in `_build_auth` to the bearer-only shape BEFORE running the suite",
+      "Run pytest -q and confirm the tree is green either way",
+      "Record the decision and reasoning in claude-progress.txt, matching the pattern the M1-02 multi-agent-work decision used"
     ],
     "passes": false
   },
@@ -142,7 +281,21 @@
     "id": "M2-04",
     "milestone": "M2",
     "category": "auth",
-    "description": "Dynamic client registration works end to end",
+    "description": "An OAuth 2.1 authorization server is mounted on the MCP app, with the standard discovery endpoints returning well-formed metadata",
+    "steps": [
+      "Confirm FastMCP 3.4.7's auth= parameter and OAuth provider support against the installed version",
+      "Finish or implement the provider per M2-01's disposition, wired through _build_auth() in trading_mcp/server.py",
+      "Mount the discovery endpoints so a client can find the authorization and token endpoints",
+      "Confirm no user model was added -- authorization means 'carries a credential Michael provisioned', nothing more",
+      "Add tests covering the discovery endpoints returning well-formed metadata"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-05",
+    "milestone": "M2",
+    "category": "auth",
+    "description": "Dynamic client registration works end to end: a client registers, completes the authorization code exchange, and the resulting token is accepted by the MCP endpoint",
     "steps": [
       "Implement the dynamic client registration endpoint",
       "Write a test that registers a client, receives credentials, and completes the authorization code exchange",
@@ -152,41 +305,29 @@
     "passes": false
   },
   {
-    "id": "M2-05",
-    "milestone": "M2",
-    "category": "auth",
-    "description": "Both auth paths converge on a single authorization decision",
-    "steps": [
-      "Confirm there is exactly ONE function that decides whether a request is authorized",
-      "Confirm the static bearer verifier and the OAuth verifier both route through it",
-      "Read docs/SUPERMCP_SWAGGER_AND_AUTH_PLAN.md and the handoff notes on supermcp's authorize() bug, where an OAuth handshake force-granted admin",
-      "Add a test asserting that an OAuth handshake cannot escalate beyond the scopes it was granted",
-      "Write the reasoning into a comment at the decision function, since this is the exact shape that went wrong once already"
-    ],
-    "passes": false
-  },
-  {
     "id": "M2-06",
     "milestone": "M2",
     "category": "auth",
-    "description": "The static bearer still works as a fallback after OAuth lands",
+    "description": "Both the static-bearer and OAuth paths converge on exactly one authorization-decision function, and an OAuth handshake cannot escalate beyond the scopes it was granted",
     "steps": [
-      "Run the M2-01 characterisation tests again unchanged",
-      "Confirm all still pass",
-      "Confirm the server still refuses to start on http without TRADING_AGENT_TOKEN"
+      "Confirm there is exactly ONE function that decides whether a request is authorized, called by both the bearer verifier and the OAuth verifier",
+      "Read docs/SUPERMCP_SWAGGER_AND_AUTH_PLAN.md and the handoff notes on supermcp's authorize() bug, where an OAuth handshake force-granted admin on every request",
+      "Add a test asserting an OAuth handshake cannot escalate beyond its granted scopes",
+      "Write the reasoning into a comment at the decision function, since this is the exact shape that went wrong once already",
+      "Run pytest -q and confirm pass"
     ],
     "passes": false
   },
   {
     "id": "M2-07",
     "milestone": "M2",
-    "category": "auth",
-    "description": "Tokens are revocable and stored outside git with 0600 permissions",
+    "category": "safety",
+    "description": "The permanently forbidden actions (guard.preview/place, submit_decision, resume) have no corresponding MCP tool registered at all, under any OAuth scope -- testable today against the existing tool set, with no new tool code required",
     "steps": [
-      "Implement token storage under the existing data/ state directory pattern (atomic write, same as halt.py)",
-      "Confirm the path is gitignored",
-      "Implement revocation and add a test: issue a token, use it successfully, revoke it, confirm it is then rejected",
-      "Register the new state file in tests/conftest.py's _isolated_vesper_state autouse fixture"
+      "Confirm the permanently forbidden actions (guard.preview/place, submit_decision, resume) have no corresponding MCP tool registered at all -- not merely a scope-gated one",
+      "Add a test: mint a token carrying every scope the server defines, attempt to call each forbidden action by name through the MCP dispatcher, and confirm a not-found response rather than a permission-denied one",
+      "Confirm this test requires no new tool implementation -- it only asserts absence against today's already-registered tool set (the scope-tiering enforcement half of this check is M8-14, which needs M8's tools to exist)",
+      "Run pytest -q -k oauth_scope_absence and confirm pass"
     ],
     "passes": false
   },
@@ -194,12 +335,11 @@
     "id": "M2-08",
     "milestone": "M2",
     "category": "auth",
-    "description": "The rule-3 AST pin covers every new module added in M2",
+    "description": "The static bearer fallback keeps working unchanged after OAuth lands, and the http transport still refuses to start without TRADING_AGENT_TOKEN",
     "steps": [
-      "Read tests/test_trading_mcp.py and confirm how it discovers modules to scan",
-      "Confirm the new OAuth module(s) are inside its scan set",
-      "Confirm the pin still matches attribute access, aliased imports and dotted access \u2014 do NOT narrow it to ast.Call",
-      "Run: python3 -m pytest -q tests/test_trading_mcp.py"
+      "Re-run the M2-01-era characterization tests (already passing: no-credential rejected, valid bearer accepted, http-without-token refuses to start) unchanged",
+      "Confirm all still pass with the OAuth provider mounted alongside",
+      "Add a test that a request carrying the static bearer is accepted even while OAuth is configured"
     ],
     "passes": false
   },
@@ -207,27 +347,439 @@
     "id": "M2-09",
     "milestone": "M2",
     "category": "auth",
-    "description": "An unauthenticated request to /mcp returns 4xx on the live box",
+    "description": "OAuth tokens are revocable and stored server-side outside git, 0600, and the storage path is registered in the test suite's isolated-state fixture",
     "steps": [
-      "Deploy the M2 changes to coolify (git pull in ~/trading-agent, install any new deps into its venv)",
-      "Restart: ssh coolify 'systemctl --user restart trading-agent.service'",
-      "Confirm active: ssh coolify 'systemctl --user is-active trading-agent.service'",
-      "Confirm the bind is still the docker bridge and never 0.0.0.0: ssh coolify 'ss -ltnp | grep 8500'",
-      "From the box, request the endpoint with no credential and confirm a 4xx",
-      "A 200 here is a FAILED feature, not a passing one"
+      "Implement token storage under the existing data/ state-directory pattern (atomic write, same as halt.py)",
+      "Confirm the path is gitignored and created with 0600 permissions",
+      "Implement revocation and add a test: issue a token, use it successfully, revoke it, confirm it is then rejected",
+      "Register the new state file in tests/conftest.py's _isolated_vesper_state autouse fixture"
     ],
     "passes": false
   },
   {
     "id": "M2-10",
     "milestone": "M2",
-    "category": "auth",
-    "description": "The Traefik dynamic config is rewritten to match whatever M2 changed",
+    "category": "safety",
+    "description": "oauth_provider.py and any other new OAuth module has zero import-time coupling to vesper's runtime and is covered by the exposure-boundary AST pin",
     "steps": [
-      "Read the staged config at coolify:~/trading-agent.yaml",
-      "If OAuth added routes outside /mcp that must be reachable, update the router rules to cover them",
-      "Write the updated file to coolify:~/trading-agent.yaml (this needs no sudo)",
-      "Record in claude-progress.txt that H1 must be re-run by a human for the change to take effect"
+      "Run: grep -n 'from vesper\\|import vesper' trading_mcp/oauth_provider.py and confirm zero matches",
+      "Confirm trading_mcp/oauth_provider.py is inside tests/test_trading_mcp.py's scanned module set",
+      "Confirm token storage lives under core/ or trading_mcp's own state dir, never inside vesper/'s state directory",
+      "Run pytest -q tests/test_trading_mcp.py and confirm it passes with oauth_provider.py present"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M2-11",
+    "milestone": "M2",
+    "category": "deploy",
+    "description": "An unauthenticated request to /mcp returns 4xx on the live coolify box, and the Traefik dynamic config matches whatever routes OAuth added",
+    "steps": [
+      "Deploy the M2 changes to coolify (git pull in ~/trading-agent, install any new deps into its venv)",
+      "Restart trading-agent.service and confirm active via systemctl --user is-active",
+      "Confirm the bind is still the docker bridge, never 0.0.0.0, via ss -ltnp",
+      "From the box, request the endpoint with no credential and confirm 4xx -- a 200 here is a failed feature",
+      "If OAuth added routes outside /mcp that must be reachable, rewrite coolify:~/trading-agent.yaml's router rules (no sudo needed to write it) and note in claude-progress.txt that H1's sudo copy step must be re-run for it to take effect"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-01",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "watch_setup(proposal_id) returns one small, speakable payload: thesis, entry/stop/target, current price, distance-to-trigger in both % and $, a worded 5-minute structure summary, VWAP relation, and nearby compacted dealer-gamma levels",
+    "steps": [
+      "Add the tool in a new trading_mcp module, sourcing price/bars from core.md (post-M0), gamma from core.td's levels(), and the proposal from core.approval_registry's pending-approvals read",
+      "Call it with a fixture long setup (price below entry) and assert the response has exactly the documented top-level keys and no raw OHLCV array",
+      "Call it with a fixture short setup and confirm the distance-to-trigger sign convention is correct for both directions",
+      "Assert the serialized response stays under 2KB",
+      "Call it with core.md raising and confirm partial degradation: price/structure/VWAP report available:false while entry/stop/target/thesis still return",
+      "Call it with an unknown proposal_id and confirm it degrades to available:false rather than raising"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-02",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "The 5-minute structure summary is a pure, independently-tested function that renders bar structure in spoken words -- consecutive higher/lower lows, range direction, volume vs the 20-bar average -- never a raw bar dump and never a wrapped chart image",
+    "steps": [
+      "Write summarize_bars_for_voice(bars) producing a short phrase set from real bar analysis, e.g. 'third consecutive higher low, volume half the 20-bar average'",
+      "Feed it a synthetic series with three consecutive higher lows and half-average volume; assert the phrase names both facts with correct numbers",
+      "Feed it a synthetic series with no higher-low pattern; assert it does not fabricate one",
+      "Confirm the function takes no chart/PNG dependency and watch_setup's response never includes the raw bar list, only the derived phrase and the small numeric facts it's built from",
+      "Run pytest -q -k bar_summary and confirm pass"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-03",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "Gamma levels in watch_setup always come from core.td's compacted levels() shape (never get_gex_ticker's raw ~40KB payload), flip_split is surfaced rather than silently resolved when the flip sources straddle spot, and no summary sentence phrases a level as a price target",
+    "steps": [
+      "Confirm the module imports core.td.levels() and never the raw ticker payload",
+      "Construct a fixture levels() response where the two flip sources straddle spot and assert flip_split=true reaches the tool output unchanged",
+      "Assert the gamma section stays under ~1.5KB serialized",
+      "Add a check that no summary sentence uses target-implying language ('will move to') -- gamma marks where hedging is concentrated, which is why price often reacts there, not a forecast"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-04",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "A repeated watch_setup call within a short window, with nothing materially changed, returns a compact unchanged response instead of restating the full thesis and structure summary, while the headline distance-to-trigger number is always present",
+    "steps": [
+      "Add a per-proposal_id last-snapshot cache (in-process, TTL-bounded) keyed on price, structure phrase, and gamma section",
+      "Call watch_setup twice back-to-back against an unmoved fixture feed; assert the second call sets unchanged:true and omits the thesis and structure text",
+      "Confirm distance_to_trigger is still present on the unchanged response",
+      "Call a third time after moving price past a defined change threshold; assert the full payload returns again with unchanged:false",
+      "Add a test that a structural change (a new higher low) forces a full response even when price barely moved"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-05",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "find_pending_setup(query) fuzzy-resolves a spoken/mis-transcribed symbol against currently pending proposals and echoes back exactly what it matched, or returns an explicit ambiguity or no-match result rather than guessing",
+    "steps": [
+      "Add a tool that lists pending proposals (reusing core.approval_registry's read) and fuzzy-matches query against their symbols",
+      "Call it with 'in video' against a fixture pending NVDA proposal; assert the response echoes resolved_symbol:'NVDA' and the proposal_id",
+      "Call it with a query matching two pending proposals about equally well; assert it returns an ambiguous result listing both rather than picking one",
+      "Call it with a query matching nothing; assert available:false / no_match, never a crash or a wrong guess",
+      "Add a test that the resolved match is echoed even on a clean, unambiguous match, so a wrong resolution would be audible before it matters"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-06",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "snooze_proposal and tag_proposal exist as safe-write MCP tools that annotate a pending proposal without touching its price, quantity, or approval state, and cannot increase exposure",
+    "steps": [
+      "Add snooze_proposal(proposal_id, minutes) setting a suppress-until timestamp on the pending proposal without altering price/quantity/approval state",
+      "Add tag_proposal(proposal_id, note) appending a short text note visible in the approval queue and audit trail, without touching ApprovalRegistry.submit_decision",
+      "Confirm neither tool's module references guard.preview/guard.place/submit_decision (covered by M0-09's pin)",
+      "Add a test that a snoozed proposal is still fully approvable by button press at any time -- snoozing only affects whether voice re-surfaces it unprompted",
+      "Add a test that tag_proposal's note appears in a later get_audit_trail read"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-07",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "arm_alert and disarm_alert are exposed as MCP write tools over the existing alerts.py store unchanged, usable mid-call to leave a level watched after the voice session ends",
+    "steps": [
+      "Wrap alerts.py's store into two MCP tools taking symbol, level-or-reference (flip/pin/wall_above/wall_below), and direction",
+      "Add a test arming an alert via the tool and confirming it appears in list_alerts",
+      "Add a test disarming it and confirming it no longer evaluates",
+      "Confirm the underlying evaluate()/resolve_level() crossing semantics (rule 4c: never `price <= level`, both current and previous compared against the current level) are reused unchanged, not reimplemented"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-08",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "halt is reachable and works from MCP, mechanically proven at runtime (not only by the AST pin) as the positive counterpart to M0-09's mechanism-only test; resume is not reachable from any MCP tool; and trading_mcp/server.py's instructions= string, which falsely claims no tool can touch the halt/circuit-breaker switches, is corrected in this same change so the server's self-description is never contradicted by its own tool set",
+    "steps": [
+      "Confirm a halt MCP tool exists and calling it flips the halt file exactly as vesper.py halt does",
+      "Add a live test: call the registered halt tool through the collecting-MCP fixture, then confirm get_halt_status reflects halted -- this is the positive reachability assertion deferred here from M0-09",
+      "Add a test enumerating every tool name registered by trading_mcp's full tool set and asserting none resolves to resume or un-halt",
+      "In the same commit, edit trading_mcp/server.py's instructions= string to remove or correct the sentence claiming no tool can touch the halt/circuit-breaker switches -- the one-line fix, ahead of M10-01's fuller rewrite",
+      "Add a test asserting the instructions= string no longer contains that false claim",
+      "Run pytest -q -k 'halt or resume' and confirm both the positive and negative assertions pass, plus the instructions= test"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-09",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "If a run_scan or run_backtest MCP tool exists it is provably confined to the analysis path and can never construct or return an order payload; if no such tool is registered, that absence is itself a valid, explicitly-asserted PASS -- fabricating a tool solely to satisfy this feature is forbidden",
+    "steps": [
+      "grep the registered trading_mcp tool set for a run_scan or run_backtest tool name",
+      "If none is registered: add a test asserting that explicitly (no tool named run_scan/run_backtest appears in the registered tool list) and stop -- this is a vacuous PASS, not a gap to fill; do not add a scan/backtest tool solely to satisfy this feature",
+      "If one is registered: confirm it imports neither vesper.execution_guard, OrderProposal construction code, nor vesper/nodes/executor.py, via an AST test asserting no reference to guard, OrderProposal, or place_order symbols",
+      "If one is registered: add a behavioral test running it against fixture data that would, in the live agent, generate a proposal, and assert the MCP return value contains no ticket_id and cannot be fed into guard.place",
+      "Run pytest -q -k scan_backtest_confinement and confirm whichever branch applies passes"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-10",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "get_account_state bounds its positions payload so a large account does not produce an unreadable response",
+    "steps": [
+      "Read trading_mcp/vesper_tools.py's get_account_state, which currently returns portfolio.get('positions', []) unbounded",
+      "Add a position_count plus a capped positions list (e.g. top N by notional) with a note that more exist",
+      "Add a test with a synthetic 50-position portfolio asserting the response stays bounded while position_count still reflects the true total"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-11",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "get_audit_trail defaults to a spoken-friendly size with a compact summary mode, while full detail stays available on explicit request",
+    "steps": [
+      "Read trading_mcp/vesper_tools.py's get_audit_trail, whose default limit is 20 full JSON entries",
+      "Lower the default limit and add a summary=True mode returning one short line per entry instead of full JSON",
+      "Keep limit/summary=False available for the existing full-detail behavior so nothing depending on it today breaks",
+      "Add a test asserting the default call's serialized size is materially smaller than today's default"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-12",
+    "milestone": "M8",
+    "category": "voice",
+    "description": "Every voice-originated MCP tool call (watch_setup, find_pending_setup, snooze/tag_proposal, arm/disarm_alert, halt) is written to the audit trail with tool name, arguments, and timestamp, and never logs a credential",
+    "steps": [
+      "Add a thin call-logging wrapper applied to the new tools that appends an entry via core.audit_chain (post-M0)",
+      "Call watch_setup and one safe-write tool, then read the audit trail and confirm both calls appear",
+      "Assert the logged arguments never include a token, secret, or account value by construction",
+      "Run pytest -q and confirm the audit chain still verifies after the new entries are appended"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-13",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "No speech-to-text, audio endpoint, or voice-command path exists anywhere in the repo, and every module added in this milestone is covered by M0-09's exposure-boundary pin",
+    "steps": [
+      "Confirm no OpenRouter STT code, no aiohttp audio route, and vesper/bot/inbound.py's webhook app is still not started by anything",
+      "Confirm every new module from M8-01 through M8-12 appears in the AST pin's scanned module set",
+      "Run pytest -q tests/test_trading_mcp.py and confirm the full suite including the widened pin passes",
+      "Confirm resume() specifically has no reachable MCP path, matching the exposure rule's explicit carve-out"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M8-14",
+    "milestone": "M8",
+    "category": "safety",
+    "description": "OAuth-granted tokens carry scopes mirroring the exposure rule's read/safe-write tiers, and enforcement is proven against M8's actual safe-write tools (arm_alert, disarm_alert, halt, snooze_proposal, tag_proposal) -- the scope-tiering-enforcement half split out of M2-05, moved here because it needs these tools to exist",
+    "steps": [
+      "Confirm each M8 safe-write tool (arm_alert, disarm_alert, halt, snooze_proposal, tag_proposal) is registered under a safe-write scope, and each read tool under a read scope",
+      "Add a test: a read-only-scoped token cannot invoke a safe-write tool (e.g. arm_alert, halt) and receives a permission-denied response",
+      "Add a test: a safe-write-scoped token CAN invoke arm_alert and halt successfully",
+      "Run pytest -q -k oauth_scope_tiering and confirm both tests pass"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M10-01",
+    "milestone": "M10",
+    "category": "docs",
+    "description": "Building on M8-08's one-line correction, trading_mcp/server.py's instructions= is rewritten into a short, always-injected block stating what the server is, the exposure rule verbatim, the two forbidden actions by name, and the watch cadence",
+    "steps": [
+      "Rewrite the instructions= block at trading_mcp/server.py:107 to state: what this server is (owner-only, exposure-bounded, not strictly read-only), 'voice may do anything that cannot increase exposure' verbatim, that approve and resume are never reachable here, and a pointer to copilot_setup and skill://rules for detail",
+      "Add a test asserting the instructions string contains the required substrings ('cannot increase exposure', 'halt', 'resume')",
+      "Add a test asserting the instructions string stays under a fixed length budget (e.g. 1500 chars) so it stays cheap to inject every turn",
+      "Confirm the block does not duplicate the full rules text that lives in skill://rules -- it points at it instead"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M10-02",
+    "milestone": "M10",
+    "category": "agent",
+    "description": "An @mcp.prompt copilot_setup(proposal_id) exists, scripting the setup-watching session: call watch_setup on a cadence, when to say nothing changed, and that voice can never press the Telegram button itself",
+    "steps": [
+      "Add the prompt using FastMCP's @mcp.prompt decorator, taking proposal_id",
+      "Render it for a fixture proposal_id and assert the output names watch_setup by tool name, states a cadence, and states the button-press rule ('press it yourself, I cannot approve this')",
+      "Assert it does not re-embed the full thesis text -- it tells the model to fetch that via watch_setup, not carry it inline",
+      "Add a test that an unknown proposal_id still returns a usable prompt rather than erroring the whole call"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M10-03",
+    "milestone": "M10",
+    "category": "agent",
+    "description": "An @mcp.prompt morning_brief() composes account state, pending proposals, armed alerts, and the gamma flip into a short spoken-friendly opening statement, reusing M8's bounded tool outputs rather than a fresh unbounded fetch",
+    "steps": [
+      "Add the prompt reusing the existing composed read tools (bounded account state, pending proposals, alerts, core.td.levels())",
+      "Render it against fixture data and assert the output is a short paragraph, not a JSON dump",
+      "Assert it reads from the already-bounded M8 tool outputs, not a raw balance/positions fetch",
+      "Add a test for the degraded case where one section (e.g. alerts) is unavailable: the brief still renders the other sections"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M10-04",
+    "milestone": "M10",
+    "category": "docs",
+    "description": "Every one of the 64 directories under skills/ is surfaced as a readable @mcp.resource at skill://<name>, discovered dynamically from skills/*/SKILL.md rather than hand-listed",
+    "steps": [
+      "Add a resource handler that lists skills/*/SKILL.md and registers one skill://<name> resource per directory",
+      "Call the resource listing and assert the count matches the number of skill directories on disk (64 today)",
+      "Read skill://<name> for three sampled skills and assert the returned text matches the on-disk SKILL.md byte-for-byte",
+      "Add a test that a nonexistent skill name returns a clear not-found result rather than a crash"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M10-05",
+    "milestone": "M10",
+    "category": "docs",
+    "description": "A curated skill://rules resource, hand-written rather than auto-scraped from CLAUDE.md, covers the operating rules a fresh voice client needs: gamma marks positioning not a forecast, the NVDA-to-'in video' mis-transcription example, the exposure rule, and 'buttons move money'",
+    "steps": [
+      "Write the resource content as a standalone module-level string, not a live re-render of CLAUDE.md",
+      "Add a test asserting each of the four required phrases/examples is present",
+      "Read the resource through the MCP resource-read path (not just import the string) to confirm it is wired to skill://rules",
+      "Confirm the content stays under a defined character bound"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M10-06",
+    "milestone": "M10",
+    "category": "safety",
+    "description": "The skill:// resource surface is read-only and path-safe: a crafted skill name cannot read a file outside skills/, and the new resource/prompt modules are covered by M0-09's exposure pin",
+    "steps": [
+      "Add a test requesting skill://../../.env and skill://../CLAUDE.md and confirm both are rejected, never returning file content",
+      "Add a test confirming no resource handler accepts a write -- only FastMCP's read/list resource protocol is exposed",
+      "Confirm the new resource- and prompt-serving modules from M10-01 through M10-05 are inside the AST pin's scanned module set",
+      "Run pytest -q tests/test_trading_mcp.py and confirm it still passes with the new modules present"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M10-07",
+    "milestone": "M10",
+    "category": "docs",
+    "description": "End to end: a client with zero local context runs one full co-pilot turn using only what the server provides -- instructions, copilot_setup(proposal_id), skill://rules, and watch_setup -- proven by an integration test chaining exactly those calls",
+    "steps": [
+      "Write an integration test that, given only a fixture proposal_id, reads instructions=, invokes copilot_setup(proposal_id), reads skill://rules, then calls watch_setup(proposal_id) twice",
+      "Assert nothing in that chain required information not obtainable from the server itself (no hardcoded ticker knowledge, no external skill file read)",
+      "Assert the second watch_setup call in the chain exhibits M8-04's unchanged-compression behavior",
+      "Run pytest -q and confirm this test is part of the green suite counted as the run's floor"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-01",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The stale pre-migration deploy/ artefacts are retired rather than left to mislead",
+    "steps": [
+      "Review deploy/install.sh, deploy/sidecar.service and deploy/legacy_sidecar_mcp_server.py.bak",
+      "Delete or clearly mark as retired everything describing the pre-migration run.sh/port-8787 layout, including the Tailscale-IP gate that no longer matches this shape",
+      "Confirm nothing in the repo still refers to SIDECAR_HOST or port 8787 as current",
+      "Commit the removal as its own clean commit, not folded into an unrelated one"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-02",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "Two separate env-contract example files replace the single .env.example, matching the post-M0 dependency split -- trading_mcp never needs Telegram, vesper never needs TRADING_AGENT_TOKEN or OAuth vars",
+    "steps": [
+      "Write .env.trading-agent.example: WEBULL_*, TD_API_KEY, TDPRO_API_KEY, SEC_USER_AGENT, TRADING_AGENT_TOKEN, and the OAuth vars from M2 -- never TELEGRAM_* or VESPER_TRADING",
+      "Write .env.vesper.example: the same WEBULL_*/TD/TDPRO/SEC_USER_AGENT core vars, plus TELEGRAM_BOT_TOKEN, TELEGRAM_AUTHORIZED_USER_IDS and VESPER_TRADING (defaulting to 0) -- never TRADING_AGENT_TOKEN or any OAuth var",
+      "Document in a comment at the top of each file why the core vars are intentionally duplicated across both (both processes read core/'s broker+data layer)",
+      "Confirm both are placeholders-only and commit them"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-03",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "Three systemd unit files live in the repo, each pointing at the correct one of the two env contracts",
+    "steps": [
+      "Add deploy/trading-agent.service with EnvironmentFile=~/trading-agent/.env.trading-agent",
+      "Add deploy/vesper-loop.service and deploy/vesper-listen.service, both with EnvironmentFile=~/trading-agent/.env.vesper",
+      "Confirm each unit specifies the correct WorkingDirectory, venv python, and Restart=on-failure",
+      "Confirm the MCP unit's bind configuration still targets the docker bridge, never 0.0.0.0"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-04",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The Traefik dynamic config lives in the repo alongside the documented sudo step that installs it",
+    "steps": [
+      "Commit the dynamic config as deploy/traefik/trading-agent.yaml",
+      "Document the sudo command a human must run to install it, and that Traefik requests the cert on first hit",
+      "Document that an unauthenticated request must return 4xx and that a 200 means auth is not gating",
+      "Confirm nothing about this config changed shape because of the two-env split -- it only ever routed to trading-agent.service"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-05",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The DNS and hostname facts, including the wildcard footgun, are documented where a person debugging a 503 will find them",
+    "steps": [
+      "Document agent.mphinance.com pointing at the coolify box",
+      "Document that *.mphinance.com points at vultr by default, so a typo'd hostname silently lands on the wrong machine and returns a confusing 503",
+      "Cross-reference this from deploy/README or wherever the Traefik troubleshooting steps live"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-06",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "A vesper-only redeploy never restarts trading-agent.service, and an MCP-only redeploy never restarts vesper-loop/vesper-listen -- proven live, not claimed",
+    "steps": [
+      "Push a vesper-only change and deploy it by restarting only vesper-loop.service and vesper-listen.service",
+      "While that restart happens, poll the MCP endpoint continuously and confirm it keeps returning its normal 401/200 with no gap",
+      "Confirm via systemctl --user show trading-agent.service -p ActiveEnterTimestamp that it was never restarted during that deploy",
+      "Conversely, push an MCP-only change and deploy it by restarting only trading-agent.service, then confirm vesper-loop/vesper-listen's ActiveEnterTimestamp is unchanged"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-07",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "A rollback procedure exists for a bad deploy of either deployable, exercised once on a scratch checkout rather than the live one",
+    "steps": [
+      "On coolify, create a second clone or git worktree separate from ~/trading-agent to rehearse against",
+      "Simulate a bad trading_mcp deploy in the scratch checkout: git revert <sha>, redeploy, restart only trading-agent.service, verify",
+      "Simulate a bad vesper deploy the same way, restarting only vesper-loop/vesper-listen",
+      "Document that the shared state files (halt, circuit breaker, paper ledger, audit chain, SQLite checkpoint) are untouched by either rollback",
+      "Write the rehearsed commands into deploy/README.md so a real incident follows a tested script"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-08",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The install script is rewritten for the two env contracts, stays idempotent, and never prints a credential value",
+    "steps": [
+      "Rewrite the install script (successor to deploy/install.sh) to build the venv, install pinned requirements, install all three systemd user units pointing at their correct EnvironmentFile, and enable lingering -- starting only trading-agent.service; vesper-loop.service and vesper-listen.service are enabled but never started by the script",
+      "Confirm it prints both env contracts by variable name only, never a value",
+      "Confirm running it twice in a row produces no diff and triggers no unnecessary restart on the second run",
+      "Remove the old Tailscale-IP gate entirely -- it described a shape this deployment no longer has"
+    ],
+    "passes": false
+  },
+  {
+    "id": "M7-09",
+    "milestone": "M7",
+    "category": "deploy",
+    "description": "The rewritten install script is verified live on coolify: trading-agent.service is active; vesper-loop.service and vesper-listen.service are installed and enabled but explicitly STOPPED, since starting them with no credentials and Restart=on-failure would crash-loop on a shared box",
+    "steps": [
+      "Run the new install script against coolify",
+      "Confirm trading-agent.service is active via systemctl --user is-active, and via systemctl --user show trading-agent.service -p EnvironmentFiles that it reads .env.trading-agent (name only)",
+      "Confirm vesper-loop.service and vesper-listen.service are systemctl --user enabled but systemctl --user is-active reports inactive/dead for both, and that the install script never issues systemctl --user start for either",
+      "Confirm the MCP unit's bind is unchanged (docker bridge, never 0.0.0.0) via ss -ltnp",
+      "Run the script a second time and confirm nothing changes and the two vesper units remain stopped",
+      "Confirm loginctl show-user shows Linger=yes and all three units are systemctl --user enabled; document how to verify this after an actual future reboot, including that the two vesper units come back enabled-but-stopped, not auto-started"
     ],
     "passes": false
   },
@@ -656,193 +1208,6 @@
       "Verify by name and value that VESPER_TRADING=0 on coolify",
       "Confirm no commit, script or unit file sets it to 1",
       "Record this explicitly in claude-progress.txt"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M7-01",
-    "milestone": "M7",
-    "category": "deploy",
-    "description": "The stale deploy/ artefacts are retired rather than left to mislead",
-    "steps": [
-      "Review deploy/install.sh, deploy/sidecar.service and deploy/legacy_sidecar_mcp_server.py.bak",
-      "Delete or clearly mark as retired everything describing the pre-migration run.sh/port-8787 layout",
-      "Confirm nothing in the repo still refers to SIDECAR_HOST or port 8787 as current"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M7-02",
-    "milestone": "M7",
-    "category": "deploy",
-    "description": "A new install script reproduces the live deployment from scratch",
-    "steps": [
-      "Write a script that creates the venv, installs pinned requirements, installs all three systemd user units, enables lingering, and prints the .env contract by name",
-      "It must never write a credential value",
-      "It must be idempotent \u2014 running it twice changes nothing the second time"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M7-03",
-    "milestone": "M7",
-    "category": "deploy",
-    "description": "The three systemd unit files live in the repo",
-    "steps": [
-      "Add the unit files for the MCP server, vesper-loop and vesper-listen under deploy/",
-      "Confirm each specifies the correct working directory, venv python, EnvironmentFile and Restart policy",
-      "Confirm the MCP unit's bind address is the docker bridge, never 0.0.0.0"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M7-04",
-    "milestone": "M7",
-    "category": "deploy",
-    "description": "The Traefik dynamic config lives in the repo alongside the sudo step that installs it",
-    "steps": [
-      "Commit the dynamic config as deploy/traefik/trading-agent.yaml",
-      "Document the sudo command a human must run to install it, and that Traefik requests the cert on first hit",
-      "Document that an unauthenticated request must return 4xx and that a 200 means auth is not gating"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M7-05",
-    "milestone": "M7",
-    "category": "deploy",
-    "description": "The DNS and hostname facts are documented, including the wildcard footgun",
-    "steps": [
-      "Document agent.mphinance.com pointing at the coolify box",
-      "Document that *.mphinance.com points at vultr, so a typo'd hostname silently lands on the wrong machine and returns a confusing 503",
-      "Put this where someone debugging a 503 will actually find it"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M7-06",
-    "milestone": "M7",
-    "category": "deploy",
-    "description": "The install script is verified by running it against the live box",
-    "steps": [
-      "Run the script on coolify",
-      "Confirm all three units are active afterwards",
-      "Confirm the MCP bind is unchanged",
-      "Run it a second time and confirm nothing changed"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M7-07",
-    "milestone": "M7",
-    "category": "deploy",
-    "description": "A restart of the whole box brings everything back",
-    "steps": [
-      "Confirm lingering is enabled and all three units are enabled",
-      "Confirm the units would start on boot without a login",
-      "Document how to verify this after any future reboot"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M8-01",
-    "milestone": "M8",
-    "category": "voice",
-    "description": "A single get_current_state tool answers the most common spoken question in one call",
-    "steps": [
-      "Add a read-only MCP tool composing account state, open positions, pending proposals and armed alerts",
-      "Keep the response small enough to be read aloud \u2014 a summary, not a dump",
-      "Confirm it degrades to available: false per-section rather than failing whole",
-      "Add tests for the composed shape and for partial degradation",
-      "Confirm the rule-3 AST pin covers the new module"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M8-02",
-    "milestone": "M8",
-    "category": "voice",
-    "description": "get_account_state bounds its positions payload",
-    "steps": [
-      "Read trading_mcp/vesper_tools.py:83-93, which returns Webull's raw positions list unbounded",
-      "Add a limit and a summary count so a large account does not produce an unreadable response",
-      "Add a test with a large synthetic positions list"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M8-03",
-    "milestone": "M8",
-    "category": "voice",
-    "description": "get_audit_trail defaults to a spoken-friendly size",
-    "steps": [
-      "Read trading_mcp/vesper_tools.py:243, where the default limit is 20 full JSON entries",
-      "Reduce the default and add a compact summary mode",
-      "Keep the full detail available when explicitly requested",
-      "Add a test"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M8-04",
-    "milestone": "M8",
-    "category": "voice",
-    "description": "Dealer-gamma answers use the compacted level shape, never the raw payload",
-    "steps": [
-      "Confirm every voice-facing tool that touches gamma uses td.levels() (~1.3KB) and not get_gex_ticker's raw ~200 strikes / ~40KB",
-      "Confirm flip_split is surfaced when the two flip sources straddle spot, rather than silently picking one",
-      "Add a test asserting the compacted shape is what is returned"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M8-05",
-    "milestone": "M8",
-    "category": "voice",
-    "description": "Symbol arguments resolve fuzzily and echo back what was matched",
-    "steps": [
-      "Add fuzzy resolution for tools taking a ticker, so a mis-transcription like 'in video' can still resolve to NVDA",
-      "Always include the resolved symbol in the response so a wrong match is audible before it matters",
-      "Return a clear ambiguity result rather than guessing when two candidates are close",
-      "Add tests covering a clean match, a fuzzy match and an ambiguous one"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M8-06",
-    "milestone": "M8",
-    "category": "voice",
-    "description": "Gamma levels are never phrased as price targets",
-    "steps": [
-      "Review the tool descriptions and any summary text for language implying price will travel to a level",
-      "State that dealer gamma marks where hedging is concentrated, which is why price often reacts there",
-      "Confirm no tool description reads a wall above spot as a reason to be long"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M8-07",
-    "milestone": "M8",
-    "category": "voice",
-    "description": "Every voice-originated tool call is logged to the audit trail",
-    "steps": [
-      "Add audit logging for MCP tool invocations, capturing the tool, arguments and timestamp",
-      "Confirm it does not log credential values",
-      "Add a test asserting an MCP call appears in the audit trail",
-      "This is the surviving requirement from the cancelled rule 4d: audio is ephemeral, the log is what makes it reviewable"
-    ],
-    "passes": false
-  },
-  {
-    "id": "M8-08",
-    "milestone": "M8",
-    "category": "voice",
-    "description": "No speech-to-text, audio endpoint or voice command path exists in this repo",
-    "steps": [
-      "Confirm no OpenRouter STT code was added",
-      "Confirm no audio upload endpoint exists",
-      "Confirm no voice path can approve, halt, resume or place anything",
-      "Add a test asserting no MCP tool can reach submit_decision, halt or resume"
     ],
     "passes": false
   },

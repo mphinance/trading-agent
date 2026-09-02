@@ -127,10 +127,13 @@ Properties that hold it together, none decorative:
 broker credentials or implements its own risk checks.** Any adapter that grows
 its own order path is a new threat model, not a small addition.
 
-`trading_mcp/` (below) is a third MCP surface, but it doesn't reach the agent
-at all — it's a read-only owner-only viewer, and `tests/test_trading_mcp.py`
-mechanically pins that `guard.preview()`/`guard.place()` never appear under
-it (or under `mcp_server/`) via AST, not just a docstring promise.
+`trading_mcp/` (below) is a third MCP surface, owner-only and exposure-bounded
+rather than strictly read-only: `halt()` is MCP-reachable from it, but
+`guard.preview`, `guard.place`, `resume()`, and
+`ApprovalRegistry.submit_decision()` remain forbidden from every module under
+it (and under `mcp_server/`) — including by passing a bound method. See
+app_spec.txt's A3. `tests/test_trading_mcp.py` mechanically pins this via AST,
+not just a docstring promise.
 
 ### 4. Inject live state; never make the model fetch it
 `vesper/llm.py` formats portfolio + signals + dealer gamma into the turn.
@@ -332,9 +335,10 @@ trading_mcp/       PHASE 0: owner-only, READ-ONLY MCP server (separate process
                    Auth is StaticTokenVerifier off TRADING_AGENT_TOKEN for the
                    optional http transport (loopback-only, refuses to start
                    without a token — rule 1); stdio (the default) needs none.
-                   No tool here may call guard.preview()/guard.place(),
-                   halt()/resume(), or ApprovalRegistry.submit_decision() — see
-                   rule 3's note above and tests/test_trading_mcp.py's AST-based
+                   halt() is MCP-reachable from here; no tool here may call
+                   guard.preview()/guard.place(), resume(), or
+                   ApprovalRegistry.submit_decision() — see rule 3's note above,
+                   app_spec.txt's A3, and tests/test_trading_mcp.py's AST-based
                    pin.
 tests/             pytest, hermetic — Webull and Agent SDKs stubbed in conftest
 deploy/            systemd unit + Tailscale-gated installer (STALE, see rule 1)

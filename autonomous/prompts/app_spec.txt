@@ -113,9 +113,10 @@ guards and stages a ticket carrying a SHA-256 of the exact payload; `place()`
 takes a `ticket_id`, never an order. No single call may both construct and fire.
 Tickets are single-use, 120 s expiry.
 
-**I3. No MCP tool may reach the order path.** No module under `trading_mcp/` or
-`mcp_server/` may reference `guard.preview`, `guard.place`, `halt()`, `resume()`,
-or `ApprovalRegistry.submit_decision()` — including by passing a bound method
+**I3. No MCP tool may reach the order path.** (see A3) `halt()` is MCP-reachable
+from `trading_mcp/`; no module under `trading_mcp/` or `mcp_server/` may
+reference `guard.preview`, `guard.place`, `resume()`, or
+`ApprovalRegistry.submit_decision()` — including by passing a bound method
 (`asyncio.to_thread(guard.place, …)`). `tests/test_trading_mcp.py` pins this with
 an AST check that matches attribute *access*, not just calls. **Never narrow that
 test.** If you add a new MCP surface, it must be covered by the same pin.
@@ -148,7 +149,9 @@ unreachable feed (TDPro, the gRPC push stream), or an absent credential must
 degrade to `{"available": false}` or a slower poll — never crash the process.
 
 **I10. Never restart or reconfigure anything on the coolify box that is not
-`trading-agent.service`.** Other people's production runs there.
+`trading-agent.service`.** Other people's production runs there, except
+`systemctl --user start/stop/enable/restart` against unit names matching
+`trading-agent*` or `vesper-*`, which this run owns.
 
 ---
 
@@ -176,6 +179,12 @@ per-user authorised and restart-safe.
 
 Also update: the Status section (order path, deployment), the Layout tree, the
 test count, and the `deploy/` description once M7 lands.
+
+**A3 -- I3 is amended:** halt() is MCP-reachable from trading_mcp/;
+guard.preview, guard.place, resume(), and ApprovalRegistry.submit_decision()
+remain forbidden from every module under trading_mcp/ and mcp_server/,
+including by passing a bound method. tests/test_trading_mcp.py's AST pin is
+updated, not narrowed, to match.
 
 ---
 

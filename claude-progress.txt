@@ -147,3 +147,63 @@ Only read-only `ssh coolify` commands ran (`systemctl --user is-active`,
   transcript (rule 5 / I6). This session's tests use throwaway string
   literals (`"m2-02-test-token"`, `"good-token"`, `"scoped-token"`) as fake
   bearer tokens, never a real one.
+
+---
+
+## New milestone: M0 — layering split (core/ / mcp_server/ / trading_mcp/ / vesper/)
+
+`feature_list.json` was replaced with a new M0-M9 + H1-H4 plan before this
+session started (the old M2-auth / M7-deploy / M8-voice plan visible above is
+superseded — do not resume it from this file; `feature_list.json` is now the
+only source of truth for what's next). M0's goal, per `feature_list.json`'s
+own framing, is to stop `trading_mcp/` from holding a live `ExecutionGuard`
+and a `TelegramAdapter` in-process at all (not just refusing to call them) by
+splitting pure state I/O into a `core/` package that neither MCP surface nor
+`vesper/` sits below in the wrong direction.
+
+## This session: M0-00 — amend app_spec.txt I3/I10 and CLAUDE.md rule 3 first
+
+Doc-only change, no code touched, done deliberately before M0-09 or any later
+feature widens what `trading_mcp/` may reach. Both invariant documents said
+`halt()` was categorically forbidden from `trading_mcp/`/`mcp_server/`; that
+was already stale (`trading_mcp/vesper_tools.py` calls `halt()` today) and
+would have contradicted the AST pin the moment anyone read it literally.
+
+What changed:
+- `autonomous/prompts/app_spec.txt`: added **A3** in section 3 (mirrors the
+  A1/A2 format) stating `halt()` is MCP-reachable from `trading_mcp/` while
+  `guard.preview`, `guard.place`, `resume()`, and
+  `ApprovalRegistry.submit_decision()` stay forbidden, bound-method references
+  included; rewrote **I3** in section 2 to match, with a `(see A3)` pointer;
+  added a carve-out clause to **I10** for
+  `systemctl --user start/stop/enable/restart` against `trading-agent*` /
+  `vesper-*` units on the shared coolify box.
+- `CLAUDE.md` rule 3: replaced the "read-only owner-only viewer" framing and
+  the guard-only AST-pin sentence (both the prose paragraph and the Layout
+  tree's `trading_mcp/` block) with the exposure-bounded description —
+  `halt()` reachable, the other three forbidden — pointing at A3.
+- Verified with `grep -n 'halt()' autonomous/prompts/app_spec.txt CLAUDE.md`:
+  every remaining `halt()` mention now says it's MCP-reachable, none says
+  categorically forbidden.
+
+**pytest: 580 passed** (`.venv/bin/python -m pytest -q`), unchanged from the
+floor — this was a docs-only edit, no test was expected to move.
+
+### For the next agent (M0-01)
+
+- `feature_list.json` already has M0-01 through M0-09+ defined; only M0-00's
+  `passes` was flipped to `true` this session, per the "one feature, don't
+  touch other fields" rule.
+- The working tree had unrelated pre-existing dirty state when this session
+  started (`trading_mcp/server.py`, `trading_mcp/oauth_provider.py`,
+  `feature_list.json.bak`, `autonomous/feature_list.seed.json`,
+  `docs/HANDOFF_2026-09-01.md`, `HKUDS_REPOSITORY_REVIEW.md`,
+  `supermcp_CLAUDE_remote.md`, `scripts/package_for_supermcp.py`) — leftovers
+  from the old M2/auth plan or earlier exploration. This session did not
+  touch, stage, or commit any of them; only `CLAUDE.md`,
+  `autonomous/prompts/app_spec.txt`, and `feature_list.json` were staged for
+  the M0-00 commit. Worth a look before M0-01 in case any of it is actually
+  needed (e.g. `oauth_provider.py` may be live work-in-progress, not junk).
+- M0-01 is a characterization test (`tests/test_import_boundaries.py`) that
+  must land *before* any file moves in M0-02/M0-03 — read its `steps` in
+  `feature_list.json` closely, the baseline import list is specified exactly.
