@@ -1143,6 +1143,93 @@ async def test_oauth_scope_absence_of_forbidden_tools(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# M2-08: the static-bearer fallback keeps working UNCHANGED after OAuth
+# lands, and the http transport still refuses to start without
+# TRADING_AGENT_TOKEN. The M2-01-era characterization tests above
+# (test_http_request_with_no_credential_is_rejected,
+# test_http_request_with_valid_bearer_is_accepted,
+# test_http_transport_refuses_to_start_without_token) never set
+# MCP_PUBLIC_URL, so they already re-run unchanged on every test session --
+# this section adds the missing half: the SAME three behaviours, proven
+# again with the OAuth provider actually mounted alongside (MultiAuth, not
+# a bare HmacStaticTokenVerifier), so a future change to _build_auth() or
+# to the OAuth mount can't quietly regress the bearer path while these
+# OAuth-specific characterizations above keep passing.
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def test_no_credential_rejected_with_oauth_mounted(monkeypatch):
+    """M2-01's no-credential-rejected behaviour, re-run with MCP_PUBLIC_URL
+    set so `_build_auth()` returns the composed MultiAuth instead of the
+    bare bearer verifier -- the 401 must be unchanged."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+    from fastmcp.server.auth import MultiAuth
+
+    auth = srv._build_auth()
+    assert isinstance(auth, MultiAuth), "sanity check: OAuth really is mounted here"
+
+    app = FastMCP("test-auth-oauth", auth=auth).http_app(path="/mcp")
+    response = await _post_mcp(app, _MCP_HEADERS)
+    assert response.status_code == 401
+
+
+async def test_static_bearer_accepted_while_oauth_configured(monkeypatch):
+    """The one new assertion M2-08 adds: a request carrying only the static
+    TRADING_AGENT_TOKEN bearer is still accepted even while OAuth is fully
+    configured (MCP_PUBLIC_URL set, MultiAuth mounted) -- the fallback isn't
+    merely present in the object graph, it still authorizes a real request
+    on the live /mcp endpoint, with no OAuth handshake involved at all."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+    from fastmcp.server.auth import MultiAuth
+
+    auth = srv._build_auth()
+    assert isinstance(auth, MultiAuth)
+
+    app = FastMCP("test-auth-oauth", auth=auth).http_app(path="/mcp")
+    headers = {**_MCP_HEADERS, "Authorization": f"Bearer {_OAUTH_ENV['TRADING_AGENT_TOKEN']}"}
+    response = await _post_mcp(app, headers)
+    assert response.status_code == 200, response.text
+
+
+async def test_wrong_bearer_still_rejected_with_oauth_mounted(monkeypatch):
+    """The mirror image of the acceptance test above: a bearer that is
+    neither the configured static token nor a real OAuth-minted token must
+    still be rejected once OAuth is mounted -- the fallback path hasn't
+    gone lax alongside gaining a second credential source."""
+    _set_oauth_env(monkeypatch)
+    import trading_mcp.server as srv
+
+    app = FastMCP("test-auth-oauth", auth=srv._build_auth()).http_app(path="/mcp")
+    headers = {**_MCP_HEADERS, "Authorization": "Bearer not-the-right-token"}
+    response = await _post_mcp(app, headers)
+    assert response.status_code == 401
+
+
+def test_http_transport_refuses_to_start_without_token_even_with_public_url_set():
+    """M2-01's startup guard, re-run with MCP_PUBLIC_URL also set: a
+    deployment that has declared a public URL (and would therefore mount
+    OAuth) but still has no TRADING_AGENT_TOKEN must still refuse to start
+    the http transport -- `_build_oauth_provider()` needs that same token as
+    its `operator_secret`, so there is no configuration in which OAuth being
+    reachable substitutes for the bearer token this guard checks."""
+    env = dict(os.environ)
+    env.pop("TRADING_AGENT_TOKEN", None)
+    env["MCP_TRANSPORT"] = "http"
+    env["MCP_PUBLIC_URL"] = "https://agent.mphinance.test"
+    result = subprocess.run(
+        [sys.executable, "-m", "trading_mcp.server"],
+        env=env, cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0, (
+        f"expected a non-zero exit when TRADING_AGENT_TOKEN is unset, "
+        f"MCP_TRANSPORT=http and MCP_PUBLIC_URL is set, got "
+        f"{result.returncode}. stderr:\n{result.stderr}"
+    )
+    assert "TRADING_AGENT_TOKEN" in (result.stdout + result.stderr)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Rule 3 pin: the order path stays in exactly one place
 # ═══════════════════════════════════════════════════════════════════════════
 

@@ -1740,3 +1740,73 @@ oauth_scope_absence"` -> 2 passed. **Full suite:** `.venv/bin/python -m pytest -
 
 **Staged for this feature's commit:** `tests/test_trading_mcp.py` only. Did not touch
 `feature_list.json` or `autonomous/feature_list.seed.json`, per the hard prohibition.
+
+===============================================================================
+M2-08 -- static bearer fallback keeps working unchanged after OAuth lands;
+http transport still refuses to start without TRADING_AGENT_TOKEN
+===============================================================================
+
+**Outcome, checked against source, not asserted.** Read `trading_mcp/server.py`'s
+`_build_auth()` and the `__main__` startup guard before touching anything. Both halves of
+the claim were already true in the shipped code from M2-04/M2-06:
+
+- `_build_auth()` only ever returns `None` (no token), a bare `HmacStaticTokenVerifier`
+  (token set, no `MCP_PUBLIC_URL`), or a `MultiAuth(server=oauth, verifiers=[bearer])`
+  (both set) -- there is no fourth branch where mounting OAuth drops the bearer verifier
+  from the composition.
+- The `MCP_TRANSPORT=http` + no-`TRADING_AGENT_TOKEN` guard at the bottom of the module
+  checks `os.environ.get("TRADING_AGENT_TOKEN")` alone, before `_build_oauth_provider()`
+  is even reached -- `MCP_PUBLIC_URL` being set can't substitute for it.
+
+So this feature was a coverage gap, not a code bug: the M2-01-era characterization tests
+(`test_http_request_with_no_credential_is_rejected`, `test_http_request_with_valid_bearer_is_
+accepted`, `test_http_transport_refuses_to_start_without_token`) never set `MCP_PUBLIC_URL`,
+so "still pass unchanged" was true only by never exercising the OAuth-mounted case at all --
+nothing proved the SAME three behaviours hold once `_build_auth()` returns the composed
+`MultiAuth` instead of the bare verifier.
+
+**Step 1 (re-run M2-01-era tests unchanged):** ran them as-is, no edits --
+`.venv/bin/python -m pytest -q tests/test_trading_mcp.py -k "test_http_request_with_no_
+credential_is_rejected or test_http_request_with_valid_bearer_is_accepted or test_http_
+transport_refuses_to_start_without_token"` -> all pass, byte-identical to before this feature.
+
+**Step 2 + 3 (OAuth mounted alongside, plus the new acceptance assertion):** added four tests
+in a new `# M2-08` section in `tests/test_trading_mcp.py`, placed right after the M2-07
+section and before the rule-3 AST-pin section, reusing the existing `_set_oauth_env` /
+`_OAUTH_ENV` / `_post_mcp` / `_MCP_HEADERS` helpers rather than inventing new plumbing:
+
+- `test_no_credential_rejected_with_oauth_mounted` -- same 401 as the M2-01 test, but with
+  `_build_auth()` asserted to actually be a `MultiAuth` first (sanity check that OAuth really
+  is mounted in this test, not accidentally falling back to bearer-only).
+- `test_static_bearer_accepted_while_oauth_configured` -- the literal step-3 ask: POSTs to the
+  live `/mcp` endpoint with only the static `TRADING_AGENT_TOKEN` bearer, OAuth fully
+  configured, asserts 200. No OAuth handshake involved -- proves the fallback still authorizes
+  a real request on its own, not merely that it's present in the object graph (that weaker
+  claim was already covered by `test_build_auth_is_multiauth_when_public_url_set`, which only
+  checks `isinstance`).
+- `test_wrong_bearer_still_rejected_with_oauth_mounted` -- the mirror: a bearer that's neither
+  the real static token nor an OAuth-minted one is still 401'd once OAuth is mounted, so the
+  fallback hasn't gone lax by gaining a second credential source.
+- `test_http_transport_refuses_to_start_without_token_even_with_public_url_set` -- the startup
+  guard re-run as a real subprocess with `MCP_PUBLIC_URL` also set and no
+  `TRADING_AGENT_TOKEN`: still exits non-zero before binding a socket.
+
+Note `test_bearer_and_oauth_paths_converge_on_one_verify_token` (from the M2-06 section)
+already asserted a 200 for the bearer path incidentally, as one step of a longer convergence
+proof. The new `test_static_bearer_accepted_while_oauth_configured` makes that specific claim
+its own dedicated, minimal test rather than relying on it as a side effect of a different
+feature's proof -- so a future edit to the convergence test can't silently stop covering this
+one.
+
+**Verified:** `.venv/bin/python -m pytest -q tests/test_trading_mcp.py -k "M2_08 or
+no_credential_rejected_with_oauth or static_bearer_accepted_while_oauth or wrong_bearer_
+still_rejected_with_oauth or refuses_to_start_without_token"` -> 5 passed (the 4 new tests +
+the original M2-01 subprocess test the -k also matched). **Full suite:**
+`.venv/bin/python -m pytest -q` -> **623 passed** (619 before this feature + 4 new tests).
+Floor was 597.
+
+**No source changes.** Zero lines touched in `trading_mcp/server.py`, `trading_mcp/auth.py`,
+or `trading_mcp/oauth_provider.py` -- this feature's outcome was already true in shipped code;
+only test coverage was missing. **Staged for this feature's commit:**
+`tests/test_trading_mcp.py` only. Did not touch `feature_list.json` or
+`autonomous/feature_list.seed.json`, per the hard prohibition.
