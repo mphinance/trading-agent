@@ -31,6 +31,63 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def fetch_account_state() -> dict[str, Any]:
+    """Live equity, buying power and open positions (bounded to top 15)."""
+    try:
+        from core.wb import Webull, WebullError
+    except Exception as e:
+        return {"available": False, "reason": f"webull SDK unavailable: {e}"}
+
+    try:
+        portfolio = Webull().portfolio()
+    except Exception as e:
+        return {"available": False, "reason": str(e)}
+
+    totals = portfolio.get("totals", {})
+    positions_raw = portfolio.get("positions", [])
+    total_count = totals.get("position_count")
+    if total_count is None:
+        total_count = len(positions_raw)
+
+    # M8-10: Bound positions list to top 15 by notional/market value for voice clarity
+    max_positions = 15
+    if len(positions_raw) > max_positions:
+        sorted_positions = sorted(
+            positions_raw,
+            key=lambda p: abs(float(p.get("market_value") or p.get("cost") or 0.0)),
+            reverse=True,
+        )
+        capped_positions = sorted_positions[:max_positions]
+        is_truncated = True
+        note = f"Showing top {max_positions} of {len(positions_raw)} positions by market value"
+    else:
+        capped_positions = positions_raw
+        is_truncated = False
+        note = None
+
+    res = {
+        "available": True,
+        "stale": portfolio.get("stale", False),
+        "fetch_error": portfolio.get("error"),
+        "equity": totals.get("nlv"),
+        "net_liquidation": totals.get("nlv"),
+        "buying_power": totals.get("buying_power"),
+        "option_buying_power": totals.get("option_buying_power"),
+        "day_pl": totals.get("day_pl"),
+        "unrealized_pl": totals.get("unrealized_pl"),
+        "position_count": total_count,
+        "positions": capped_positions,
+        "positions_truncated": is_truncated,
+        "fetched_at": portfolio.get("fetched_at"),
+    }
+    if note:
+        res["positions_note"] = note
+    return res
+
+
+get_account_state = fetch_account_state
+
+
 def register_vesper_tools(mcp: Any) -> list[str]:
     """Register every read-only Vesper tool onto `mcp` and return their names.
 
@@ -43,77 +100,8 @@ def register_vesper_tools(mcp: Any) -> list[str]:
 
     @mcp.tool()
     async def get_account_state() -> dict[str, Any]:
-        """Live equity, buying power and open positions.
-
-        Sourced from a single `wb.Webull().portfolio()` call so this
-        inherits the SDK client's 2-req/2s lock, retry/backoff and
-        stale-snapshot fallback (see wb.py's module docstring and
-        CLAUDE.md's rate-limit gotcha). Deliberately does NOT also call
-        `vesper/account.py`'s `fetch_live_equity()` /
-        `fetch_live_buying_power()` on top of this: each of those builds
-        its OWN Webull client and does its OWN `portfolio()` fetch, and
-        stacking three independent fetches against the scarce order-query
-        bucket inside a single tool call is exactly the kind of
-        self-inflicted 429 that bucket's pacing exists to avoid. One
-        fetch answers equity, buying power and positions together, from
-        the same `totals` dict those two functions themselves read.
-        """
-        try:
-            from core.wb import Webull, WebullError
-        except Exception as e:
-            return {"available": False, "reason": f"webull SDK unavailable: {e}"}
-
-        def _fetch() -> dict[str, Any]:
-            # Webull() raises WebullError from its own constructor when
-            # WEBULL_KEY/SECRET are missing (wb.credentials()), so there's no
-            # separate `configured` check to make here -- the outer except
-            # turns that into the {"available": False} shape.
-            return Webull().portfolio()
-
-        try:
-            portfolio = await asyncio.to_thread(_fetch)
-        except Exception as e:
-            return {"available": False, "reason": str(e)}
-
-        totals = portfolio.get("totals", {})
-        positions_raw = portfolio.get("positions", [])
-        total_count = totals.get("position_count")
-        if total_count is None:
-            total_count = len(positions_raw)
-
-        # M8-10: Bound positions list to top 15 by notional/market value for voice clarity
-        max_positions = 15
-        if len(positions_raw) > max_positions:
-            sorted_positions = sorted(
-                positions_raw,
-                key=lambda p: abs(float(p.get("market_value") or p.get("cost") or 0.0)),
-                reverse=True,
-            )
-            capped_positions = sorted_positions[:max_positions]
-            is_truncated = True
-            note = f"Showing top {max_positions} of {len(positions_raw)} positions by market value"
-        else:
-            capped_positions = positions_raw
-            is_truncated = False
-            note = None
-
-        res = {
-            "available": True,
-            "stale": portfolio.get("stale", False),
-            "fetch_error": portfolio.get("error"),
-            "equity": totals.get("nlv"),
-            "buying_power": totals.get("buying_power"),
-            "option_buying_power": totals.get("option_buying_power"),
-            "day_pl": totals.get("day_pl"),
-            "unrealized_pl": totals.get("unrealized_pl"),
-            "position_count": total_count,
-            "positions": capped_positions,
-            "positions_truncated": is_truncated,
-            "fetched_at": portfolio.get("fetched_at"),
-        }
-        if note:
-            res["positions_note"] = note
-        return res
+        """Live equity, buying power and open positions."""
+        return await asyncio.to_thread(fetch_account_state)
 
     @mcp.tool()
     def get_halt_status() -> dict[str, Any]:
