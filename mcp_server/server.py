@@ -873,10 +873,10 @@ if __name__ == "__main__":
         mcp.settings.host = host
         mcp.settings.port = port
         mcp.settings.sse_path = sse_path
-        # Allow the public reverse-proxy host so Apache forwarding doesn't get 421
+        # Allow the public reverse-proxy host so forwarding doesn't get 421
+        allowed = os.getenv("MCP_ALLOWED_HOSTS", "your-host.example.com,your-host.example.com:443")
         mcp.settings.transport_security.allowed_hosts.extend([
-            "ghost.mphinance.com",
-            "ghost.mphinance.com:443",
+            h.strip() for h in allowed.split(",") if h.strip()
         ])
         asyncio.run(mcp.run_sse_async())
     else:

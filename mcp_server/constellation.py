@@ -126,7 +126,7 @@ async def _call_openrouter(member: BoardMember, messages: list[dict], api_key: s
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "HTTP-Referer": "https://ghost.mphinance.com",
+                "HTTP-Referer": "https://your-host.example.com",
                 "X-Title": "momentum-chat-constellation",
                 "Content-Type": "application/json",
             },

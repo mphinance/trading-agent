@@ -1,7 +1,7 @@
 """
 mcp_server.registry: Modular tool registration for FastMCP.
 
-Allows external MCP servers (such as supermcp on Coolify) to register
+Allows external MCP servers (such as a remote MCP server) to register
 Momentum trading tools selectively by tier or all at once.
 """
 
