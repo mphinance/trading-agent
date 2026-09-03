@@ -1,6 +1,6 @@
 # The funnel plan
 
-**Revision 4, 2026-09-03.** Rewritten, not patched. Revisions 1-3 each got the
+**Revision 4, 2026-09-03** (updated same day: §3 and §7 fixed and deployed; §6 rewritten once `momentum-mcp` was found). Rewritten, not patched. Revisions 1-3 each got the
 shape wrong in a different way; the change log is §10. This one starts from what
 was actually verified in the code and against the live boxes.
 
@@ -51,16 +51,17 @@ amount of work in tool output and it is the highest-leverage item in the plan.
 **They barely overlap.** Surfaces 1 and 2 are the quant/analytics layer plus
 Vesper state. Surface 3 is TMpro's flow layer. Surface 4 is one account's live
 gamma view plus chart control. Only the TDPro passthrough is duplicated — and
-that is the part that is broken (§3) and unshippable (§7).
+that was the part that was both broken and unshippable until 2026-09-03 (§3, §7).
 
 **Neither apex levels nor conviction is served by any of them** except through a
 browser session. Four MCP servers, and not one can deliver the two best assets.
 
 ---
 
-## 3. Broken right now — verified against the live server
+## 3. The live breakage — FIXED 2026-09-03
 
-Three real calls to `agent.mphinance.com`:
+Half the deployed surface was dead. Three real calls to `agent.mphinance.com`
+found it:
 
 ```
 get_market_pulse   →  {"error": "TRADERDADDY_API_URL not set in .env"}
@@ -68,15 +69,22 @@ get_fundamentals   →  AAPL, $328.21, mkt cap 4.79T          ✅
 get_halt_status    →  {"available": true, "is_halted": false} ✅
 ```
 
-Every TDPro-backed tool on the deployed server is dead, across four modules
-(`server.py`, `macro.py`, `pead_screener.py`, `registry.py`). yfinance, EDGAR,
-TradingView screeners, the computed analytics and all 13 Vesper reads work fine.
+Every TDPro-backed tool, across four modules (`server.py`, `macro.py`,
+`pead_screener.py`, `registry.py`). Cause and fix are §7 — it was never a
+missing env var.
 
-So the deployed surface is not "60 tools" — it is **~37 working and the dealer-data
-half erroring**. Which, read the other way, is the free tier already running in
-production and proving it holds up without TMpro at all.
+**Fixed and deployed** (`8bb1dcb`). Re-verified on the live server after restart:
 
-**This is not a one-variable fix.** See §7.
+```
+get_market_pulse      ✅ live data
+get_market_stats      ✅ live data
+get_unusual_activity  ✅ live data
+get_gex_overview      ✅ live data
+```
+
+Worth keeping in mind for §1: while it was broken, the box was running **~37
+working tools with the entire TMpro half erroring** — which is the free tier,
+accidentally, in production, holding up fine without TMpro at all.
 
 ---
 
@@ -184,7 +192,42 @@ a paid key buys the flow layer — good, but not the differentiators.
 
 ---
 
-## 6. What ships publicly
+## 6. The public repo already exists — `mphinance/momentum-mcp`
+
+**Do not create `quant-mcp`.** `mphinance/momentum-mcp` is already public, and:
+
+| | |
+|---|---|
+| stars / forks | **26 / 8** |
+| description | *"⚡ Give your AI agent a Bloomberg terminal. MCP server for stock screening, OHLCV data, technical analysis, chart generation, and financial news."* |
+| last pushed | 2026-07-22 |
+| contents | the pre-M0-split ancestor of this repo's `mcp_server/` |
+
+26 stars is not nothing in a niche where the top result for `options mcp` has
+**39** and for `quant mcp` has 120. Starting a new repo at zero would be moving
+*backwards* to gain a better name — and the name was never going to carry this
+(§1).
+
+**Nothing is missing from it.** The 15 modules it has that this repo appears to
+"lack" — `cache`, `charts`, `conviction`, `data`, `knowledge`, `macro_regime`,
+`market_top`, `options`, `options_greeks`, `risk`, `schema`, `screener`,
+`technicals`, `traderdaddy`, `vcp_screener` — are exactly the ones M0 relocated
+to `core/`. This repo is ahead by that split plus `edgar_tools.py`,
+`registry.py`, and everything added since July.
+
+So the work is **update it from here**, not migrate to somewhere new:
+
+1. Bring it up to date with this repo's `mcp_server/` + the 16 `core/` modules
+   (the manifest below), preserving its stars, forks and inbound links.
+2. Rewrite its README around the free/paid split in §1.
+3. Publish `momentum-mcp` to PyPI so `uvx momentum-mcp` works.
+4. Reserving `quant-mcp` on PyPI/npm is now optional — cheap insurance against
+   someone else taking it, not a plan.
+
+The naming question that consumed a chunk of revision 3 is therefore closed by
+circumstance: the repo with traction wins, and it is already named.
+
+### What ships publicly
 
 The cut is already drawn and mechanically enforced: `mcp_server/`'s full
 transitive closure — including deferred and function-level imports — reaches
@@ -208,7 +251,10 @@ absent, so nobody can point it at a brokerage.
 
 ---
 
-## 7. The blocker: `core/traderdaddy.py` calls the internal superuser namespace
+## 7. ~~The blocker~~ — DONE (`8bb1dcb`, 2026-09-03)
+
+*Kept as the record of what it was and why it mattered. The fix is deployed and
+verified; §3 has the after.*
 
 `core/traderdaddy.py:207`:
 
@@ -240,7 +286,13 @@ same handlers, same response shapes. So the ten call sites in
 dependency, makes your own server use the credential a customer would, and makes
 the file shippable.
 
-**Do this one first.** It is the single highest-value change in the document.
+**Done.** `core/traderdaddy.py` now calls `/api/v1/<path>` with an `X-API-Key`
+header off `TD_API_KEY`; the JWT login path is deleted; the default host is
+`https://api.traderdaddy.pro` so a missing env var can never again mean total
+failure; and `alerts*` / `most-institutionally-traded-tickers` explain themselves
+rather than 404. Eleven tests pin the URL on the wire and the credential in the
+header (`tests/test_traderdaddy_public_api.py`) — a regression there re-points
+the public tool surface at an internal namespace, which is not a style problem.
 
 ---
 
@@ -248,14 +300,14 @@ the file shippable.
 
 | # | step | gate |
 |---|---|---|
-| 1 | Repoint `core/traderdaddy.py` at `/api/v1/*` with `X-API-Key` (§7) | `get_market_pulse` returns data on the live box |
+| ~~1~~ | ~~Repoint `core/traderdaddy.py` at `/api/v1/*`~~ **DONE `8bb1dcb`** | ✅ verified live |
 | 2 | Verify: can `has_api_access` be set without Stripe? (§5.1) | yes/no, in the schema |
 | 3 | Add the `scope`/`allowed_tools` column + check (§5.2) | a scoped key is refused outside its scope |
 | 4 | Let `free` tier mint a capped key (§5.1) | a carded-out stranger gets a working key |
 | 5 | Make the free tools surface the gap ("3 of these have unusual flow today") | the paid layer is visible from inside the free one |
 | 6 | Device flow, with the signup link in the un-entitled response (§5.3) | no copy-paste; buy happens in-flow |
 | 7 | Fix `QUICKSTART.md` Path 2 — it tells paid users to clone a **private** repo (404) | link resolves |
-| 8 | Public repo: manifest, README, `server.json`, PyPI/npm `quant-mcp` | `uvx` works from a clean machine |
+| 8 | Update **`mphinance/momentum-mcp`** from this repo (§6); README around the free/paid split; `server.json`; publish to PyPI | `uvx momentum-mcp` works from a clean machine |
 | 9 | Instrument: installs, gate-hits, attributed signups. 90-day checkpoint | a number written down beforehand |
 | 10 | *Later:* apex + conviction public tool modules (§5.4) | projection allowlist + guard test |
 
@@ -289,6 +341,8 @@ Steps 1 and 7 are worth doing whatever happens to the funnel.
 | One env var fixes the live breakage | False. `traderdaddy.py` calls `/api/agent/*`, the internal superuser namespace |
 | Ship `core/traderdaddy.py` in the public manifest | Not until it is repointed at `/api/v1/*` |
 | Apex/conviction reachable by key | Neither is on any key surface. Session-only |
+| Create `quant-mcp` as the public repo | **`mphinance/momentum-mcp` already exists** — public, 26 stars, 8 forks. Update it; do not restart at zero |
+| `core/traderdaddy.py` is the blocker (§7) | Fixed and deployed 2026-09-03 (`8bb1dcb`); the live server's TMpro half works again |
 
 **Verified and unchanged:** the 16-module manifest and its zero `vesper`
 reachability; no broker client in the public graph; `td_live_` keys hashed,
