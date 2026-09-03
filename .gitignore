@@ -7,6 +7,7 @@ webull_data_sdk.log*
 .env
 .env.*
 !.env.example
+!.env.*.example
 .venv/
 deploy/sidecar.env
 .pytest_cache/
