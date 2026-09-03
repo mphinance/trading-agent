@@ -1,0 +1,28 @@
+# trading-agent — owner-only MCP server.
+# Backend is a systemd USER service bound to the docker bridge (10.0.0.1:8500):
+# not 0.0.0.0, and not loopback — Traefik is containerised and cannot reach the
+# host loopback. host.docker.internal is mapped to host-gateway on this proxy.
+# The bearer token / OAuth (TRADING_AGENT_TOKEN) is the actual access gate.
+http:
+  routers:
+    trading-agent:
+      rule: "Host(`agent.mphinance.com`)"
+      entryPoints: [https]
+      service: trading-agent
+      tls:
+        certResolver: letsencrypt
+    trading-agent-http:
+      rule: "Host(`agent.mphinance.com`)"
+      entryPoints: [http]
+      service: trading-agent
+      middlewares: [trading-agent-tohttps]
+  middlewares:
+    trading-agent-tohttps:
+      redirectScheme:
+        scheme: https
+        permanent: true
+  services:
+    trading-agent:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:8500"
