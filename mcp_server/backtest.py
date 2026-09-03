@@ -728,15 +728,19 @@ async def backtest_strategy(
         # Phase 7.2: Auto-generate charts
         try:
             eq_b64 = _render_equity_chart(equity_curve, ticker, strat_label, stats)
-            if eq_b64:
+            if isinstance(eq_b64, str) and eq_b64:
                 result["equity_chart_base64"] = eq_b64
+            elif isinstance(eq_b64, dict):
+                result["equity_chart"] = eq_b64
         except Exception as e:
             logger.warning("Equity chart generation failed: %s", e)
 
         try:
             trade_b64 = _render_trade_chart(df, trades, ticker, strat_label)
-            if trade_b64:
+            if isinstance(trade_b64, str) and trade_b64:
                 result["trade_chart_base64"] = trade_b64
+            elif isinstance(trade_b64, dict):
+                result["trade_chart"] = trade_b64
         except Exception as e:
             logger.warning("Trade chart generation failed: %s", e)
 
@@ -871,10 +875,18 @@ def _downsample(curve: list[dict], max_points: int) -> list[dict]:
 
 # ── Phase 7.2: Backtest Chart Generation ─────────────────────────────────────
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import matplotlib.dates as mdates  # noqa: E402
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt  # noqa: E402
+    import matplotlib.dates as mdates  # noqa: E402
+    _MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    matplotlib = None
+    plt = None
+    mdates = None
+    _MATPLOTLIB_AVAILABLE = False
+
 import base64  # noqa: E402
 import io  # noqa: E402
 
@@ -958,8 +970,10 @@ def _render_equity_chart(
     ticker: str,
     strategy_name: str,
     stats: dict,
-) -> str:
+) -> str | dict[str, Any]:
     """Render equity curve + drawdown as base64 PNG."""
+    if not _MATPLOTLIB_AVAILABLE:
+        return {"available": False, "reason": "matplotlib optional dependency is not installed"}
     if len(equity_curve) < 2:
         return ""
 
@@ -1024,13 +1038,18 @@ def _render_equity_chart(
     return base64.b64encode(raw).decode("utf-8")
 
 
+render_equity_chart = _render_equity_chart
+
+
 def _render_trade_chart(
     df: pd.DataFrame,
     trades: list[Trade],
     ticker: str,
     strategy_name: str,
-) -> str:
+) -> str | dict[str, Any]:
     """Render candlestick chart with entry/exit markers as base64 PNG."""
+    if not _MATPLOTLIB_AVAILABLE:
+        return {"available": False, "reason": "matplotlib optional dependency is not installed"}
     try:
         import mplfinance as mpf
     except ImportError:

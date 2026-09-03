@@ -17,7 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import chromadb
+try:
+    import chromadb
+    _CHROMADB_AVAILABLE = True
+except ImportError:          # optional dependency
+    chromadb = None
+    _CHROMADB_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +40,14 @@ EMBEDDING_BATCH_SIZE = 20
 # Lazy-loaded clients
 # ---------------------------------------------------------------------------
 
-_chroma_client: Optional[chromadb.PersistentClient] = None
+_chroma_client: Optional[Any] = None
 _genai_client = None
 
 
-def _get_chroma() -> chromadb.PersistentClient:
+def _get_chroma() -> Any:
     global _chroma_client
+    if not _CHROMADB_AVAILABLE:
+        raise RuntimeError("chromadb optional dependency is not installed")
     if _chroma_client is None:
         CHROMADB_PATH.mkdir(parents=True, exist_ok=True)
         _chroma_client = chromadb.PersistentClient(path=str(CHROMADB_PATH))
@@ -129,8 +136,10 @@ def ingest_knowledge(
     source: str,
     doc_type: str = "book_summary",
     section: str = "",
-) -> None:
+) -> Any:
     """Ingest a chunk of knowledge into the knowledge base."""
+    if not _CHROMADB_AVAILABLE:
+        return {"available": False, "reason": "chromadb optional dependency is not installed"}
     try:
         collection = _get_knowledge_collection()
         chunk_id = hashlib.md5(f"{source}:{section}:{text[:100]}".encode()).hexdigest()
@@ -155,15 +164,17 @@ def ingest_knowledge(
 # Trade Memory Collection (Module 5 Semantic Recall)
 # ---------------------------------------------------------------------------
 
-def _get_trade_memory_collection() -> chromadb.Collection:
+def _get_trade_memory_collection() -> Any:
     return _get_chroma().get_or_create_collection(
         name="trade_memory",
         metadata={"hnsw:space": "cosine"},
     )
 
 
-def ingest_trade_memory(entry: dict) -> None:
+def ingest_trade_memory(entry: dict) -> Any:
     """Ingest a conviction journal entry or trade outcome into the ChromaDB trade_memory collection."""
+    if not _CHROMADB_AVAILABLE:
+        return {"available": False, "reason": "chromadb optional dependency is not installed"}
     try:
         collection = _get_trade_memory_collection()
         chunk_id = str(entry.get("id"))
@@ -223,7 +234,7 @@ async def recall_similar_setups(
     ticker: Optional[str] = None,
     playbook: Optional[str] = None,
     origin: Optional[str] = None,
-) -> list[dict]:
+) -> Any:
     """Recall similar historical setups and their outcomes from trade memory.
 
     Args:
@@ -236,6 +247,8 @@ async def recall_similar_setups(
     Returns:
         List of similar past setups with similarity score, outcome results, and thesis.
     """
+    if not _CHROMADB_AVAILABLE:
+        return {"available": False, "reason": "chromadb optional dependency is not installed"}
     try:
         collection = _get_trade_memory_collection()
         if collection.count() == 0:
@@ -294,16 +307,25 @@ async def recall_similar_setups(
 # Search — LLM Tool
 # ---------------------------------------------------------------------------
 
-async def search_knowledge(query: str, top_k: int = 5) -> list[dict]:
+async def search_knowledge(
+    query: str,
+    top_k: int = 5,
+    n_results: int | None = None,
+    **kwargs: Any,
+) -> Any:
     """
     Search Sam's knowledge base — 139 trading books, options manual, and methodology.
 
     Args:
         query: What to search for (e.g., "cash secured puts", "EMA stack", "VoPR").
         top_k: Number of results. Default: 5.
+        n_results: Alias for top_k.
 
     Returns a list of relevant knowledge chunks with source attribution.
     """
+    if not _CHROMADB_AVAILABLE:
+        return {"available": False, "reason": "chromadb optional dependency is not installed"}
+    k = n_results if n_results is not None else top_k
     try:
         collection = _get_knowledge_collection()
         if collection.count() == 0:
@@ -313,7 +335,7 @@ async def search_knowledge(query: str, top_k: int = 5) -> list[dict]:
 
         results = collection.query(
             query_embeddings=[query_embedding],
-            n_results=min(top_k, collection.count()),
+            n_results=min(k, collection.count()),
             include=["documents", "metadatas", "distances"],
         )
 
@@ -349,6 +371,8 @@ def get_rag_context(query: str, max_chars: int = 4000) -> tuple[str, list[dict]]
     Returns (context_string, sources_list) where sources_list contains
     the source/section pairs for Glass Box transparency display.
     """
+    if not _CHROMADB_AVAILABLE:
+        return "", []
     try:
         collection = _get_knowledge_collection()
         if collection.count() == 0:
@@ -409,6 +433,8 @@ def get_rag_context(query: str, max_chars: int = 4000) -> tuple[str, list[dict]]
 
 def get_knowledge_stats() -> dict:
     """Get knowledge base statistics."""
+    if not _CHROMADB_AVAILABLE:
+        return {"available": False, "reason": "chromadb optional dependency is not installed"}
     try:
         kb = _get_knowledge_collection()
         return {
