@@ -1,234 +1,246 @@
-# Plan — the funnel, and how the three repos relate
+# The funnel plan
 
-**Revision 3, 2026-09-03.** Revision 2 planned a new public MCP repo as the
-acquisition channel. That was written without knowing Vespryx existed in the
-state it does. The funnel already exists, is already paid, and is already
-distributed — so this revision inverts the strategy. Change log in §11.
-
----
-
-## 1. Verdict
-
-**The funnel is Vespryx, not a new repo.**
-
-`tradernetwork/dealer-hud` (product name **Vespryx**, v0.22.12) is already:
-
-- **shipping on the Chrome Web Store** —
-  `https://chromewebstore.google.com/detail/vespryx/pogpghbkbbbjolibaeaefnfklhgchkob`
-- **a paid product with its own subscription**, separate from TD Pro
-  (`hasVespryx`; the code is explicit that "TD Pro subscription does not include
-  Vespryx at any tier"), with entitlement probes and 403→paywall handling
-- **trader-facing**, overlaying GEX / apex / unusual flow onto TradingView and
-  cashtags across the web
-- **already serving MCP tools** — `tools/td-mcp.mjs` registers **17**: five
-  dealer-data (`get_gex_ticker`, `get_apex_levels`, `get_ticker`,
-  `get_dealer_payload`, `get_token_status`) and twelve `tv_*` chart-control
-  tools driving the user's own TradingView tab through `gui.mjs`
-  (`127.0.0.1:7777`). Hand-rolled stdio JSON-RPC, no MCP SDK dependency.
-- **already bridging browser session → headless tooling** —
-  `tools/td-token.mjs` installs a `{access_token, refresh_token}` pair to a
-  token file, and `tools/td-api.mjs` is the JWT client (Bearer header, refresh
-  on 401)
-
-Every problem revision 2 was going to spend months solving, Vespryx has already
-solved: distribution, audience, a purchase moment, and access to **apex levels**
-— which no paid API key can reach (§4).
-
-Two things it has **not** solved, and they are the work: **conviction** is
-exposed nowhere outside the web app (not even in `td-mcp.mjs`), and the
-credential handoff is still manual copy-paste. The deliverable is therefore
-**a device flow** (§5), plus one live bug to fix today (§9).
+**Revision 4, 2026-09-03.** Rewritten, not patched. Revisions 1-3 each got the
+shape wrong in a different way; the change log is §10. This one starts from what
+was actually verified in the code and against the live boxes.
 
 ---
 
-## 2. Three repos, linked but not merged
+## 1. The strategy, in one page
 
-| repo | product | visibility | role |
-|---|---|---|---|
-| `mphinance/trading-agent` | **Vesper** — the cockpit: LangGraph agent, risk gate, order path, live account | public today | credibility and portfolio. Not a funnel. |
-| `tradernetwork/dealer-hud` | **Vespryx** — Chrome extension + desktop tools + MCP server | private | **the funnel.** Paid, distributed, trader-facing. |
-| `tradernetwork/quant-mcp` | thin open shell (§6) | would be public | a pointer, not a product. Optional. |
+**Research is free. Live positioning is paid.**
 
-### Why they stay separate
-
-- **Different languages and toolchains.** Vesper is Python; Vespryx is
-  JS/Node + MV3.
-- **Different release cadences.** Chrome Web Store review is days; PyPI is
-  minutes; a private cockpit is push-when-ready. Merging couples the slowest to
-  the fastest.
-- **Different risk classes.** Vesper can move money. Vespryx is a consumer
-  product under store review. Those should never share a release train.
-- **Different audiences.** Traders install Vespryx. Developers read Vesper.
-
-### How they link
-
-Linking is cross-reference, not dependency:
-
-- Vesper's README: "the dealer data this agent trades on comes from Vespryx →
-  store link."
-- Vespryx's docs: "the autonomous agent built on this data → Vesper."
-- `quant-mcp` (if built): "want live dealer positioning on your chart? →
-  Vespryx."
-
-No repo imports another. No shared submodule. The link is a sentence and a URL.
-
----
-
-## 3. Why the funnel inverted
-
-Revision 2's plan had four problems. Vespryx answers all four; a new public repo
-answers none of them.
-
-| revision 2's problem | new repo | Vespryx |
+| | what | cost to serve |
 |---|---|---|
-| Discovery — the whole English-language US-equity MCP niche tops out at 40-120 stars (`options mcp` peaks at **39**) | ceiling of low hundreds | Chrome Web Store: real search, one-click install, install counts |
-| Audience — MCP installers are developers; the buyer is a trader | targets the intersection | targets traders directly |
-| No purchase moment; five context switches from intent to buy | had to be designed from scratch | subscription, entitlement checks and paywall handling already shipped |
-| The free tier is a complete product, so nobody reaches the paywall | 47 free tools = the leak | the product *is* the paid thing |
+| **Free** | ~37 quant tools: screeners (CANSLIM / VCP / PEAD), 24 technical indicators, backtesting + walk-forward, EDGAR filings and XBRL, breadth, macro regime, market-top detection, position sizing, pair trade, Monte Carlo | **nothing** |
+| **Paid** | dealer gamma, apex levels, options flow, dark pool, directional flow, conviction | your TMpro API capacity |
+
+The economics are what make this work, and they are the thing earlier revisions
+missed. An MCP server runs **on the user's own machine**. Those 37 tools call
+yfinance, TradingView and EDGAR directly from there, and compute the rest
+locally. They consume **zero TMpro API calls, zero rate limit, zero infra.**
+
+So the standard objection to a generous free tier — "it is so complete nobody
+reaches the paywall" — is real but mispriced. Someone who installs, loves the VCP
+screener and never pays costs approximately nothing. Meanwhile the upside is a
+genuinely differentiated free product: 37 quant tools no other MCP server offers,
+against a niche where the top result for `options mcp` has **39 stars**.
+
+The line is also honest rather than crippled. "Nightly research free, intraday
+positioning paid" is a distinction a trader understands immediately, and it does
+not feel like a demo with the good parts sawn off.
+
+**The one design requirement it creates:** those two halves serve different jobs.
+Someone who came for a nightly screener may never want intraday gamma. So the
+free tools must *surface the gap* — a screener result that ends "3 of these have
+unusual flow today" and stops — rather than quietly not mentioning it. Otherwise
+the free product is complete and the paid one is invisible. This is a small
+amount of work in tool output and it is the highest-leverage item in the plan.
 
 ---
 
-## 4. What each auth path can actually reach
+## 2. What actually exists — four MCP surfaces
 
-This is the fact that decides everything downstream.
+| # | surface | tools | auth | reachable by |
+|---|---|---|---|---|
+| 1 | `trading_mcp` — `agent.mphinance.com` | 60 (47 momentum + 13 Vesper reads) | bearer + OAuth 2.1 | you only |
+| 2 | `mcp_server/server.py` — local stdio | ~47 momentum | none (local) | you only |
+| 3 | `/api/v1/mcp` — TMpro backend | 18 tool modules | `td_live_` API key | anyone with a key |
+| 4 | `tools/td-mcp.mjs` — Vespryx | 17 (5 dealer + 12 `tv_*`) | session JWT | a subscriber who clones the repo |
 
-| | **paid API key** (`td_live_`) | **session** (what Vespryx uses) |
-|---|---|---|
-| namespace | `/api/v1/*` + `/api/v1/mcp` | `/api/*` |
-| gex / gamma, unusual activity | ✅ | ✅ |
-| dark pool, directional flow, hedge, short data, smart money, premarket gappers | ✅ *(MCP mount only)* | ✅ |
-| screeners, sectors, put/call, signals, earnings, institutional, insider, politician | ✅ | ✅ |
-| **apex levels** | ❌ | ✅ |
-| **conviction** | ❌ | ✅ |
-| liquidity map, market health, IPO scanner, whale watch, fear/greed | ❌ | ✅ |
-| watchlists, journal, follows, settings | ❌ | ✅ |
+**They barely overlap.** Surfaces 1 and 2 are the quant/analytics layer plus
+Vesper state. Surface 3 is TMpro's flow layer. Surface 4 is one account's live
+gamma view plus chart control. Only the TDPro passthrough is duplicated — and
+that is the part that is broken (§3) and unshippable (§7).
 
-**The paid key surface is a strict subset of what a logged-in session sees**, and
-the two biggest differentiators — apex levels and conviction — are on the wrong
-side of that line for a key holder.
-
-Their own licensing doc (`reference/data-licensing.md` §3) classifies both as
-🟢 derived TDP IP and calls `get_apex_levels` "the showcase for a derived-only
-license" — so exposing them to keys is *permitted*, just **not built**. No public
-MCP tool module exists for either, on any branch.
-
-Which leaves the choice:
-
-- **Ride the session** (what Vespryx does) → apex available today, zero backend
-  work. Browser-bound.
-- **Build public tool modules** for apex and conviction → unblocks the key path.
-  The pattern exists 18 times over in `src/mcp/public/tools/`, each with a
-  projection allowlist and a test. Deferred, not rejected.
-
-### The free/paid line already exists, and it is the right shape
-
-Confirmed in `tools/td-api.mjs`:
-
-- **`GET /gex/{sym}` and `GET /ticker/{sym}` need no Authorization header at
-  all** — GEX is genuinely public.
-- **`GET /gex/{sym}/apex` requires the session** and answers HTTP 200 with
-  `{success:false, locked:true, error:'premium_required'}` when the account is
-  not entitled.
-
-That is *degradation, not a wall* — the exact gate shape revision 2 argued for,
-already built: everyone gets gamma, apex is what you pay for. `get_dealer_payload`
-even fetches both in parallel and degrades gracefully with an `apexNote` when
-apex is locked.
-
-**Conviction is not exposed by `td-mcp.mjs` at all** — no tool, no client call.
-So of the two differentiators, apex is live over the session path and conviction
-is not reachable anywhere outside the web app.
+**Neither apex levels nor conviction is served by any of them** except through a
+browser session. Four MCP servers, and not one can deliver the two best assets.
 
 ---
 
-## 5. The device flow — the one thing worth building
+## 3. Broken right now — verified against the live server
 
-### Today
+Three real calls to `agent.mphinance.com`:
 
-`tools/td-token.mjs`: the user clicks a "copy token" button, pastes
-`{access_token, refresh_token}` JSON into the CLI, and it lands in a token file.
-`td-api.mjs` then holds the Bearer header and refreshes on 401.
+```
+get_market_pulse   →  {"error": "TRADERDADDY_API_URL not set in .env"}
+get_fundamentals   →  AAPL, $328.21, mkt cap 4.79T          ✅
+get_halt_status    →  {"available": true, "is_halted": false} ✅
+```
 
-Token file is `~/.cache/vespryx/td-token.json`, `{access, refresh}`, forced 0600.
-`tdGet` refreshes once transparently on 401.
+Every TDPro-backed tool on the deployed server is dead, across four modules
+(`server.py`, `macro.py`, `pead_screener.py`, `registry.py`). yfinance, EDGAR,
+TradingView screeners, the computed analytics and all 13 Vesper reads work fine.
 
-It works. It is also the friction point — and it has already failed expensively
-in a way that argues for replacing it:
+So the deployed surface is not "60 tools" — it is **~37 working and the dealer-data
+half erroring**. Which, read the other way, is the free tier already running in
+production and proving it holds up without TMpro at all.
 
-> `td-api.mjs:296-303` documents a real incident: **the session had been dead
-> since 4 August and every tool answered "Dealer levels are a paid feature" on a
-> paid-up plan.** Apex returns `200 {locked:true}` for an expired token as well
-> as for a genuine entitlement failure, so a stale credential is indistinguishable
-> from an unpaid one. The code now separates `SESSION_EXPIRED` from `LOCKED`, but
-> the root cause is a credential that silently rots because a human has to
-> re-paste it.
-
-A manual token that expires quietly, on a product whose paywall message is the
-failure mode, is worth engineering away.
-
-### Proposed
-
-The standard device-authorization flow, the same shape as `gh auth login`:
-
-1. Headless tool prints a URL and a short code.
-2. User opens it in the browser **where they are already signed in** — that's
-   the existing session doing the work, no new auth surface.
-3. Backend verifies the session and the **Vespryx entitlement** (`hasVespryx` —
-   not TD Pro tier; the code is already careful about that distinction) and
-   binds the code.
-4. Tool polls, receives the credential, writes the token file.
-5. Refresh continues exactly as today.
-
-### What it needs
-
-- **Backend:** an endpoint pair (`/api/device/code`, `/api/device/token`) in the
-  Whop backend. Small, and it is the same mechanism a free-trial key would use.
-- **Client:** device-code support in `td-token.mjs`, unchanged `td-api.mjs`.
-- **Nothing in `trading-agent`.**
-
-### Why it matters beyond convenience
-
-It is also the **purchase moment**. A user who hits the flow without a Vespryx
-entitlement gets, in the same response, a signup link with a referral parameter —
-so the buy step happens inside the flow rather than sending them off to hunt a
-pricing page. That is the single conversion surface revision 2 left undesigned.
+**This is not a one-variable fix.** See §7.
 
 ---
 
-## 6. What `quant-mcp` becomes
+## 4. The paid side, and what it can actually be sold through
 
-Substantially smaller, and genuinely optional.
+### Vespryx is the distribution that already exists
 
-Its job is **not** to be a 47-tool free product — that was the conversion leak.
-A satisfying free screener/backtest/EDGAR toolkit means people install, get what
-they came for, and never approach anything paid.
+`tradernetwork/dealer-hud`, v0.22.12, **live on the Chrome Web Store**:
+`https://chromewebstore.google.com/detail/vespryx/pogpghbkbbbjolibaeaefnfklhgchkob`
 
-If it is built at all, it is a thin open shell whose README's most important line
-is a link to Vespryx. Decide it **after** the device flow ships, with real
-numbers from the store listing, not before.
+It is a paid product with its own subscription (`hasVespryx`, explicitly separate
+from TD Pro), trader-facing, riding the user's own session — so it reaches apex,
+which no API key can. One-click install, real search, install counts. No GitHub
+repo competes with that for a trader audience.
 
-`quant-mcp` is free on PyPI and npm; the name can be reserved cheaply and held.
+### The free/paid line already exists in the data layer
+
+- `GET /gex/{sym}` and `GET /ticker/{sym}` need **no Authorization header at all**
+- `GET /gex/{sym}/apex` requires the session and returns
+  `200 {locked:true, error:'premium_required'}` when unentitled
+
+That is degradation rather than a wall, already built. GEX being public is a
+gift: the free tier gets a genuinely good hook that costs nothing to give away.
+
+### What the paid key surface can and cannot serve
+
+`/api/v1/mcp` serves 18 modules — gex, unusual activity, dark pool, directional
+flow, smart money, hedge, short data, premarket gappers, ticker lab, screener,
+sectors, put/call, signals, earnings, economic calendar, insider, long term,
+market stats.
+
+**It does not serve apex or conviction.** Their own
+`reference/data-licensing.md` §3 classifies both as 🟢 derived TDP IP and calls
+`get_apex_levels` *"the showcase for a derived-only license"* — so publishing them
+is permitted, just never built. No public tool module exists for either, on any
+branch. The pattern to copy exists 18 times over in `src/mcp/public/tools/`, each
+with a projection allowlist and a test.
 
 ---
 
-## 7. Still true from revision 2 — do these regardless
+## 5. What has to be built
 
-1. **Land the security work.** 19 files uncommitted from the 2026-09-03
-   placeholder-token incident: `core/secret_hygiene.py`, the startup guard, the
-   fail-closed approver allowlist, `install.sh`'s placeholder refusal, the
-   OAuth GET→POST fix, the A4 import pins, and the doc corrections. Suite is
-   green at 765.
-2. **Scrub production specifics**, case-insensitively. `mcp_server/` and `core/`
-   are now clean; `docs/`, `deploy/` and `autonomous/` still carry ~200
-   `coolify` and ~38 `agent.mphinance.com` references, and
-   `mphinance/trading-agent` is public today.
-3. **Verify TDPro tools actually work on the deployed box.** `mcp_server/`
-   authenticates via `core/traderdaddy.py`, which needs
-   `TRADERDADDY_API_URL`/`EMAIL`/`PASSWORD`; the live box has only `TD_API_KEY`
-   and `TDPRO_API_KEY`. A large share of the 60 advertised tools may be dead.
-4. **Rotate-and-reconnect hygiene.** `TRADING_AGENT_TOKEN` was rotated
-   2026-09-03; the claude.ai connector needs re-adding, not editing, because the
-   same secret signs OAuth tokens.
+Four items, in dependency order. Only the first is strictly required for the free
+funnel; the rest are what turn it into revenue.
+
+### 5.1 Let free-tier users mint a key — not a new tier
+
+**A free tier already exists.** `src/middleware/auth.ts:181-184`:
+
+```js
+const tier = req.user.subscription_tier ?? 'free';
+const tierOrder = { free: 0, premium: 2 };
+```
+
+The comment above it says there is exactly one paying tier. So every signed-up
+non-payer is already `free`. Nothing to model, no pricing change.
+
+The gap is a *different switch*: `has_api_access`, which gates minting a
+`td_live_` key, is flipped true **only** by the Stripe webhook on a completed
+subscription — and the 5-day trial uses `missing_payment_method: 'cancel'`, so a
+card is required up front. A free user can log in and cannot get a key at all.
+
+**The change:** let `free`-tier users mint a key with a lower
+`rate_limit_per_min`. The `api_keys` table already stores the rate limit per key,
+so the throttle exists. One rule, not a pricing change.
+
+*Verify first:* whether `has_api_access` is genuinely independent of
+`subscription_tier` in the schema, or whether the Stripe webhook is its only
+writer. If it is the only writer, adding a second path is the whole change.
+
+### 5.2 A scope column, or the free key IS the paid key
+
+Today a key is all-endpoints-or-nothing: the `ApiKey` type carries only
+`rate_limit_per_min`, `is_active`, `revoked_at`. No scope, no tier, no expiry.
+
+**So if you flip `has_api_access` for free users today, a free key is identical to
+a paid one.** 5.1 without 5.2 gives the paid surface away. Needs a
+`scope`/`allowed_tools` column checked in `finishApiKeyAuth`.
+
+### 5.3 A device flow
+
+Vespryx's headless path works but the credential handoff is manual: the user
+clicks "copy desktop token", pastes `{access_token, refresh_token}` into
+`td-token.mjs`, and it lands in `~/.cache/vespryx/td-token.json` (0600).
+
+That has already failed expensively. `td-api.mjs:296-303` records it: **the
+session had been dead since 4 August and every tool answered "Dealer levels are a
+paid feature" on a paid-up plan** — because apex returns `200 {locked:true}` for
+an expired token *and* for a genuine entitlement failure. The code now separates
+`SESSION_EXPIRED` from `LOCKED`, but the root cause is a credential that rots
+because a human has to re-paste it.
+
+The flow, same shape as `gh auth login`: tool prints a URL and short code → user
+approves in the browser where they are already signed in → backend checks the
+entitlement and mints → tool polls, receives, writes the token file.
+
+**It is also the purchase moment.** A user without an entitlement gets a signup
+link with a referral parameter *in the same response*, so the buy decision happens
+where they already are rather than five context switches away on a pricing page.
+
+### 5.4 Apex and conviction as public tool modules
+
+Optional and last, but it is what a paid key is actually *for*. Until this exists,
+a paid key buys the flow layer — good, but not the differentiators.
+
+---
+
+## 6. What ships publicly
+
+The cut is already drawn and mechanically enforced: `mcp_server/`'s full
+transitive closure — including deferred and function-level imports — reaches
+`vesper/` and `trading_mcp/` **zero times**, pinned by
+`tests/test_import_boundaries.py::test_mcp_server_never_imports_vesper`.
+
+**Ships:** `mcp_server/` (28 files) + 16 `core/` modules: `cache`, `charts`,
+`conviction`, `data`, `edgar`, `knowledge`, `macro_regime`, `market_top`,
+`options`, `options_greeks`, `risk`, `schema`, `screener`, `technicals`,
+`traderdaddy`\*, `vcp_screener`.
+
+**Never ships:** `vesper/`, `trading_mcp/`, `deploy/`, `autonomous/`, `docs/`, and
+`core/`: `wb`, `md`, `td`, `approval_registry`, `halt`, `circuit_breaker`,
+`paper_ledger`, `audit_chain`, `position_preview`, `metrics`, `quotes`,
+`secret_hygiene`.
+
+No broker client is in the public graph — `core/wb.py` and `core/md.py` are both
+absent, so nobody can point it at a brokerage.
+
+\* *`core/traderdaddy.py` ships only after §7 is done. As written it must not.*
+
+---
+
+## 7. The blocker: `core/traderdaddy.py` calls the internal superuser namespace
+
+`core/traderdaddy.py:207`:
+
+```python
+url = f"{base}/api/agent/{path.lstrip('/')}"
+```
+
+`/api/agent/*` is the **internal** namespace — gated by `AGENT_API_KEY`, a single
+shared master credential, reserved for MCP-internal, the Discord bot and in-app
+chat. It is not the customer API. And `_agent_get` calls `_get_token()`
+regardless, which needs `TRADERDADDY_EMAIL` + `TRADERDADDY_PASSWORD`.
+
+Three consequences:
+
+1. **§3 is not a one-variable fix.** Setting `TRADERDADDY_API_URL` alone leaves
+   `_get_token()` failing. And on an OAuth-only account there may be no password
+   to supply at all.
+2. **This file cannot ship publicly as written.** A public repo containing a
+   client for your internal superuser namespace is a different kind of mistake
+   from a leaked hostname.
+3. **The fix is the same as the funnel work.** Repoint at `/api/v1/*` with an
+   `X-API-Key` header, delete `_login()`/`_get_token()`.
+
+That last point is why this is cheap. `src/routes/publicApi.ts:60-77` re-exports
+**the same route handlers** at `/api/v1/*` that the web app uses at `/api/*` —
+same handlers, same response shapes. So the ten call sites in
+`mcp_server/server.py` do not change at all; only `_agent_get` does. Roughly a
+20-line diff that simultaneously fixes the live breakage, removes the master-key
+dependency, makes your own server use the credential a customer would, and makes
+the file shippable.
+
+**Do this one first.** It is the single highest-value change in the document.
 
 ---
 
@@ -236,72 +248,50 @@ numbers from the store listing, not before.
 
 | # | step | gate |
 |---|---|---|
-| 1 | Commit + push the security/doc work | `pytest -q` green (765) |
-| 2 | Case-insensitive scrub, whole repo | `grep -i` clean |
-| 3 | Verify the TDPro auth gap on the live box (§7.3) | tools return data |
-| 4 | Confirm what `td-mcp.mjs` already serves | tool list known |
-| 5 | Build the device flow: backend endpoint pair + `td-token.mjs` client | a stranger can auth without copy-paste |
-| 6 | Put the signup/referral link in the un-entitled device-flow response | purchase moment exists |
-| 7 | Instrument: store installs, device-flow completions, attributed signups | a number, written down |
-| 8 | Add cross-links between the three repos | — |
-| 9 | *Optional, later:* public apex/conviction tool modules | licensing projection + guard test |
-| 10 | *Optional, later:* decide whether `quant-mcp` ships at all | store numbers say yes or no |
+| 1 | Repoint `core/traderdaddy.py` at `/api/v1/*` with `X-API-Key` (§7) | `get_market_pulse` returns data on the live box |
+| 2 | Verify: can `has_api_access` be set without Stripe? (§5.1) | yes/no, in the schema |
+| 3 | Add the `scope`/`allowed_tools` column + check (§5.2) | a scoped key is refused outside its scope |
+| 4 | Let `free` tier mint a capped key (§5.1) | a carded-out stranger gets a working key |
+| 5 | Make the free tools surface the gap ("3 of these have unusual flow today") | the paid layer is visible from inside the free one |
+| 6 | Device flow, with the signup link in the un-entitled response (§5.3) | no copy-paste; buy happens in-flow |
+| 7 | Fix `QUICKSTART.md` Path 2 — it tells paid users to clone a **private** repo (404) | link resolves |
+| 8 | Public repo: manifest, README, `server.json`, PyPI/npm `quant-mcp` | `uvx` works from a clean machine |
+| 9 | Instrument: installs, gate-hits, attributed signups. 90-day checkpoint | a number written down beforehand |
+| 10 | *Later:* apex + conviction public tool modules (§5.4) | projection allowlist + guard test |
+
+Steps 1 and 7 are worth doing whatever happens to the funnel.
 
 ---
 
-## 9. Bug found while auditing — fix this one today
+## 9. Open questions
 
-**`QUICKSTART.md:27-60` tells users to clone a private repo.**
-
-"Path 2: Desktop CDP Automation & Coding Agents" is published, user-facing
-instruction aimed at Claude Code / Cursor users on a `beginner+` Vespryx tier.
-It says to run:
-
-```
-git clone https://github.com/tradernetwork/dealer-hud
-```
-
-`tradernetwork/dealer-hud` is **private**. Every non-collaborator who follows
-that path gets a 404 — on a documented, paid-tier feature. Either the repo
-(or a `tools/`-only subset) needs to be published, or Path 2 needs a different
-distribution mechanism, or the doc needs to stop promising it.
-
-This also answers what `td-mcp.mjs`'s distribution actually is:
-`tools/package.mjs:348-353` explicitly excludes `tools/`, `test/`, `site/`,
-`docs/` and `pine/` from the Chrome Web Store zip, with a hard leak check that
-exits non-zero if any slips in. So the extension never ships the MCP server —
-the clone path is the only route to it, and it is currently broken for
-everyone outside the org.
+1. **Is `has_api_access` writable outside the Stripe webhook?** Decides whether
+   §5.1 is a config change or a schema change.
+2. **Does anything in Vespryx go public?** QUICKSTART Path 2 already assumes it
+   is, and it is the product being sold.
+3. **What is the free key's rate limit?** Paid is 30/min. Free needs to be
+   usable-but-clearly-less.
+4. **Does the free MCP server ship the knowledge base?** `data/chromadb/` is 16 MB
+   and gitignored, so the code would ship with no data behind it. Seed, exclude,
+   or document as bring-your-own.
 
 ---
 
-## 10. Open questions
+## 10. Change log
 
-1. ~~Does `td-mcp.mjs` ship to users?~~ **Answered:** not in the extension
-   package; only via the (currently broken) clone path in QUICKSTART Path 2.
-2. ~~Does it expose apex and conviction?~~ **Answered:** apex yes
-   (`get_apex_levels`, plus inside `get_dealer_payload`); conviction no, nowhere.
-3. **Does anything in Vespryx go public?** It is the product being sold, so
-   opening it is a different decision from opening Vesper — but §9 forces the
-   question, because Path 2 already assumes it is public.
-4. **Free-trial shape.** The Whop backend has no no-card path today —
-   `has_api_access` flips only on a completed Stripe subscription, and the 5-day
-   trial requires a card. A device flow that can only ever return "you must pay
-   first" is a worse funnel than one that can hand out a limited trial.
-
----
-
-## 11. Change log
-
-| revision 2 said | revision 3 |
+| earlier revisions said | revision 4 |
 |---|---|
-| Build a public MCP repo as the funnel | The funnel already exists and is on the Chrome Web Store |
-| Design a purchase moment from scratch | Vespryx already has a subscription, entitlement checks and paywall handling |
-| MCP installers are the audience | Traders are, and the extension already reaches them |
-| Session auth "does not transfer" to headless | It already does — `td-token.mjs` + `td-api.mjs`, manually |
-| Apex/conviction need new backend work | Reachable via session today; backend modules are an optimisation, not a blocker |
-| `quant-mcp` is the deliverable | The device flow is the deliverable; `quant-mcp` is optional and later |
+| Build a public MCP repo as the funnel (r1-r2) | The 37 zero-cost tools are the funnel; Vespryx is the paid distribution |
+| The free layer is too complete, it will leak (r2) | Mispriced. It costs nothing to serve — the leak is free |
+| The funnel is Vespryx, `quant-mcp` is optional (r3) | Both: free tools acquire, Vespryx and the key surface monetise |
+| "needs a TMpro API key" (r2) | Keys are real, per-customer, revocable, rate-limited — and already gate `/api/v1/mcp` |
+| Add a free tier (r3) | A free tier **already exists**. The gap is `has_api_access`, one rule |
+| One env var fixes the live breakage | False. `traderdaddy.py` calls `/api/agent/*`, the internal superuser namespace |
+| Ship `core/traderdaddy.py` in the public manifest | Not until it is repointed at `/api/v1/*` |
+| Apex/conviction reachable by key | Neither is on any key surface. Session-only |
 
-**Unchanged and still verified:** the 16-module public manifest and its zero
-`vesper`/`trading_mcp` reachability; no broker client in that graph; the
-placeholder-token incident and its four guards; `quant-mcp` free on PyPI and npm.
+**Verified and unchanged:** the 16-module manifest and its zero `vesper`
+reachability; no broker client in the public graph; `td_live_` keys hashed,
+revocable, Redis rate-limited, failing closed; GEX public and apex gated;
+`quant-mcp` free on PyPI and npm; the niche ceiling (`options mcp` peaks at 39
+stars).
