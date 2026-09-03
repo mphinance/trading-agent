@@ -991,14 +991,50 @@ async def test_bearer_and_oauth_paths_converge_on_one_verify_token(monkeypatch):
 
 
 def test_dcr_registration_rejects_scope_beyond_valid_scopes():
-    """RFC 7591 registration itself is the first escalation checkpoint: a
-    client asking for a scope this server never issues (e.g. "admin", which
-    doesn't exist here -- "read" is the only valid scope) must be refused at
-    registration, not silently clamped later. Exercises the real mcp-SDK
-    `RegistrationHandler` through `SingleOperatorOAuthProvider`'s
-    `ClientRegistrationOptions(valid_scopes=["read"])`."""
+    """RFC 7591 registration is the first escalation checkpoint: a client
+    asking for a scope this server never issues (e.g. "admin") must be refused
+    at registration, not silently clamped later.
+
+    NOTE the docstring here used to claim '"read" is the only valid scope',
+    which contradicted its own assertion. `_make_oauth_provider()` passes no
+    `required_scopes`, so it gets the constructor's permissive DEFAULT of all
+    three. That is the object under test here, and "admin" is still not in it.
+    What production builds is a different, narrower object -- see
+    `test_production_oauth_provider_scope_plumbing` below, which is the one
+    that pins the deployed configuration."""
     provider = _make_oauth_provider()
-    assert set(provider.client_registration_options.valid_scopes) == {"read", "safe-write", "trade"}
+    assert set(provider.client_registration_options.valid_scopes) == {
+        "read", "safe-write", "trade",
+    }
+    assert "admin" not in provider.client_registration_options.valid_scopes
+
+
+def test_production_oauth_provider_scope_plumbing(monkeypatch):
+    """Pins what `_build_oauth_provider()` ACTUALLY builds, not what a bare
+    constructor call builds.
+
+    `_build_oauth_provider` passes `required_scopes=["read"]`, and inside
+    `SingleOperatorOAuthProvider.__init__` that same argument also becomes
+    `valid_scopes`. So in production the set collapses to `{"read"}`: no DCR
+    client can register for `trade`, and no credential this server can issue
+    would ever satisfy `order_tools.py`'s `require_scopes("trade")`.
+
+    That is FAIL-CLOSED and therefore safe today (the order tools are not even
+    registered in `server.py`). It is pinned because it is a trap for the
+    person who eventually wires the order path in: flipping on
+    `register_order_tools` alone would lock the owner out too, and the fix
+    belongs here, in the scope plumbing, not in a weakened `require_scopes`.
+    If you widen this, widen it deliberately and update this test with it."""
+    import trading_mcp.server as srv
+
+    monkeypatch.setenv("MCP_PUBLIC_URL", "https://agent.example.test")
+    provider = srv._build_oauth_provider("m2-production-operator-secret")
+
+    assert provider is not None
+    assert set(provider.client_registration_options.valid_scopes) == {"read"}, (
+        "production OAuth scope plumbing changed -- see this test's docstring "
+        "before assuming that is an improvement"
+    )
 
 
 async def test_authorize_request_for_unregistered_scope_never_issues_a_code(monkeypatch):
@@ -1364,6 +1400,26 @@ def _guard_call_sites(pyfile: Path) -> list[str]:
     names = _guard_names(tree)
     found = []
     for node in ast.walk(tree):
+        # getattr(guard, "place") -- dynamic dispatch by string produces no
+        # literal `.place` attribute node at all, so the attribute walk below
+        # goes straight past it. Caught here instead.
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+        ):
+            target, attr = node.args[0], node.args[1]
+            attr_is_order_method = (
+                isinstance(attr, ast.Constant) and attr.value in ("preview", "place")
+            )
+            target_is_guard = (
+                isinstance(target, ast.Name) and target.id in names
+            ) or (isinstance(target, ast.Attribute) and target.attr == "guard")
+            if attr_is_order_method and target_is_guard:
+                found.append(attr.value)
+            continue
+
         if not isinstance(node, ast.Attribute) or node.attr not in ("preview", "place"):
             continue
         base = node.value
@@ -2171,3 +2227,58 @@ print("OK", len(tools))
         f"probe failed (rc={result.returncode})\nstdout={result.stdout}\nstderr={result.stderr}"
     )
     assert result.stdout.strip().startswith("OK"), result.stdout
+
+
+def test_operator_gate_form_posts_the_secret():
+    """The gate form must POST, never GET.
+
+    A GET form puts `operator_key=<TRADING_AGENT_TOKEN>` in the request line,
+    where Traefik's and uvicorn's access logs and the browser's history keep it
+    verbatim -- on every ordinary reconnect, no attacker required. That is the
+    same class of failure as the 2026-09-03 placeholder-token incident: a
+    credential ending up somewhere it is readable. `_gated_authorize` still
+    accepts GET params so the client's initial redirect works; only the step
+    carrying the secret is POSTed.
+    """
+    provider = _make_oauth_provider()
+    response = provider._render_gate_form({}, wrong_attempt=False)
+    body = response.body.decode()
+
+    assert 'method="post"' in body.lower()
+    assert 'method="get"' not in body.lower(), (
+        "the operator gate form reverted to GET, which leaks the operator "
+        "secret into access logs and browser history"
+    )
+
+
+def test_operator_gate_form_names_the_client_and_scope():
+    """A gate that shows the human nothing about what they are approving is a
+    confused deputy waiting for the first scope beyond `read`."""
+    provider = _make_oauth_provider()
+    body = provider._render_gate_form(
+        {"client_id": "claude-connector-1", "scope": "read"}, wrong_attempt=False
+    ).body.decode()
+
+    assert "claude-connector-1" in body
+    assert "read" in body
+
+
+def test_guard_pin_catches_dynamic_getattr_dispatch(tmp_path):
+    """The rule-3 pin must also catch `getattr(guard, "place")(...)`.
+
+    The pin resolves import aliases and dotted access, which covers every
+    idiom the live order path actually uses. Dynamic dispatch by string was
+    the remaining hole: it produces no literal `.place` attribute node, so an
+    AST scan looking only for attribute access walks straight past it.
+    """
+    module = tmp_path / "sneaky_tool.py"
+    module.write_text(
+        "from vesper.execution_guard import guard\n"
+        "def go(ticket):\n"
+        "    return getattr(guard, 'place')(ticket)\n"
+    )
+    hits = _guard_call_sites(module)
+    assert hits, (
+        "the rule-3 guard pin missed getattr(guard, 'place') -- a new MCP "
+        "module could grow a working order path and still pass this suite"
+    )

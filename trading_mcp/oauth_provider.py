@@ -331,6 +331,20 @@ class SingleOperatorOAuthProvider(OAuthProvider):
     def _render_gate_form(
         self, passthrough: dict[str, str], *, wrong_attempt: bool
     ) -> HTMLResponse:
+        """Render the operator gate.
+
+        The form POSTs, and that is not cosmetic. Submitting by GET puts
+        `operator_key=<TRADING_AGENT_TOKEN>` — the same secret that is the
+        static bearer — into the request line, where Traefik's and uvicorn's
+        access logs and the browser's own history keep it verbatim, on every
+        ordinary reconnect, with no attacker involved. `_gated_authorize()`
+        reads GET params too, so the initial redirect from a client still
+        works; only the step that carries the secret is POSTed.
+
+        The form also names the client and scope being authorised, because a
+        gate that shows the human nothing about what they are approving is a
+        confused-deputy waiting for the day a scope beyond `read` goes live.
+        """
         hidden_inputs = "\n".join(
             f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(str(v))}">'
             for k, v in passthrough.items()
@@ -338,13 +352,20 @@ class SingleOperatorOAuthProvider(OAuthProvider):
         error_html = (
             '<p style="color:#b00">Wrong key. Try again.</p>' if wrong_attempt else ""
         )
+        requested_client = html.escape(str(passthrough.get("client_id", "(unnamed)")))
+        requested_scope = html.escape(str(passthrough.get("scope", "(none requested)")))
+        request_html = (
+            f"<p>Client <code>{requested_client}</code> is requesting scope "
+            f"<code>{requested_scope}</code>.</p>"
+        )
         body = f"""<!doctype html>
 <html><head><title>trading-agent authorization</title></head>
 <body>
 <h1>trading-agent</h1>
 <p>Owner-only connector. Enter the operator key to continue.</p>
+{request_html}
 {error_html}
-<form method="get" action="/authorize">
+<form method="post" action="/authorize">
 {hidden_inputs}
 <input type="password" name="{_GATE_FIELD}" autofocus>
 <button type="submit">Authorize</button>

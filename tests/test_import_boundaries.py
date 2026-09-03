@@ -126,6 +126,28 @@ def _scan_vesper_refs(root: Path) -> dict[str, set[str]]:
 # read-only rules, instead.
 EXPECTED_VESPER_TOOLS_REFS: set[str] = set()
 
+# Amendment A4 (app_spec.txt, CLAUDE.md rule 3) landed AFTER the M0-06 baseline
+# above was driven to empty, and it deliberately reopens exactly two doors —
+# no more. Both are keyed by module, because "which file" is the whole control:
+# the point of A4 is that the order path is reachable from ONE named module a
+# reviewer can hold in their head, not from anywhere under trading_mcp/.
+#
+#   order_tools.py  the sanctioned order path. Imports `vesper.execution_guard`
+#                   because A4's other half is that execution code is NEVER
+#                   duplicated -- a second implementation of the guards would be
+#                   far worse than this import. `vesper.risk` comes with it for
+#                   deterministic sizing.
+#   drafting.py     draft_proposal (M8-15..18). Builds an OrderProposal and runs
+#                   the deterministic risk check; it CANNOT place, and the pin
+#                   below still forbids it `vesper.execution_guard`.
+#
+# This is a widening of a security boundary, so it is spelled out per-module and
+# per-import rather than as a blanket "trading_mcp may import vesper".
+A4_SANCTIONED_VESPER_REFS: dict[str, set[str]] = {
+    "trading_mcp/order_tools.py": {"vesper.execution_guard", "vesper.risk"},
+    "trading_mcp/drafting.py": {"vesper.risk", "vesper.state", "vesper.bot.manager"},
+}
+
 # Belt-and-suspenders on top of the exact-match assertion below: even if a
 # future change legitimately widens EXPECTED_VESPER_TOOLS_REFS again (say,
 # a new vesper.* module as pure and justified as alerts_runner once was),
@@ -138,40 +160,43 @@ FORBIDDEN_VESPER_REFS = {
     "vesper.execution_guard",
 }
 
+# The one module A4 exempts from FORBIDDEN_VESPER_REFS. Kept as a separate
+# constant so the exemption is a named, greppable, one-line thing rather than a
+# hole quietly punched in the set above.
+A4_ORDER_PATH_MODULE = "trading_mcp/order_tools.py"
+
 
 def test_trading_mcp_vesper_imports_match_baseline():
     found = _scan_vesper_refs(REPO_ROOT / "trading_mcp")
 
-    # As of M0-06 the baseline is empty, so nothing under trading_mcp/
-    # should reference vesper.* at all -- but keep this check shaped to
-    # tolerate a future non-empty baseline (only vesper_tools.py would be
-    # allowed to carry it) rather than hard-coding "found == {}".
+    # The full expected picture: the (empty) M0-06 baseline for vesper_tools.py,
+    # plus A4's two named modules. Anything else referencing vesper.* is a new
+    # door into the order path and fails here.
+    expected: dict[str, set[str]] = dict(A4_SANCTIONED_VESPER_REFS)
     if EXPECTED_VESPER_TOOLS_REFS:
-        assert set(found) == {"trading_mcp/vesper_tools.py"}, (
-            f"unexpected vesper reference outside vesper_tools.py: {found}"
-        )
-    else:
-        assert found == {}, (
-            f"trading_mcp/ must reference no vesper.* module: {found}"
-        )
+        expected["trading_mcp/vesper_tools.py"] = EXPECTED_VESPER_TOOLS_REFS
 
-    actual = found.get("trading_mcp/vesper_tools.py", set())
-    assert actual == EXPECTED_VESPER_TOOLS_REFS, (
-        "trading_mcp/vesper_tools.py's vesper.* imports changed -- update "
-        "this baseline deliberately as part of the M0 split.\n"
-        f"expected={EXPECTED_VESPER_TOOLS_REFS}\nactual={actual}"
+    assert found == expected, (
+        "trading_mcp/ -> vesper imports changed. Nothing may reference vesper.* "
+        "except the modules amendment A4 names (order_tools.py, drafting.py) and "
+        "only for the imports listed there -- if a new tool needs something from "
+        "vesper/, move that piece into core/ first, the way M0-05/M0-06 did.\n"
+        f"expected={expected}\nactual={found}"
     )
 
-    # M0-06: explicit, name-based denial on top of the baseline's set
-    # equality -- these three must never appear anywhere under trading_mcp/,
-    # regardless of what EXPECTED_VESPER_TOOLS_REFS grows to later.
-    all_refs: set[str] = set()
-    for refs in found.values():
-        all_refs |= refs
-    forbidden_hit = all_refs & FORBIDDEN_VESPER_REFS
-    assert not forbidden_hit, (
-        f"trading_mcp/ must never import these: {forbidden_hit}"
-    )
+    # M0-06 + A4: explicit, name-based denial on top of the baseline's set
+    # equality. `vesper.execution_guard` is exempt in exactly ONE module --
+    # everywhere else under trading_mcp/, importing it is the "new threat model"
+    # sentence in rule 3, and `vesper.monitor` / `vesper.bot.inbound` remain
+    # forbidden with no exemption at all.
+    for module, refs in found.items():
+        forbidden_here = set(FORBIDDEN_VESPER_REFS)
+        if module == A4_ORDER_PATH_MODULE:
+            forbidden_here.discard("vesper.execution_guard")
+        forbidden_hit = refs & forbidden_here
+        assert not forbidden_hit, (
+            f"{module} must never import these: {forbidden_hit}"
+        )
 
 
 def test_mcp_server_never_imports_vesper():

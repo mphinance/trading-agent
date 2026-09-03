@@ -135,7 +135,20 @@ def test_vesper_to_mcp_server_allowlist_never_grows():
 # here from source, independently of that test's own constant, so a
 # regression is caught even if someone edits the other file's baseline
 # without noticing this one.
-TRADING_MCP_TO_VESPER_ALLOWLIST: dict[str, set[str]] = {}
+#
+# Reopened deliberately by amendment A4 (app_spec.txt, CLAUDE.md rule 3), which
+# postdates M0-06: the MCP surface may reach the order path via
+# `vesper.execution_guard` ONLY, from the single designated module
+# `trading_mcp/order_tools.py`, precisely so execution code is never duplicated.
+# `drafting.py` carries the draft_proposal path (build + deterministic risk
+# check + channel broadcast) and cannot place. This file only records WHICH
+# top-level package each module reaches into; tests/test_import_boundaries.py
+# holds the finer-grained per-symbol pin and the "execution_guard is exempt in
+# exactly one module" rule.
+TRADING_MCP_TO_VESPER_ALLOWLIST: dict[str, set[str]] = {
+    "trading_mcp/drafting.py": {"vesper"},
+    "trading_mcp/order_tools.py": {"vesper"},
+}
 
 
 def test_trading_mcp_vesper_imports_match_m0_06_allowlist():
