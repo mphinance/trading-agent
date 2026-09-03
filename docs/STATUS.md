@@ -1,5 +1,10 @@
 # Status — what is done, what is left
 
+> **SUPERSEDED by `docs/NEXT_STEPS.md`, as of 2026-09-03.** The milestone
+> counts below are known-wrong (they contradict `docs/NEXT_STEPS.md`, e.g. M2,
+> M7, M8, and M10). Do not rely on the numbers in this file; treat
+> `docs/NEXT_STEPS.md` as the current source of truth.
+
 Generated 2026-09-02. Source of truth is `autonomous/feature_list.seed.json`; `feature_list.json` is the working copy the agents edit and it gets clobbered mid-run, so re-merge from the seed.
 
 **21 of 105 features complete.** Test suite: 597 passing.

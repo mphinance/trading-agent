@@ -1498,6 +1498,16 @@ pattern in "AI agent architecture" below is the more rigorous version of
 that question, and better thought through before an LLM gets any real
 influence over a proposal's numbers, if that's ever wanted.
 
+---
+
+> **SUPERSEDED (2026-09-01).** The Telegram-voice-note transport decision
+> below was reversed: voice is now claude.ai's own voice mode calling
+> `trading_mcp` tools over the MCP connector, with no STT, no TTS, and no
+> Telegram audio path. Kept here as a record of what was tried and why. See
+> `docs/NEXT_STEPS.md` for current status and `docs/VOICE_STACK_GUIDE.md` for
+> the superseded-notice on the old design doc. The "approvals never become a
+> voice command" constraint below is the one thing that survived unchanged.
+
 **Transport decided (2026-08-29): Telegram voice notes, not an always-on
 local mic.** Supersedes the wake-word assumption below; everything else in
 this section still stands. Voice arrives as a Telegram `message.voice`, is

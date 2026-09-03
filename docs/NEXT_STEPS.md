@@ -1,6 +1,6 @@
 # Vesper — the plan from here
 
-**29 of 110 features done. 628 tests passing. The MCP server is live and connected.**
+**29 of 110 features done. 706 tests passing. The MCP server is live and connected.**
 
 This is the working plan: what is true today, what happens next and in what order, which
 parts are yours, and which risks are still open. It supersedes the ordering in
@@ -33,7 +33,7 @@ internet-facing process, along with the Telegram adapter. The AST pin was correc
 M1  Repo cloneable again          7/7    done
 M0  The core/ split              10/10   done
 M2  OAuth 2.1                    11/11   done
-M8  Voice co-pilot + order path  23/23   done
+M8  Voice co-pilot + order path  23/23   code-complete, tested, NOT WIRED (2026-09-03)
 M10 Skills endpoint               7/7    done
 M7  Deployment: two units         9/9    done
 M3  Credentials on the box        0/7    NEXT
@@ -43,6 +43,27 @@ M6  Soak, then arming             0/7
 M9  Docs tell the truth           0/6
 H   Human-only                    2/4
 ```
+
+**M8 correction (2026-09-03): code-complete and tested, but not wired.**
+All 23 M8 features exist and are covered by tests, but
+`trading_mcp/server.py`'s `_register_all_tools()` never calls
+`register_order_tools`, `register_voice_tools`, or `register_drafting_tools`.
+None of those tools (`halt`, `watch_setup`, `draft_proposal`, `place_order`,
+etc.) are reachable by any client in production today. The deployed server is
+genuinely read-only, with exactly 60 tools registered (47 momentum + 13
+Vesper). Treat M8 as done in code, not done in deployment, until the wiring
+step below happens.
+
+A related trap found the same day: `_build_oauth_provider` passes
+`required_scopes=["read"]`, which collapses `valid_scopes` to `["read"]`
+only. No credential the server can currently issue would satisfy
+`order_tools.py`'s `require_scopes("trade")` even if the tools were
+registered. That scope plumbing has to be fixed as part of wiring, not after.
+
+**Follow-up item, not yet scheduled:** wire M8's order/voice/drafting tools
+into `trading_mcp/server.py` deliberately, as its own reviewed step, since it
+converts the server from read-only to order-capable. It should land the
+`trade`-scope fix above in the same change, not as a follow-on.
 
 ---
 

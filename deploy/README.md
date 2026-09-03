@@ -90,14 +90,25 @@ Traefik detects file changes dynamically without restarting and automatically re
   # Expected: 401
   ```
 - If an unauthenticated request returns 200, authentication is NOT gating and the service must be halted immediately.
+- Confirm no live credential still equals its `.example` placeholder. `deploy/install.sh` now refuses to deploy in that state, and the server refuses to open an http listener with a placeholder/low-entropy token (see `core/secret_hygiene.py`). Concrete check, prints nothing when healthy:
+  ```bash
+  diff <(grep -v '^#' ~/trading-agent/.env.trading-agent.example | cut -d= -f1) /dev/null >/dev/null; \
+  for k in TRADING_AGENT_TOKEN WEBULL_APP_KEY WEBULL_APP_SECRET WEBULL_KEY WEBULL_SECRET TD_API_KEY TDPRO_API_KEY; do \
+    v=$(grep "^${k}=" ~/trading-agent/.env.trading-agent | cut -d= -f2-); \
+    ev=$(grep "^${k}=" ~/trading-agent/.env.trading-agent.example | cut -d= -f2-); \
+    [ -n "$v" ] && [ "$v" = "$ev" ] && echo "STALE PLACEHOLDER: $k"; \
+  done
+  ```
 
 ---
 
 ## 4. Environment Contracts (M7-02)
 
 Environment configuration is split into two distinct files with zero cross-contamination:
-- **`~/.env.trading-agent`**: Sourced by `trading-agent.service`. Contains `WEBULL_*`, `TD_API_KEY`, `TDPRO_API_KEY`, `SEC_USER_AGENT`, `TRADING_AGENT_TOKEN`, and `MCP_*`. Never contains `TELEGRAM_*` or `VESPER_TRADING`.
-- **`~/.env.vesper`**: Sourced by `vesper-loop.service` and `vesper-listen.service`. Contains core credentials plus `TELEGRAM_*`, `DISCORD_*`, and `VESPER_TRADING=0`. Never contains `TRADING_AGENT_TOKEN` or `MCP_*`.
+- **`~/trading-agent/.env.trading-agent`**: Sourced by `trading-agent.service` (`EnvironmentFile=%h/trading-agent/.env.trading-agent`). Contains `WEBULL_*`, `TD_API_KEY`, `TDPRO_API_KEY`, `SEC_USER_AGENT`, `TRADING_AGENT_TOKEN`, and `MCP_*`. Never contains `TELEGRAM_*` or `VESPER_TRADING`.
+- **`~/trading-agent/.env.vesper`**: Sourced by `vesper-loop.service` and `vesper-listen.service`. Contains core credentials plus `TELEGRAM_*`, `DISCORD_*`, and `VESPER_TRADING=0`. Never contains `TRADING_AGENT_TOKEN` or `MCP_*`.
+
+**Warning (2026-09-03):** a plain `~/trading-agent/.env` may also exist in the checkout. It is NOT read by any systemd unit — editing it has no effect on either service. Confusing it with `.env.trading-agent` caused the 2026-09-03 token incident (an operator following stale guidance pointed at `.env` while the live token sat, unrotated, in `.env.trading-agent`). Always confirm which file a unit actually reads with `systemctl --user cat trading-agent.service | grep EnvironmentFile` before editing credentials.
 
 ---
 

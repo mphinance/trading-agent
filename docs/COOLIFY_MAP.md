@@ -100,6 +100,11 @@ Static Traefik config also present but not itemized: `Caddyfile` (2 lines, artif
 - The bind address is `10.0.0.1` (the `coolify` Docker bridge's gateway IP), **not** `0.0.0.0` and **not** loopback — matching the comment left in the config file itself ("Traefik is containerised and cannot reach the host loopback"). It is not directly reachable from the public interface; only containers that can route to that bridge gateway (which Traefik can, via `host.docker.internal`) can reach it.
 - End-to-end: `agent.mphinance.com` is live, TLS-terminated at Traefik, and proxied to a running backend. The dynamic-config comment states the bearer token (`TRADING_AGENT_TOKEN`) is the actual access gate at the application layer; this snapshot did not (and per the read-only/no-secrets constraint, should not) test that gate.
 
+  **Update, 2026-09-03:** the gate has since been verified directly — an
+  unauthenticated request returns 401, and a request carrying the correct
+  token returns 200. Separately, OAuth 2.1 (dynamic client registration) is
+  now mounted alongside the static bearer, since `MCP_PUBLIC_URL` is set.
+
 ---
 
 ## 5. systemd units
@@ -241,6 +246,15 @@ Nothing was found under `/opt` — `/opt` contains only `x-growth-agent`, `x-gro
 - **HEAD:** `c2e200458c146bc338ee86d0bd93d15f72366e7f` — "feat(trading_mcp): owner-only read-only MCP server over Vesper state" (2026-09-01 15:58:29 -0500)
 - **Working tree:** clean (`git status --short` — 0 lines)
 - **`.env` variable names present:** `TRADING_AGENT_TOKEN` only. No broker credentials (`WEBULL_*`, `TD_API_KEY`, etc.) are present in this checkout's `.env` — consistent with this deployment being the read-only `trading_mcp` surface only, not the full order-placing agent.
+
+  **SUPERSEDED as of 2026-09-03.** This claim was about `~/trading-agent/.env`, which
+  is NOT the file the service reads. The box now holds live Webull production
+  credentials and TDPro keys in `~/trading-agent/.env.trading-agent`, a
+  separate, gitignored file that this snapshot did not inspect. That exact
+  distinction, between `.env` and `.env.trading-agent`, is what caused the
+  2026-09-03 token incident: the production `TRADING_AGENT_TOKEN` was left at
+  its committed example placeholder value. Rotated; see `deploy/README.md` and
+  `docs/NEXT_STEPS.md` for the guards added since.
 
 ### Other trading-adjacent checkouts found on the host (not deeply audited — scope was "note")
 

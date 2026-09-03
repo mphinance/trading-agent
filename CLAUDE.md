@@ -70,28 +70,60 @@ Related repos, and why this isn't merged into them:
 
 ## Critical design rules
 
-### 1. Loopback or Tailscale. Never 0.0.0.0.
-This app has **no authentication**, holds live brokerage credentials, and can
-place orders. `deploy/install.sh` *refuses to run* without a Tailscale IP
-rather than falling back — the guardrail is in code, not in a comment.
+### 1. Loopback, Tailscale, or Traefik-fronted-and-authenticated. Never bare 0.0.0.0.
+This app holds live brokerage credentials and can place orders. The old form of
+this rule said "nothing in this repo serves HTTP" — that was true before
+Milestone 7 and is **false now**, so here is the actual posture:
 
-Nuance since the migration: **nothing in this repo currently serves HTTP.**
-The only HTTP server left is `vesper/bot/inbound.py`'s aiohttp webhook app,
-and nothing starts it. Both live approval paths are **outbound-only** —
-Telegram long-polls, Discord holds a gateway connection — so no inbound port
-is opened at all today. That is a stronger position than the rule requires;
-the rule exists for the moment someone re-adds a listener. All pre-migration
-sidecar/port-8787 deploy artefacts have been retired in Milestone 7.
+`trading_mcp/server.py` runs on the coolify box as the `trading-agent.service`
+systemd **user** unit, bound to the **docker bridge `10.0.0.1:8500`** — not
+`0.0.0.0`, and not loopback either (Traefik is containerised and cannot reach
+the host's loopback). Traefik terminates TLS at
+`https://agent.mphinance.com/mcp`. **The bearer token and OAuth 2.1 are the
+entire access gate**, which is why rule 2's second half exists.
 
-### 2. Secrets live in gitignored env files, in two places
-- **`./.env`** at the repo root — where this project's credentials actually
-  live now (`TD_API_KEY`, `TDPRO_API_KEY`, `WEBULL_APP_KEY`,
-  `WEBULL_APP_SECRET`, `WEBULL_KEY`, `WEBULL_SECRET`, `WEBULL_REGION_ID`,
-  `WEBULL_ENVIRONMENT`). Gitignored, 0600. `vesper.py` `load_dotenv()`s it at
-  startup, which is why every module can read `os.environ`.
-- **`../.env.*`** one directory up — the original convention (uncommittable by
-  construction). `notify.py` still reads `../.env.notify` / `../.env.telegram`
-  *and* `./.env`, so either works.
+`vesper/bot/inbound.py`'s aiohttp webhook app still exists and **nothing starts
+it**. Both live approval paths remain **outbound-only** — Telegram long-polls,
+Discord holds a gateway connection.
+
+Two guardrails, both in code rather than in this paragraph: the server
+`SystemExit`s rather than open an http listener with no token *or* a
+placeholder/low-entropy one (rule 2), and `MCP_HOST` defaults to `127.0.0.1` so
+reaching the bridge is always an explicit act.
+
+### 2. Secrets live in gitignored env files — and a placeholder must never become one
+**Which file is live is not obvious, and getting it wrong has already cost a
+day of production exposure.** On a deploy box there are up to three candidates
+and only one of them is read by a given service:
+
+| File | Read by | Notes |
+|---|---|---|
+| `~/trading-agent/.env.trading-agent` | `trading-agent.service` | `EnvironmentFile=` in the unit. **This is the live one for the MCP server.** |
+| `~/trading-agent/.env.vesper` | `vesper-loop.service`, `vesper-listen.service` | The agent's own contract |
+| `~/trading-agent/.env` | nothing, on a deployed box | `load_dotenv()` finds it, so it silently *fills gaps* the unit's file didn't set. Editing it to rotate a credential changes nothing the service reads. |
+
+Locally, `./.env` at the repo root is still what `vesper.py` `load_dotenv()`s at
+startup. `notify.py` also still reads `../.env.notify` / `../.env.telegram`.
+
+**Generate secrets; never copy them.** `openssl rand -hex 32`. On 2026-09-03
+`trading-agent.service` served the public internet for a day with
+`TRADING_AGENT_TOKEN` set to `your_strong_random_secret_token` — the literal
+placeholder out of `.env.trading-agent.example`, which is committed to a
+**public** repo. Everything was "working": the service was healthy, the tests
+were green, TLS was valid, and an unauthenticated request was correctly refused.
+The gate was simply published.
+
+Four guardrails now, none of them a reminder:
+- `core/secret_hygiene.py` — the server **refuses to open an http listener**
+  with a placeholder, a low-entropy, or a hand-typed-looking token. Rejection
+  reasons never quote the value (rule 5).
+- `deploy/install.sh` — generates a real token when it creates the env file,
+  and **refuses to install or start anything** while any credential still
+  equals its `.example` value. Reports offending variable *names* only.
+- `core/approval_registry.py` — a `TELEGRAM_AUTHORIZED_USER_IDS` still holding
+  the example IDs authorises **nobody**. That one fails *closed*: a placeholder
+  allowlist is not a weak gate, it is a working gate held by someone else.
+- CI's `placeholder-hygiene` job, plus `tests/test_secret_hygiene.py`.
 
 An `export` in a shell does **not** reach a systemd service — it gets its own
 environment. Audit `git diff --cached` for `sk-ant-` / `td_live_` before any
@@ -138,6 +170,19 @@ forbidden everywhere across all MCP modules with zero exceptions.
 What did NOT change: `vesper/execution_guard.py` remains the ONLY module that can
 move money, and no order execution or risk-gate code is duplicated anywhere.
 `tests/test_trading_mcp.py` mechanically pins this via AST, not just a docstring promise.
+That pin now also catches `getattr(guard, "place")` — dynamic dispatch by string
+produces no literal attribute node, and an attribute-only walk went straight past it.
+
+**A4 is written but not switched on.** `trading_mcp/order_tools.py` exists, is
+fully implemented and tested — and `server.py`'s `_register_all_tools()` never
+calls `register_order_tools`, so no client can reach it. Two things must happen
+together whenever that changes, and knowing this in advance saves an afternoon:
+the OAuth scope plumbing currently collapses `valid_scopes` to `{"read"}`
+(`_build_oauth_provider` passes `required_scopes=["read"]`, which the constructor
+reuses for both), so **no credential this server can issue would satisfy
+`require_scopes("trade")`** — registering the tools alone would lock the owner
+out rather than open a hole. Fail-closed, and pinned by
+`test_production_oauth_provider_scope_plumbing`.
 
 ### 4. Inject live state; never make the model fetch it
 `vesper/llm.py` formats portfolio + signals + dealer gamma into the turn.
@@ -205,37 +250,29 @@ every alert. So it is minted with 128 bits of randomness and `status()` must
 never return it. If you add a channel, keep its secret out of `status()` the
 same way.
 
-### 4d. Voice arrives over Telegram, and it never confirms an order
-**Not built yet — this is the design it must be built to.** (Decided
-2026-08-29; see ROADMAP's LLM-layer-and-voice section for the alternatives
-weighed.)
+### 4d. Voice is claude.ai over the MCP connector, and it never confirms an order
+**The Telegram-voice-note design that used to be this rule is CANCELLED**
+(reversed 2026-09-01). No STT, no TTS, no audio handling and no audio endpoint
+belongs in this repo — not one of them. If you find a doc describing Whisper /
+Voxtral / Kokoro or `sendVoice`, it predates the reversal; `docs/VOICE_STACK_GUIDE.md`
+is now just a superseded notice.
 
-Voice comes in as a Telegram **voice note**, pulled down by the existing
-outbound-only `telegram_polling.py` loop, transcribed via OpenRouter STT, and
-answered with `sendVoice`. Do not add a local always-on microphone, and do not
-add an audio-upload endpoint — the whole reason this shape was chosen is that
-it adds **no listener and no new attack surface**, and it inherits the
-`TELEGRAM_AUTHORIZED_USER_IDS` allowlist for free. Push-to-talk is by
-construction, so no wake word is needed.
+Voice is: talk to Claude on the phone, Claude calls the read-only MCP connector
+at `agent.mphinance.com`. That deletes an entire subsystem rather than building
+one, and claude.ai voice mode already works with connectors on mobile.
 
-Two constraints, both from measured experience rather than caution:
+**The one constraint that survives the reversal, unchanged: voice asks
+questions; buttons move money.** Approvals must never become a voice command.
+A transcript is ambiguous in exactly the wrong place ("approve" — *which*
+proposal?), while an inline Telegram/Discord button is unambiguous, per-user
+authorised and restart-safe. `resume()` and `submit_decision()` are forbidden
+to every MCP tool for this reason (rule 3), not merely by convention.
 
-- **Voice asks questions; buttons move money.** Approvals stay on the inline
-  buttons and must not become a voice command. A transcript is ambiguous in
-  exactly the wrong place ("approve" — *which* proposal?); the buttons are
-  unambiguous, per-user authorised and restart-safe. Voice reads state.
-- **Contextual queries, not symbol naming.** Ticker mis-transcription is a
-  repeatedly-observed failure here (NVDA → "in video"). Aim voice at questions
-  about *current* context — P&L, the flip, what's open, what's pending — and
-  send the focused symbol with every turn so common questions need no ticker.
-  Seed the STT vocab hint with tickers/jargon as the second mitigation; don't
-  rely on either alone.
-
-**Both sides get logged as text, always** — the transcript in and the spoken
-reply out. Audio is ephemeral and unauditable, and anything that can act on
-spoken commands needs the same auditability as every other path here. Posting
-the transcript as a visible Telegram message before acting on it satisfies this
-and gives the user a chance to see a mishearing before it matters.
+The two measured failure modes still shape tool design: ticker
+mis-transcription (NVDA → "in video"), so aim tools at questions about
+*current* context — P&L, the flip, what's open, what's pending — rather than
+at naming a symbol; and payloads too large to read aloud, so keep tool output
+compact (rule 4's injection discipline applies here too).
 
 ### 5. Assume this is on video
 The user streams this work. Anything checked in gets read on stream too — do
@@ -312,6 +349,9 @@ vesper/
   bot/             Telegram + Discord adapters, gateway, inbound approvals
   brokers/         public_broker.py (second, partial adapter)
 
+core/              Shared layer both vesper/ and trading_mcp/ import from (the
+                   M0 split). secret_hygiene.py lives here because BOTH need
+                   it — it refuses placeholder credentials (rule 2).
 wb.py              Webull client — credentials, account/position/order reads,
                    caching and the scarce 2-req/2s bucket
 md.py              Market data, research, screeners, watchlists (600/min bucket)
@@ -336,25 +376,36 @@ trading_mcp/       PHASE 0: owner-only, READ-ONLY MCP server (separate process
                    Vesper tools (account/halt/drawdown/paper/alerts/pending-
                    approvals/audit-chain/playbook-calibration/trade-memory-recall/
                    position-monitor-preview) onto one FastMCP("trading-agent").
-                   Auth is StaticTokenVerifier off TRADING_AGENT_TOKEN for the
-                   optional http transport (loopback-only, refuses to start
-                   without a token — rule 1); stdio (the default) needs none.
-                   halt() may become reachable here (M8-08); until that tool
-                   exists the AST pin still forbids importing it. No tool here
-                   may call
+                   Auth is HmacStaticTokenVerifier off TRADING_AGENT_TOKEN AND
+                   an OAuth 2.1 provider (oauth_provider.py) with dynamic client
+                   registration, wrapped in one MultiAuth so both converge on a
+                   single verify_token; stdio (the default) needs none. In
+                   production this is NOT loopback: it binds the docker bridge
+                   10.0.0.1:8500 behind Traefik at agent.mphinance.com (rule 1),
+                   and refuses to start with a missing OR placeholder token
+                   (core/secret_hygiene.py, rule 2).
+                   order_tools.py / voice_tools.py / drafting.py are written and
+                   tested but NOT registered in server.py, so the deployed
+                   surface is genuinely 60 read-only tools. Wiring them in
+                   converts this server from read-only to order-capable and is a
+                   deliberate step, not a cleanup — see docs/NEXT_STEPS.md. No
+                   tool here may call
                    guard.preview()/guard.place(), resume(), or
                    ApprovalRegistry.submit_decision() — see rule 3's note above,
                    app_spec.txt's A3, and tests/test_trading_mcp.py's AST-based
                    pin.
 tests/             pytest, hermetic — Webull and Agent SDKs stubbed in conftest
-deploy/            systemd unit + Tailscale-gated installer (STALE, see rule 1)
+deploy/            LIVE (M7): three systemd user units, two env contracts,
+                   Traefik dynamic config, idempotent install.sh that generates
+                   a real token and refuses to deploy a placeholder. See
+                   deploy/README.md.
 docs/              API.md, expansion plan, OpenRouter pricing, voice stack
 ROADMAP.md         Single planning doc: status, known gaps, ideas backlog
 ```
 
 ## Tests
 
-`pip install -r requirements-dev.txt && pytest -q`. **480 passing.** The suite
+`pip install -r requirements-dev.txt && pytest -q`. **706 passing.** The suite
 is hermetic — no network, no broker, no credentials — because a green build
 must not depend on TDPro or ntfy.sh being up.
 
@@ -444,3 +495,18 @@ verify with live access before building the registry that would close it.
 **Deployment:** Managed under `deploy/` with three systemd user units (`trading-agent.service`,
 `vesper-loop.service`, `vesper-listen.service`) and two env contracts (`.env.trading-agent`,
 `.env.vesper`). See `deploy/README.md`.
+
+**Live as of 2026-09-03**, on the coolify box (`ssh coolify`):
+
+| | |
+|---|---|
+| `trading-agent.service` | **running**, lingering on. 60 read-only tools. |
+| Reachable at | `https://agent.mphinance.com/mcp` — Traefik, LE cert to 2026-12-01 |
+| Binds | `10.0.0.1:8500` (docker bridge — rule 1) |
+| Auth | bearer + OAuth 2.1, converged in one `MultiAuth` |
+| Credentials on box | live Webull **prod**, TDPro, EDGAR |
+| `vesper-loop` / `vesper-listen` | enabled but **stopped** — the agent itself does not run there yet |
+| `VESPER_TRADING` | **0**. Turning it on is the human's keystroke, never an agent's. |
+
+So the box can *read* the live account today; it cannot place an order, on two
+independent counts (order tools unregistered, `VESPER_TRADING=0`).
