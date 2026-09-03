@@ -80,9 +80,8 @@ The only HTTP server left is `vesper/bot/inbound.py`'s aiohttp webhook app,
 and nothing starts it. Both live approval paths are **outbound-only** —
 Telegram long-polls, Discord holds a gateway connection — so no inbound port
 is opened at all today. That is a stronger position than the rule requires;
-the rule exists for the moment someone re-adds a listener. `SIDECAR_HOST` and
-`deploy/sidecar.service` still assume the old `run.sh`/port-8787 layout and
-are **stale** — treat them as unverified until someone re-deploys.
+the rule exists for the moment someone re-adds a listener. All pre-migration
+sidecar/port-8787 deploy artefacts have been retired in Milestone 7.
 
 ### 2. Secrets live in gitignored env files, in two places
 - **`./.env`** at the repo root — where this project's credentials actually
@@ -442,6 +441,6 @@ strategy tag and no link back to the order that created it, so three features
 in paper mode and silently no-op on live positions. ROADMAP explains what to
 verify with live access before building the registry that would close it.
 
-**Deployment is stale.** `deploy/` still describes the pre-migration
-`run.sh`/port-8787 service. Nothing redeploys automatically. Re-verify before
-trusting anything about a running instance.
+**Deployment:** Managed under `deploy/` with three systemd user units (`trading-agent.service`,
+`vesper-loop.service`, `vesper-listen.service`) and two env contracts (`.env.trading-agent`,
+`.env.vesper`). See `deploy/README.md`.

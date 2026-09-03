@@ -273,12 +273,12 @@ hasn't been verified live.
 
 ## Deploy
 
-`deploy/` describes a systemd **user** service, Tailscale-gated (never bind to
-`0.0.0.0` — this app has no authentication and holds live brokerage
-credentials). **It is stale**: it still assumes the pre-migration
-`run.sh`/port-8787 layout from before this became a CLI-driven agent. Nothing
-redeploys automatically today; re-verify `deploy/install.sh` and
-`deploy/sidecar.service` before trusting them against a running instance.
+Deployment is managed via three systemd user services under `deploy/`:
+- `trading-agent.service` (owner MCP server, bound to docker bridge `10.0.0.1:8500`)
+- `vesper-loop.service` (autonomous scan and monitor loop)
+- `vesper-listen.service` (inbound webhook and approval listener)
+
+Configuration is split into `.env.trading-agent` and `.env.vesper`. See `deploy/README.md`.
 
 ## More detail
 
