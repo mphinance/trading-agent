@@ -1,10 +1,33 @@
 """
-TraderDaddy Pro Agent API Client
+TraderDaddy Pro / TraderMatrix Pro public API client.
 
-Async HTTP client for the TraderDaddy Agent API endpoints.
-Handles JWT authentication, token refresh, and rate-limit retries.
+Async HTTP client for the **customer** Developer API: `/api/v1/*`, authenticated
+with a `td_live_` API key.
 
-All routes live under /api/agent/ and require superuser JWT.
+**This module used to call `/api/agent/*`, and that was wrong in three ways.**
+That namespace is the INTERNAL superuser surface — gated by `AGENT_API_KEY`, a
+single shared master credential, and reserved for MCP-internal callers, the
+Discord bot and in-app chat. Consequences, all of which bit:
+
+1. It authenticated by posting `TRADERDADDY_EMAIL` + `TRADERDADDY_PASSWORD` to
+   `/api/auth/login` for a JWT. On an OAuth-only account there is no password to
+   supply, so there was no way to configure it correctly.
+2. The deployed server therefore answered `TRADERDADDY_API_URL not set in .env`
+   for every TDPro-backed tool, verified live on 2026-09-03 — roughly half of a
+   60-tool surface, silently dead.
+3. A module that speaks to a superuser namespace can never ship in a public
+   repo, which blocked the whole `mcp_server/` open-sourcing plan.
+
+`/api/v1/*` re-exports **the same route handlers** the web app uses at
+`/api/*` (backend `src/routes/publicApi.ts`), so responses are byte-identical in
+shape and no caller of this module changed. What changed is the credential: an
+API key that is per-customer, hashed at rest, revocable, and rate-limited —
+i.e. one a stranger can hold, which is the entire premise of the public funnel.
+
+Not every legacy path has an `/api/v1` equivalent: `alerts*` and
+`most-institutionally-traded-tickers` are not mounted there. Those functions are
+not registered as MCP tools, and they now fail with an explicit message rather
+than a confusing 404.
 """
 
 from __future__ import annotations
@@ -24,6 +47,28 @@ logger = logging.getLogger(__name__)
 
 from core.cache import smart_cache
 from core.schema import SignalResult
+
+# The public API host. core/td.py hardcodes the same default; both clients talk
+# to the same backend, just different mounts on it.
+_DEFAULT_BASE_URL = "https://api.traderdaddy.pro"
+
+# Legacy path prefixes that live only on the internal /api/agent namespace and
+# are NOT re-exported at /api/v1. None is registered as an MCP tool. Listed so
+# the failure is a sentence rather than a 404 someone has to go read nginx logs
+# to understand.
+_NO_PUBLIC_EQUIVALENT = frozenset({
+    "alerts",
+    "most-institutionally-traded-tickers",
+})
+
+
+def _get_api_key() -> str:
+    """The customer API key, same env vars core/td.py reads.
+
+    Two names because both are in circulation across the estate's env files;
+    TD_API_KEY wins if both are set.
+    """
+    return (os.getenv("TD_API_KEY") or os.getenv("TDPRO_API_KEY") or "").strip()
 
 # ---------------------------------------------------------------------------
 # Singleton HTTP Client
@@ -146,52 +191,8 @@ def _circuit_record_success():
 
 
 # ---------------------------------------------------------------------------
-# JWT Token Manager
+# Requests
 # ---------------------------------------------------------------------------
-
-_token_cache: dict[str, Any] = {
-    "access_token": None,
-    "refresh_token": None,
-    "expires_at": 0,
-}
-
-
-async def _login() -> str:
-    """Authenticate and cache JWT tokens."""
-    client = _get_client()
-    base = os.getenv("TRADERDADDY_API_URL", "").rstrip("/")
-    email = os.getenv("TRADERDADDY_EMAIL", "")
-    password = os.getenv("TRADERDADDY_PASSWORD", "")
-
-    if not all([base, email, password]):
-        raise RuntimeError(
-            "TraderDaddy credentials not configured. "
-            "Set TRADERDADDY_API_URL, TRADERDADDY_EMAIL, and TRADERDADDY_PASSWORD in .env"
-        )
-
-    resp = await client.post(
-        f"{base}/api/auth/login",
-        json={"email": email, "password": password},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-
-    _token_cache["access_token"] = data["access_token"]
-    _token_cache["refresh_token"] = data.get("refresh_token")
-    # JWT exp is 30 min — refresh at 25 min to be safe
-    _token_cache["expires_at"] = time.time() + 25 * 60
-
-    logger.info("TraderDaddy: authenticated successfully")
-    return _token_cache["access_token"]
-
-
-async def _get_token() -> str:
-    """Return a valid access token, refreshing if needed."""
-    if _token_cache["access_token"] and time.time() < _token_cache["expires_at"]:
-        return _token_cache["access_token"]
-    return await _login()
-
 
 async def _agent_get(
     path: str,
@@ -199,35 +200,52 @@ async def _agent_get(
     *,
     retry_on_429: bool = True,
 ) -> SignalResult:
-    """Make an authenticated GET to /api/agent/<path>."""
+    """Make an API-key-authenticated GET to /api/v1/<path>."""
     # Circuit breaker check
     circuit_err = _circuit_check()
     if circuit_err:
         return SignalResult.error_msg(circuit_err)
 
-    base = os.getenv("TRADERDADDY_API_URL", "").rstrip("/")
-    if not base:
-        return SignalResult.error_msg("TRADERDADDY_API_URL not set in .env")
+    if path.lstrip("/").split("/")[0] in _NO_PUBLIC_EQUIVALENT:
+        return SignalResult.error_msg(
+            f"'{path}' has no /api/v1 equivalent — it exists only on the internal "
+            "/api/agent namespace, which this client no longer speaks to. See this "
+            "module's docstring."
+        )
+
+    # Default to the public host rather than requiring config. The old code had
+    # no default, so a box that never set TRADERDADDY_API_URL failed every call —
+    # which is exactly what happened in production.
+    base = os.getenv("TRADERDADDY_API_URL", _DEFAULT_BASE_URL).rstrip("/")
+
+    api_key = _get_api_key()
+    if not api_key:
+        return SignalResult.error_msg(
+            "No TraderDaddy API key configured. Set TD_API_KEY (or TDPRO_API_KEY) "
+            "to a td_live_ key minted at /api/developer/keys."
+        )
 
     client = _get_client()
     try:
-        token = await _get_token()
-        url = f"{base}/api/agent/{path.lstrip('/')}"
+        url = f"{base}/api/v1/{path.lstrip('/')}"
+        # Both headers, matching core/td.py: the backend accepts either, and
+        # sending both keeps the two clients interchangeable against it.
+        headers = {
+            "X-API-Key": api_key,
+            "Authorization": f"Bearer {api_key}",
+        }
 
-        resp = await client.get(
-            url,
-            params=params,
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        resp = await client.get(url, params=params, headers=headers)
 
-        # Token expired mid-session — re-auth once
         if resp.status_code == 401:
-            logger.warning("TraderDaddy: 401 — re-authenticating")
-            token = await _login()
-            resp = await client.get(
-                url,
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
+            # An API key does not expire and cannot be refreshed — a 401 means
+            # the key is wrong or revoked, so retrying is pointless. The old
+            # code re-authenticated here because a JWT could go stale; keeping
+            # that shape would just double every failed call.
+            _circuit_record_failure()
+            return SignalResult.error_msg(
+                "TraderDaddy rejected the API key (401). It may be revoked or "
+                "mistyped; re-mint one at /api/developer/keys."
             )
 
         # Rate limited — wait and retry once
@@ -709,7 +727,7 @@ async def get_ticker_data(symbol: str) -> SignalResult:
     """
     Combined ticker data bundle — options chain + technicals + GEX in one call.
 
-    This mirrors TraderDaddy's /api/agent/ticker/{symbol} endpoint used by
+    This mirrors TraderDaddy's /api/v1/ticker/{symbol} endpoint used by
     the TraderLady chat widget. Reduces round-trips when Sam needs a full
     picture of a ticker.
 
@@ -750,32 +768,33 @@ async def _agent_post(
     path: str,
     data: dict[str, Any] | None = None,
 ) -> SignalResult:
-    """Make an authenticated POST to /api/agent/<path>."""
+    """Make an API-key-authenticated POST to /api/v1/<path>."""
     circuit_err = _circuit_check()
     if circuit_err:
         return SignalResult.error_msg(circuit_err)
 
-    base = os.getenv("TRADERDADDY_API_URL", "").rstrip("/")
-    if not base:
-        return SignalResult.error_msg("TRADERDADDY_API_URL not set in .env")
+    base = os.getenv("TRADERDADDY_API_URL", _DEFAULT_BASE_URL).rstrip("/")
+
+    api_key = _get_api_key()
+    if not api_key:
+        return SignalResult.error_msg(
+            "No TraderDaddy API key configured. Set TD_API_KEY (or TDPRO_API_KEY)."
+        )
 
     client = _get_client()
     try:
-        token = await _get_token()
-        url = f"{base}/api/agent/{path.lstrip('/')}"
+        url = f"{base}/api/v1/{path.lstrip('/')}"
+        headers = {
+            "X-API-Key": api_key,
+            "Authorization": f"Bearer {api_key}",
+        }
 
-        resp = await client.post(
-            url,
-            json=data or {},
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        resp = await client.post(url, json=data or {}, headers=headers)
 
         if resp.status_code == 401:
-            token = await _login()
-            resp = await client.post(
-                url,
-                json=data or {},
-                headers={"Authorization": f"Bearer {token}"},
+            _circuit_record_failure()
+            return SignalResult.error_msg(
+                "TraderDaddy rejected the API key (401) — revoked or mistyped."
             )
 
         resp.raise_for_status()
