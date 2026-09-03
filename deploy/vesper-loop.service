@@ -1,0 +1,29 @@
+[Unit]
+Description=vesper-loop — Autonomous Scan & Continuous Position Monitor
+Documentation=file://%h/trading-agent/CLAUDE.md
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/trading-agent
+EnvironmentFile=%h/trading-agent/.env.vesper
+ExecStart=%h/trading-agent/.venv/bin/python vesper.py loop
+Restart=on-failure
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/trading-agent/data %h/trading-agent/conf %h/trading-agent/charts
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
