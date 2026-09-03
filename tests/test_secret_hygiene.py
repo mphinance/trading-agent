@@ -205,3 +205,55 @@ def test_server_http_path_calls_the_guard_before_listening():
         for node in ast.walk(branch)
     )
     assert exits, "the http branch must refuse to start, not just warn"
+
+
+# ── The credential scanner and the hook that runs it ────────────────────────
+#
+# Added after a `read,trade`-scoped supermcp key was found sitting in an
+# untracked doc on 2026-09-03, one `git add .` from a public repo, with CI's
+# scan blind to its prefix. These pin the mechanism, not the incident.
+
+SCANNER = REPO_ROOT / "scripts" / "scan_secrets.sh"
+PRE_COMMIT_HOOK = REPO_ROOT / ".githooks" / "pre-commit"
+
+
+def test_scanner_and_hook_exist_and_are_executable():
+    import os
+
+    assert SCANNER.is_file(), "scripts/scan_secrets.sh is gone"
+    assert os.access(SCANNER, os.X_OK), "scan_secrets.sh must be executable"
+    assert PRE_COMMIT_HOOK.is_file(), ".githooks/pre-commit is gone"
+    assert os.access(PRE_COMMIT_HOOK, os.X_OK), "pre-commit hook must be executable"
+
+
+def test_hook_delegates_to_the_shared_scanner():
+    """The hook must call the shared scanner, not carry its own copy of the
+    patterns. Two lists drift; the drift is invisible until one of them is the
+    only thing still checking."""
+    assert "scan_secrets.sh" in PRE_COMMIT_HOOK.read_text()
+
+
+def test_ci_delegates_to_the_shared_scanner():
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "scan_secrets.sh" in ci, (
+        "CI no longer calls the shared scanner — if the patterns were inlined "
+        "back into the workflow, CI and the pre-commit hook can now disagree"
+    )
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["sk-ant-", "td_live_", "smk_", "[0-9]{8,10}:AA"],
+)
+def test_known_credential_prefixes_stay_in_the_scanner(prefix):
+    """`smk_` is here because its absence is what let a live trade-scoped key
+    through. A scanner that only knows the prefixes it was born with goes stale
+    in silence, so removing one has to be a failing test rather than a quiet
+    edit."""
+    assert prefix in SCANNER.read_text()
+
+
+def test_scanner_never_prints_the_matched_value():
+    """Rule 5: this output lands in CI logs and streamed terminal scrollback.
+    It reports WHERE, never WHAT."""
+    assert "<redacted match>" in SCANNER.read_text()

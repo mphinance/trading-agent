@@ -56,6 +56,14 @@ grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_TRADING" | cut -d= -f1 | sed 's/^/  - /
 echo "Variables defined in .env.vesper:"
 grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_VESPER" | cut -d= -f1 | sed 's/^/  - /' || true
 
+echo "=== [1b/5] Enabling the credential pre-commit hook ==="
+# Blocks a credential at commit time rather than catching it in CI after it is
+# already pushed to a public repo. Cheap, idempotent, and the one guard that
+# acts before the mistake leaves the machine.
+git -C "$REPO_DIR" config core.hooksPath .githooks 2>/dev/null \
+    && echo "core.hooksPath -> .githooks" \
+    || echo "  (not a git checkout; skipping hook wiring)"
+
 echo "=== [2b/5] Refusing to deploy a placeholder ==="
 # Every variable below is a credential or an identity: it is wrong for it to
 # still equal the value committed in the .example file. Everything NOT listed

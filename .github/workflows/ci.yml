@@ -70,21 +70,11 @@ jobs:
         # each pattern requires enough real entropy to be a genuine key.
         run: |
           set -o pipefail
-          # `smk_` was added 2026-09-03: a full read,trade-scoped supermcp key
-          # was sitting in docs/HANDOFF_2026-09-01.md, and this scan sailed
-          # straight past it because the prefix wasn't listed. A scan that only
-          # knows the prefixes it was born with goes stale silently — when a new
-          # credential format appears anywhere in the estate, add it here.
-          if grep -rInE \
-               -e 'sk-ant-[A-Za-z0-9_-]{20,}' \
-               -e 'td_live_[A-Za-z0-9_-]{20,}' \
-               -e 'smk_[A-Za-z0-9_-]{20,}' \
-               -e '[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}' \
-               --exclude-dir=.git --exclude-dir=.venv . ; then
-            echo "::error::credential-shaped string committed"
-            exit 1
-          fi
-          echo "clean"
+          # Delegates to scripts/scan_secrets.sh, which the .githooks/pre-commit
+          # hook also calls. One pattern list, two callers — an inline copy here
+          # is how CI and the local hook drift until one of them is the only
+          # thing still checking.
+          ./scripts/scan_secrets.sh
 
       - name: No real env file is tracked
         # The scan above catches a credential pasted into a source file. This
