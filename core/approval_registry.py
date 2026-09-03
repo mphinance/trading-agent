@@ -34,6 +34,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from core.secret_hygiene import placeholder_approver_ids
+
 logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -75,10 +77,33 @@ _AUTHORIZED_TELEGRAM_USER_IDS = {
     s.strip() for s in os.getenv("TELEGRAM_AUTHORIZED_USER_IDS", "").split(",") if s.strip()
 }
 _warned_telegram_unrestricted = False
+_warned_telegram_placeholder = False
 
 
 def _is_telegram_user_authorized(user_id: Any) -> bool:
     global _warned_telegram_unrestricted
+
+    # A placeholder allowlist is a misconfiguration, not a policy, and it is the
+    # one case here that must fail CLOSED. Copying `.env.vesper.example`'s
+    # `TELEGRAM_AUTHORIZED_USER_IDS=12345678,87654321` produces a non-empty set,
+    # so the allow-with-a-warning branch below never runs and the operator gets
+    # no signal at all — while the only accounts able to approve a live trade
+    # are two IDs out of a committed example file. Refusing everyone until it is
+    # fixed cannot move money; trusting it can. See core/secret_hygiene.py.
+    stale = placeholder_approver_ids(_AUTHORIZED_TELEGRAM_USER_IDS)
+    if stale:
+        global _warned_telegram_placeholder
+        if not _warned_telegram_placeholder:
+            logger.error(
+                "TELEGRAM_AUTHORIZED_USER_IDS contains the placeholder IDs from "
+                ".env.vesper.example (%s) — refusing to authorise ANY Telegram user "
+                "until it is set to your real numeric Telegram user ID. Find yours by "
+                "messaging @userinfobot.",
+                ",".join(sorted(stale)),
+            )
+            _warned_telegram_placeholder = True
+        return False
+
     if not _AUTHORIZED_TELEGRAM_USER_IDS:
         if not _warned_telegram_unrestricted:
             logger.warning(

@@ -79,3 +79,62 @@ jobs:
             exit 1
           fi
           echo "clean"
+
+      - name: No real env file is tracked
+        # The scan above catches a credential pasted into a source file. This
+        # catches the other direction: a whole populated env contract committed
+        # by name. Only `.example` variants belong in git.
+        run: |
+          set -o pipefail
+          tracked=$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.example$' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::a real env file is tracked in git:"
+            echo "$tracked"
+            exit 1
+          fi
+          echo "clean"
+
+  placeholder-hygiene:
+    # The 2026-09-03 incident, as a CI job. The `secrets` job above looks for a
+    # REAL key being committed; this looks for the inverse failure that actually
+    # happened — a FAKE key being deployed. CI cannot see the remote box, so it
+    # enforces the two halves it can reach: the code guard that refuses to serve
+    # with a placeholder, and the installer gate that refuses to deploy one.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: The example placeholder must be rejected by the guard
+        # Deliberately asserts behaviour, not the presence of a file: someone
+        # can delete or weaken core/secret_hygiene.py and this still fails.
+        run: |
+          python - <<'PY'
+          import re, sys, pathlib
+          sys.path.insert(0, ".")
+          from core.secret_hygiene import weak_token_reason
+
+          failures = []
+          for example in pathlib.Path(".").glob(".env*.example"):
+              for line in example.read_text().splitlines():
+                  m = re.match(r"^TRADING_AGENT_TOKEN=(.+)$", line.strip())
+                  if m and weak_token_reason(m.group(1).strip()) is None:
+                      failures.append(f"{example.name}: token would be ACCEPTED in production")
+          if failures:
+              print("::error::" + "; ".join(failures))
+              sys.exit(1)
+          print("every committed placeholder is rejected by the startup guard")
+          PY
+
+      - name: The installer must refuse to deploy a placeholder
+        run: |
+          set -o pipefail
+          if ! grep -q "MUST_DIFFER_FROM_EXAMPLE" deploy/install.sh; then
+            echo "::error::deploy/install.sh lost its placeholder gate"
+            exit 1
+          fi
+          bash -n deploy/install.sh
+          echo "installer gate present and syntactically valid"

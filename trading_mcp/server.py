@@ -36,6 +36,7 @@ from fastmcp.server.auth import MultiAuth
 
 from trading_mcp.auth import HmacStaticTokenVerifier
 from trading_mcp.oauth_provider import SingleOperatorOAuthProvider
+from core.secret_hygiene import weak_token_reason
 
 load_dotenv()
 
@@ -188,10 +189,29 @@ if __name__ == "__main__":
         host = os.environ.get("MCP_HOST", "127.0.0.1")
         port = int(os.environ.get("MCP_PORT", "8402"))
 
-        if not os.environ.get("TRADING_AGENT_TOKEN"):
+        # Two refusals, not one. "No token" was always refused here; the
+        # 2026-09-03 incident was the case in between — a token-shaped string
+        # that was never generated (the committed example's placeholder,
+        # deployed verbatim to a public hostname holding live broker
+        # credentials). See trading_mcp/secret_hygiene.py for the full account.
+        # The reason is safe to log: it never quotes the token (rule 5).
+        operator_token = os.environ.get("TRADING_AGENT_TOKEN")
+        if not operator_token:
             logger.warning(
                 "http transport requested but TRADING_AGENT_TOKEN is not set "
                 "— refusing to start an unauthenticated network listener."
+            )
+            raise SystemExit(1)
+
+        weakness = weak_token_reason(operator_token)
+        if weakness is not None:
+            logger.error(
+                "http transport requested but TRADING_AGENT_TOKEN is unfit: %s. "
+                "Refusing to start. Generate one with `openssl rand -hex 32` and "
+                "put it in the env file this service actually reads "
+                "(deploy/README.md names it per unit) — never copy the value out "
+                "of a committed .env.*.example.",
+                weakness,
             )
             raise SystemExit(1)
 
