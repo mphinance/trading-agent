@@ -35,8 +35,8 @@ M0  The core/ split              10/10   done
 M2  OAuth 2.1                    11/11   done
 M8  Voice co-pilot + order path  23/23   done
 M10 Skills endpoint               7/7    done
-M7  Deployment: two units         0/9    NEXT
-M3  Credentials on the box        0/7
+M7  Deployment: two units         9/9    done
+M3  Credentials on the box        0/7    NEXT
 M4  Full Vesper running remotely  0/10
 M5  Discord approvals             0/9
 M6  Soak, then arming             0/7
