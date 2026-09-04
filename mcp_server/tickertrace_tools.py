@@ -76,7 +76,7 @@ def register_tickertrace_tools(mcp: Any) -> list[str]:
         return tt.get_holdings_changes(provider, fund, direction, period, limit, category)
 
     @mcp.tool()
-    def etf_divergences(category: Category | None = None) -> dict[str, Any]:
+    def etf_divergences(category: Category | None = None) -> list[dict[str, Any]]:
         """Cross-fund divergences: where different institutional funds traded the SAME
         ticker in OPPOSITE directions. Disagreement between managers, not consensus."""
         return tt.get_divergences(category)

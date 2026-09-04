@@ -192,7 +192,7 @@ def trading_assistant() -> str:
 async def run_stock_screen(
     preset: str = "most_active",
     limit: int = 25,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     """Run a stock screen using TradingView's scanner.
 
     22 presets: most_active, new_highs, new_lows, overbought, oversold,
@@ -210,7 +210,7 @@ async def run_custom_screen(
     sort_by: str = "volume",
     sort_ascending: bool = False,
     limit: int = 25,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     """Build a custom stock screen with dynamic filter conditions.
 
     Each filter is {field, operator, value}. Operators: >, >=, <, <=, ==, !=.
@@ -269,7 +269,7 @@ async def get_tv_analysis(ticker: str) -> dict[str, Any]:
 async def generate_chart(
     ticker: str, period: str = "6mo", interval: str = "1d",
     style: str = "dark", show_emas: bool = True,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Generate a candlestick chart with EMA overlays (8/21/34/55/89).
     Returns base64-encoded PNG and file path."""
     return _out(_out(await _generate_chart(

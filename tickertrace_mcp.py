@@ -128,8 +128,18 @@ def get_holdings_changes(
 @mcp.tool()
 def get_divergences(
     category: Literal["active-equity", "option-income"] | None = None,
-) -> dict[str, Any]:
-    """Get cross-fund divergences where different institutional funds trade the same ticker in opposite directions."""
+) -> list[dict[str, Any]]:
+    """Get cross-fund divergences where different institutional funds trade the same ticker in opposite directions.
+
+    Returns a LIST, not a dict. `/api/v1/divergences` is the one TickerTrace
+    endpoint whose top-level JSON is an array -- every sibling (`/funds`,
+    `/tickers`, `/signals`, `/stats`, `/income`, `/layering-patterns`,
+    `/fund/{x}`, `/sectors`) returns an object, which is why the wrong
+    annotation here looked plausible. FastMCP builds the tool's OUTPUT schema
+    from this annotation, so declaring `dict` made the server reject its own
+    successful response with `structured_content must be a dict or None. Got
+    list: [...]` -- the data arrived fine and was then thrown away.
+    """
     return _fetch("/api/v1/divergences", {"category": category})
 
 

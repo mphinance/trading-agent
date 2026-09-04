@@ -239,7 +239,7 @@ def register_tier2_tools(mcp: Any) -> list[str]:
     from mcp_server.warmer import WARM_TICKERS
 
     @mcp.tool()
-    async def run_stock_screen(preset: str = "most_active", limit: int = 25) -> dict[str, Any]:
+    async def run_stock_screen(preset: str = "most_active", limit: int = 25) -> list[dict[str, Any]]:
         """Run a stock screen using TradingView's scanner (22 presets)."""
         payload = _out(await _run_stock_screen(preset=preset, limit=limit))
         return with_free_tier_note(payload, "screen", count=_count_of(payload))
@@ -250,7 +250,7 @@ def register_tier2_tools(mcp: Any) -> list[str]:
         sort_by: str = "volume",
         sort_ascending: bool = False,
         limit: int = 25,
-    ) -> dict[str, Any]:
+    ) -> list[dict[str, Any]]:
         """Build a custom stock screen with dynamic filter conditions."""
         return _out(await _run_custom_screen(filters=filters, sort_by=sort_by, sort_ascending=sort_ascending, limit=limit))
 
