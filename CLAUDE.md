@@ -302,6 +302,12 @@ being spent.
 
 ## Gotchas that will cost you an hour
 
+> **See also [`docs/GOTCHAS.md`](docs/GOTCHAS.md)** — the estate-wide list
+> (TMpro backend, Vespryx, supermcp, infrastructure). The ones below are
+> specific to this repo; that file covers the ones that bite from a *different*
+> repo than the one you are editing, which is where the expensive hours went.
+
+
 - **The tight rate limit is one bucket, not all of them.** US region: order
   query (where balance and positions live) is **2 req / 2s**, but market data
   is **600 req/min** and order place/replace/cancel is 600/min. `wb.py` uses a
