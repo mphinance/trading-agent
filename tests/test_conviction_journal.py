@@ -518,3 +518,48 @@ def test_embedding_refuses_a_short_response(monkeypatch):
     with pytest.raises(k.EmbeddingUnavailable) as exc:
         k._embed_texts(["a", "b"])
     assert "refusing a partial write" in str(exc.value)
+
+
+def test_trade_memory_embeds_thesis_not_boilerplate(monkeypatch):
+    """REGRESSION. ingest_trade_memory embedded the full display string --
+    "Ticker: X | Direction: y | Playbook: z | Regime: N/A | Origin: ... |
+    Result: PENDING | Thesis: ..." -- where the header is most of the
+    characters and is near-identical across every row. That boilerplate
+    dominated the vector and drowned the thesis, so recall ranked on noise:
+    a query paraphrasing one setup returned an unrelated trade first.
+
+    It also made the two sides asymmetric, since recall_similar_setups embeds
+    a bare thesis. Cosine similarity between differently-shaped texts is not
+    meaningful. Every header field is already in `metadata` and filterable via
+    chroma's `where`, so embedding it bought nothing at all."""
+    from core import knowledge as k
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        k, "_embed_texts",
+        lambda texts, task_type="RETRIEVAL_DOCUMENT": (
+            seen.extend(texts) or [[0.0] * k.EMBEDDING_DIMENSIONS for _ in texts]
+        ),
+    )
+
+    class _Col:
+        def upsert(self, **kw): self.kw = kw
+    col = _Col()
+    monkeypatch.setattr(k, "_get_trade_memory_collection", lambda: col)
+    monkeypatch.setattr(k, "_CHROMADB_AVAILABLE", True)
+
+    thesis = "Bought the dip as price held the rising 21 EMA on shrinking volume."
+    k.ingest_trade_memory({
+        "id": "t1", "ticker": "SOFI", "direction": "long",
+        "playbook": "momentum", "origin": "TEST", "reasoning": thesis,
+    })
+
+    assert seen == [thesis], f"embedded the wrong text: {seen!r}"
+    for noise in ("Ticker:", "Direction:", "Playbook:", "Origin:", "Result:"):
+        assert noise not in seen[0]
+
+    # The readable document keeps the full header -- only the vector changed.
+    assert "Ticker: SOFI" in col.kw["documents"][0]
+    assert thesis in col.kw["documents"][0]
+    # And the header fields remain filterable where they belong.
+    assert col.kw["metadatas"][0]["playbook"] == "momentum"

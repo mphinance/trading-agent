@@ -275,8 +275,15 @@ def register_tier2_tools(mcp: Any) -> list[str]:
     async def generate_chart(
         ticker: str, period: str = "6mo", interval: str = "1d",
         style: str = "dark", show_emas: bool = True,
-    ) -> dict[str, str]:
-        """Generate a candlestick chart with EMA overlays (8/21/34/55/89)."""
+    ) -> dict[str, Any]:
+        """Generate a candlestick chart with EMA overlays (8/21/34/55/89).
+
+        Returns dict[str, Any], not dict[str, str]: `core.charts.generate_chart`
+        returns `emas` as a list of ints and `bars` as an int. FastMCP derives
+        the tool's OUTPUT schema from this annotation, so the narrower type
+        made the server reject its own correct result with
+        `Output validation error: [8, 21, 34, 55] is not of type 'string'`.
+        """
         return _out(await _generate_chart(
             ticker=ticker, period=period, interval=interval,
             style=style, show_emas=show_emas,

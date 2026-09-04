@@ -274,11 +274,29 @@ def ingest_trade_memory(entry: dict) -> Any:
                 pct_move = float(resolutions[h].get("pct_move", 0.0))
                 break
 
+        # `doc_text` is what a human reads back; `embed_text` is what the
+        # vector is built from, and they are deliberately NOT the same string.
+        #
+        # This used to embed doc_text wholesale. That metadata header is most
+        # of the characters and is near-identical across records -- every row
+        # carries "Ticker: | Direction: | Playbook: | Regime: | Origin: |
+        # Result:" and most carry "N/A"/"PENDING" -- so it dominated the
+        # vector and drowned out the thesis. Recall then ranked essentially on
+        # boilerplate: a query paraphrasing one setup's thesis returned an
+        # unrelated trade first (SOFI momentum vs XOM mean-reversion, verified
+        # on the box 2026-09-04).
+        #
+        # It also made the two sides asymmetric -- documents got the header,
+        # queries came in as bare prose from recall_similar_setups -- and
+        # cosine similarity between differently-shaped texts is not meaningful.
+        # Every one of those fields is ALREADY in `metadata` below and
+        # filterable via chroma's `where`, so embedding them bought nothing.
         doc_text = (
             f"Ticker: {ticker} | Direction: {direction} | Playbook: {playbook} | "
             f"Regime: {regime_posture} | Origin: {origin} | Result: {result} | Thesis: {reasoning}"
         )
-        embedding = _embed_texts([doc_text])[0]
+        embed_text = reasoning
+        embedding = _embed_texts([embed_text])[0]
 
         metadata = {
             "ticker": ticker,
