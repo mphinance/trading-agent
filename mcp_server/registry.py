@@ -13,6 +13,21 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+from mcp_server.upsell import with_free_tier_note
+
+
+def _count_of(payload: Any) -> int | None:
+    """Best-effort result count, for a hint that says "8 results" not "results"."""
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict):
+        for key in ("results", "data", "candidates", "matches", "tickers"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return len(value)
+    return None
+
+
 def _out(res: Any) -> Any:
     if hasattr(res, "model_dump"):
         return res.model_dump()
@@ -226,7 +241,8 @@ def register_tier2_tools(mcp: Any) -> list[str]:
     @mcp.tool()
     async def run_stock_screen(preset: str = "most_active", limit: int = 25) -> dict[str, Any]:
         """Run a stock screen using TradingView's scanner (22 presets)."""
-        return _out(await _run_stock_screen(preset=preset, limit=limit))
+        payload = _out(await _run_stock_screen(preset=preset, limit=limit))
+        return with_free_tier_note(payload, "screen", count=_count_of(payload))
 
     @mcp.tool()
     async def run_custom_screen(
@@ -291,17 +307,20 @@ def register_tier2_tools(mcp: Any) -> list[str]:
     @mcp.tool()
     async def screen_vcp(tickers: list[str] | None = None, max_tickers: int = 50) -> dict[str, Any]:
         """Screen for stocks forming a Volatility Contraction Pattern (VCP)."""
-        return _out(await _screen_vcp(tickers=tickers, max_tickers=max_tickers))
+        payload = _out(await _screen_vcp(tickers=tickers, max_tickers=max_tickers))
+        return with_free_tier_note(payload, "screen", count=_count_of(payload))
 
     @mcp.tool()
     async def screen_pead(lookback_days: int = 10) -> dict[str, Any]:
         """Screen for Post-Earnings Announcement Drift (PEAD) setups."""
-        return _out(await _screen_pead(lookback_days=lookback_days))
+        payload = _out(await _screen_pead(lookback_days=lookback_days))
+        return with_free_tier_note(payload, "screen", count=_count_of(payload))
 
     @mcp.tool()
     async def screen_canslim(tickers: list[str] | None = None, max_tickers: int = 30) -> dict[str, Any]:
         """Screen for growth stocks matching CANSLIM criteria."""
-        return _out(await _screen_canslim(tickers=tickers, max_tickers=max_tickers))
+        payload = _out(await _screen_canslim(tickers=tickers, max_tickers=max_tickers))
+        return with_free_tier_note(payload, "screen", count=_count_of(payload))
 
     @mcp.tool()
     async def detect_market_top() -> dict[str, Any]:

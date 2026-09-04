@@ -31,12 +31,87 @@ def _get_all_imports_in_file(path: Path) -> set[str]:
     return imported
 
 
+# The exact set of files the public export would publish. This is a review
+# surface, not bookkeeping: every name here is a file that would become world
+# readable, so adding one is a decision someone made on purpose.
+EXPECTED_PUBLIC_FILES = {
+    "core/__init__.py",
+    "core/cache.py",
+    "core/charts.py",
+    "core/conviction.py",
+    "core/data.py",
+    "core/edgar.py",
+    "core/knowledge.py",
+    "core/macro_regime.py",
+    "core/market_top.py",
+    "core/options.py",
+    "core/options_greeks.py",
+    "core/risk.py",
+    "core/schema.py",
+    "core/screener.py",
+    "core/technicals.py",
+    "core/traderdaddy.py",
+    "core/vcp_screener.py",
+    "mcp_server/__init__.py",
+    "mcp_server/alpha_cards.py",
+    "mcp_server/backtest.py",
+    "mcp_server/breadth.py",
+    "mcp_server/bubble.py",
+    "mcp_server/canslim_screener.py",
+    "mcp_server/earnings_analyzer.py",
+    "mcp_server/edgar_tools.py",
+    "mcp_server/environment.py",
+    "mcp_server/exposure.py",
+    "mcp_server/ftd_detector.py",
+    "mcp_server/fundamentals.py",
+    "mcp_server/garch.py",
+    "mcp_server/macro.py",
+    "mcp_server/memory.py",
+    "mcp_server/news.py",
+    "mcp_server/pair_trade.py",
+    "mcp_server/pead_screener.py",
+    "mcp_server/position_sizer.py",
+    "mcp_server/registry.py",
+    "mcp_server/scenario.py",
+    "mcp_server/server.py",
+    "mcp_server/themes.py",
+    "mcp_server/tv_analysis.py",
+    "mcp_server/upsell.py",
+    "mcp_server/uptrend.py",
+    "mcp_server/warmer.py",
+    "mcp_server/watchlist.py",
+}
+
+
 class TestExportManifestInventory:
     def test_manifest_files_exist(self):
         files = get_manifest_files()
-        assert len(files) == 44
         for f in files:
             assert f.is_file(), f"Manifest file does not exist: {f}"
+
+    def test_manifest_contents_are_deliberate(self):
+        """A tripwire on WHAT is in the export, not how many things are.
+
+        This assertion used to be `len(files) == 44`, which fired correctly the
+        first time a module was added — and said only that a number had moved.
+        Comparing names means the failure names the file, and the reviewer can
+        see at a glance whether it is something that should be published.
+
+        Adding a module here is the deliberate act. Read it and decide, then add
+        the name.
+        """
+        actual = {f"{f.parent.name}/{f.name}" for f in get_manifest_files()}
+        unexpected = actual - EXPECTED_PUBLIC_FILES
+        missing = EXPECTED_PUBLIC_FILES - actual
+        assert not unexpected, (
+            "new file(s) would be published that this baseline has never seen: "
+            f"{sorted(unexpected)}. If they belong in the public repo, add them "
+            "to EXPECTED_PUBLIC_FILES; if they carry anything private, they do "
+            "not belong in the manifest at all."
+        )
+        assert not missing, (
+            f"manifest no longer exports: {sorted(missing)} — was that intended?"
+        )
 
     def test_constellation_excluded(self):
         files = get_manifest_files()
