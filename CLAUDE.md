@@ -44,17 +44,18 @@ Related repos, and why this isn't merged into them:
 - **Broker:** `webull-openapi-python-sdk` 2.0.18 (pinned in `requirements.txt`)
   — `webull.core` / `webull.trade` / `webull.data`. Public.com is a second,
   partial adapter.
-- **Signals/data:** TraderDaddy Pro over plain JSON-RPC (`td.py`), TickerTrace
+- **Signals/data:** TraderDaddy Pro over plain JSON-RPC (`core/td.py`), TickerTrace
   (`tickertrace_mcp.py`), yfinance, TradingView screener.
 - **Approval channels:** Telegram (long-poll) and Discord (gateway bot).
 - **LLM:** OpenRouter via `vesper/llm.py`. Narrative and red-team only — see
   rule 6.
 - **MCP:** `mcp_server/` exposes the quant tooling to MCP hosts (FastMCP,
-  stdio by default). `trading_mcp/` is a second, separate MCP process — an
-  owner-only, READ-ONLY view over that plus Vesper's own state (account,
-  halt, alerts, pending approvals, audit chain, conviction/trade-memory
-  recall). Neither server holds broker credentials or an order path; see
-  rule 3.
+  stdio by default) and holds no broker credentials or order path. `trading_mcp/`
+  is a second, separate MCP process — an owner-only view over that plus
+  Vesper's own state (account, halt, alerts, pending approvals, audit chain,
+  conviction/trade-memory recall). As of Amendment A4 (2026-09-04) it is
+  **no longer read-only**: three order tools reach `vesper.execution_guard`
+  behind a `trade` OAuth scope; see rule 3.
 - **Trade memory:** `core/conviction.py`'s `log_conviction()` /
   `resolve_convictions()` also call `core/knowledge.py`'s
   `ingest_trade_memory()`, which embeds each entry into a ChromaDB
@@ -152,9 +153,12 @@ Properties that hold it together, none decorative:
   of per-strategy formulas (`_MULTI_LEG_RISK_FORMULAS`); an unregistered
   `strategy_type` is refused outright, never approximated.
 - **`VESPER_TRADING=0` is the kill switch**, and it defaults **off**.
-- **`vesper/halt.py` is the emergency freeze**, checked before anything else.
-  `vesper/circuit_breaker.py` trips it automatically on a 15% trailing-peak NLV
-  drawdown.
+- **`core/halt.py` is the emergency freeze**, checked before anything else.
+  `core/circuit_breaker.py` trips it automatically on a 15% trailing-peak NLV
+  drawdown. (`vesper/halt.py` still exists as a thin compat re-export, kept
+  only because `execution_guard.py` — never to be edited — imports
+  `from vesper.halt import is_halted`; every other caller was repointed to
+  `core.halt` directly in the M0 split.)
 
 **Only `mcp_server` and the approval bots reach the agent; none of them holds
 broker credentials or implements its own risk checks.** Any adapter that grows
@@ -343,10 +347,10 @@ being spent.
 
 - **The tight rate limit is one bucket, not all of them.** US region: order
   query (where balance and positions live) is **2 req / 2s**, but market data
-  is **600 req/min** and order place/replace/cancel is 600/min. `wb.py` uses a
-  lock, backoff and a stale fallback for the scarce bucket; `md.py` is a
-  separate client on the generous one. **Do not merge those two modules**, and
-  route new quote reads through `md.Market` rather than the raw SDK client so
+  is **600 req/min** and order place/replace/cancel is 600/min. `core/wb.py`
+  uses a lock, backoff and a stale fallback for the scarce bucket; `core/md.py`
+  is a separate client on the generous one. **Do not merge those two modules**, and
+  route new quote reads through `core.md.Market` rather than the raw SDK client so
   they inherit its chunking and caching.
 - **Buying power is shared across accounts** — totals use `max()`, not `sum()`.
 - **`sk-ant-oat…` is an OAuth token, not an API key.** Same prefix, same ~108
@@ -357,7 +361,7 @@ being spent.
   **`get_earnings_flow` has the same trap**: its `symbol` argument is not a
   filter at all, it always returns the full market-wide slate.
 - **TDPro doesn't declare a charset**, so `requests` decodes UTF-8 as
-  ISO-8859-1 and em-dashes arrive as `â€"`. `td.py` pins it.
+  ISO-8859-1 and em-dashes arrive as `â€"`. `core/td.py` pins it.
 - **Python 3.14 works.** SDK 2.0.18 declares `python_requires='>=3.8,<3.15'`
   with explicit cryptography/grpcio pins for 3.14.
 - **`pip install chromadb` breaks the Webull SDK, and reports success while
@@ -392,7 +396,8 @@ being spent.
 
 ```
 vesper.py          CLI entrypoint: scan / analyze / 0dte / morning / monitor /
-                   loop / listen / alerts / halt / resume / status / paper
+                   loop / listen / alerts / halt / resume / status / paper /
+                   audit
 vesper/
   graph.py         LangGraph pipeline + disk-backed SQLite checkpointer
   runner.py        Drives one agent session
@@ -400,48 +405,62 @@ vesper/
   state.py         Pydantic models (OrderProposal, OrderLeg, TradingState, …)
   execution_guard.py  THE ORDER PATH — guards, tickets, multi-leg risk formulas
   risk.py          RiskEnforcer: sizing + capital-allocation buckets
-  circuit_breaker.py  Trailing-peak NLV drawdown -> automatic halt
-  halt.py          Emergency freeze, checked by the guard before anything else
+  halt.py          Thin compat re-export of core/halt.py, kept only because
+                   execution_guard.py (never edited) imports from here
   monitor.py       Position monitor + exit cascade (push-woken, see rule 4b)
-  paper_ledger.py  Simulated fills, mark-to-market, realized/unrealized P&L
   account.py       Live equity/NLV reads
   sector.py        Ticker -> sector (yfinance), for the concentration bucket
   llm.py           OpenRouter: thesis narrative + risk red-team (rule 6)
   flow_classifier.py  Directional-vs-hedge options flow scoring
   alerts_runner.py    Builds/starts the alert watcher (rule 4c)
   stream_runner.py    gRPC trade-event push -> monitor wake-up (rule 4b)
-  nodes/           regime, scanner, analyst, playbooks, risk_gate,
-                   human_gate, executor, reflection
+  morning.py       Pre-market battle-plan runner behind `vesper morning`
+  leveraged.py     Leveraged-ETF / high-beta instrument lookup
+  skills_engine.py Autonomous skill creation/evolution engine
+  whop.py          Whop commercial licensing / entitlement gateway
+  agents/          Multi-agent specialist swarm (technical, flow, fundamental,
+                   gamma, synthesis/debate supervisor, adversarial risk) —
+                   wired into the graph via nodes/swarm_node.py and
+                   nodes/synthesis_node.py below
+  nodes/           regime, scanner, analyst, swarm_node, playbooks,
+                   synthesis_node, risk_gate, human_gate, executor, reflection
+                   — this is the actual graph.py edge order, swarm/synthesis
+                   included
   bot/             Telegram + Discord adapters, gateway, inbound approvals
   brokers/         public_broker.py (second, partial adapter)
 
 core/              Shared layer both vesper/ and trading_mcp/ import from (the
                    M0 split). secret_hygiene.py lives here because BOTH need
-                   it — it refuses placeholder credentials (rule 2).
-wb.py              Webull client — credentials, account/position/order reads,
+                   it — it refuses placeholder credentials (rule 2). The split
+                   moved more than edgar/knowledge/conviction: wb.py, md.py,
+                   td.py, quotes.py, circuit_breaker.py and paper_ledger.py
+                   are core/ modules too, not repo-root ones — this file listed
+                   them at the repo root until 2026-09-04.
+core/wb.py         Webull client — credentials, account/position/order reads,
                    caching and the scarce 2-req/2s bucket
-md.py              Market data, research, screeners, watchlists (600/min bucket)
-td.py              TraderDaddy Pro client + td.levels() dealer-gamma compaction
+core/md.py         Market data, research, screeners, watchlists (600/min bucket)
+core/td.py         TraderDaddy Pro client + td.levels() dealer-gamma compaction
 core/edgar.py      SEC EDGAR client — filings, XBRL financials, shares
                    outstanding, AS-FILER 13D/13G stakes. Needs SEC_USER_AGENT.
-                   (Moved from the repo root in the M0 split, along with
-                   core/knowledge.py and core/conviction.py — this file listed
-                   all three in their old homes until 2026-09-04.)
+core/circuit_breaker.py  Trailing-peak NLV drawdown -> automatic halt
+core/paper_ledger.py     Simulated fills, mark-to-market, realized/unrealized P&L
+core/quotes.py     Last price w/ fallback chain: md snapshot -> portfolio -> TDPro
 alerts.py          Alert store + crossing logic (a level can BE dealer structure)
 watcher.py         Background thread evaluating alerts
-quotes.py          Last price w/ fallback chain: md snapshot -> portfolio -> TDPro
 notify.py          Alert delivery: ntfy and/or Telegram
 stream.py          MQTT quote push + gRPC trade-event push onto one bus
 tickertrace_mcp.py / momentum_mcp.py   Data-source MCP clients
 mcp_server/        Quant tooling exposed over MCP (FastMCP, stdio). registry.py's
-                   register_momentum_tools() registers tiers 1-3 (47 tools) onto
+                   register_momentum_tools() registers tiers 1-3 (47 tools) PLUS,
+                   by default, 17 TickerTrace `etf_*` tools (64 total) onto
                    any FastMCP instance in-process — used by both server.py here
                    and trading_mcp/server.py below. conviction.py is the
                    conviction journal; knowledge.py is the Chroma-backed
                    knowledge base AND the trade-memory layer — see below.
-trading_mcp/       PHASE 0: owner-only, READ-ONLY MCP server (separate process
-                   from mcp_server/server.py and from supermcp). server.py wires
-                   registry.py's tiers 1-3 plus vesper_tools.py's 13 read-only
+trading_mcp/       Owner-only MCP server (separate process from mcp_server/server.py
+                   and from supermcp), no longer read-only as of Amendment A4
+                   (2026-09-04) — see below. server.py wires registry.py's
+                   64 momentum+tickertrace tools plus vesper_tools.py's 13 read-only
                    Vesper tools (account/halt/drawdown/paper/alerts/pending-
                    approvals/audit-chain/playbook-calibration/trade-memory-recall/
                    position-monitor-preview) onto one FastMCP("trading-agent").
@@ -454,10 +473,9 @@ trading_mcp/       PHASE 0: owner-only, READ-ONLY MCP server (separate process
                    and refuses to start with a missing OR placeholder token
                    (core/secret_hygiene.py, rule 2).
                    order_tools.py IS registered as of 2026-09-04 (M8-24): three
-                   order tools behind require_scopes("trade"), 80 tools total.
-                   This server is NO LONGER read-only. voice_tools.py and
-                   drafting.py remain written, tested and NOT registered. No
-                   non-order tool here may call
+                   order tools behind require_scopes("trade"), 80 tools total
+                   (77 read + 3 order). voice_tools.py and drafting.py remain
+                   written, tested and NOT registered. No non-order tool here may call
                    guard.preview()/guard.place(), resume(), or
                    ApprovalRegistry.submit_decision() — see rule 3's note above,
                    app_spec.txt's A3, and tests/test_trading_mcp.py's AST-based
@@ -477,7 +495,7 @@ ROADMAP.md         Single planning doc: status, known gaps, ideas backlog
 
 ## Tests
 
-`pip install -r requirements-dev.txt && pytest -q`. **815 passing.** The suite
+`pip install -r requirements-dev.txt && pytest -q`. **823 passing.** The suite
 is hermetic — no network, no broker, no credentials — because a green build
 must not depend on TDPro or ntfy.sh being up.
 
