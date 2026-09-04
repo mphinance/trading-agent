@@ -127,10 +127,87 @@ with a projection allowlist and a test.
 
 ## 5. What has to be built
 
-Four items, in dependency order. Only the first is strictly required for the free
-funnel; the rest are what turn it into revenue.
+### 5.0 The gate is `hasVespryx` — not `has_api_access`, not `subscription_tier`
 
-### 5.1 Let free-tier users mint a key — not a new tier
+**This supersedes most of §5.1 and §5.2.** Those sections were written assuming
+the funnel had to run through the TD Pro Developer API key. It does not, and
+routing it that way would have been wrong on the merits as well as dangerous.
+
+Three entitlements exist, and they are **fully independent** — separate Stripe
+products on the same `users` row, none derived from another:
+
+| entitlement | backing | what it is for |
+|---|---|---|
+| `subscription_tier` | `'free' \| 'premium'` | TD Pro itself |
+| `has_api_access` | boolean, Stripe-only | the **Developer API** — `developer.ts:99` calls it "a STANDALONE product" and explicitly forbids gating it on tier |
+| **`hasVespryx`** | `vespryx_active` + `vespryx_until` (migration 277) | **dealer levels, apex, tactical grid** |
+
+`hasVespryx()` (`src/utils/vespryx.ts:64`) requires the flag **and** an unexpired
+`vespryx_until`, failing closed on a missing or unparseable date. It is a
+boolean-with-expiry, **not a tier** — and the "beginner+ Vespryx tier" that
+`dealer-hud`'s QUICKSTART, README, AGENTS.md and CLAUDE.md all reference **does
+not exist**. That is stale terminology for TD Pro's retired `beginner` tier,
+collapsed into premium/free by migrations 275/276.
+
+**Why this is the right gate:** the codebase already goes out of its way,
+repeatedly and with regression tests, to keep dealer data (apex, gex,
+tactical-grid) as its own product — *"TWO PRODUCTS, TWO BILLS, ONE ROUTE."*
+`hasVespryx` is the entitlement actually built, tested and revoked for exactly
+this data, with real expiry semantics. `has_api_access` is a different product
+aimed at a different buyer.
+
+**And it sidesteps the landmine entirely.** The hardcoded
+`subscription_tier: 'premium'` stamp in `apiKeyAuth.ts:96-97` is a *Developer
+API key* problem. A funnel gated on `hasVespryx` never touches
+`has_api_access`, never needs the premium-stamp fix, and never needs the audit
+of ~56 `requireTier('premium')` routes. §5.1 and §5.2 become optional work for
+a different product rather than prerequisites for this one.
+
+### 5.0a 🔴 Revenue leak: Vespryx data is reachable without buying Vespryx
+
+Which gate runs depends on **one header**. `src/routes/gex.ts:104`:
+
+```js
+if (isVespryxClient(req)) return hasVespryx(req.user);
+return (req.user?.subscription_tier ?? 'free') === 'premium' || hasVespryx(req.user);
+```
+
+`isVespryxClient` just checks for the presence of `x-vespryx-client`. The
+extension sends it (`dealer-hud/background.js:445`). **The desktop MCP tool does
+not** — `tools/td-api.mjs:228-234` sends only `Accept`, `User-Agent` and
+`Authorization`.
+
+So the MCP server rides the *looser* branch by omission: a **TD Pro premium
+subscriber who has never bought Vespryx gets full apex data** through it, using
+session tokens copied from a logged-in tab — which `QUICKSTART.md` documents as
+the supported fallback ("No extension? Take `access_token` and `refresh_token`
+from a logged-in traderdaddy.pro tab").
+
+Two ways to close it, pick one:
+
+- have `td-api.mjs` send `X-Vespryx-Client`, so the desktop path gets the same
+  Vespryx-only gate the extension does; or
+- add an MCP-facing backend gate calling `hasVespryx()` directly, mirroring
+  `requireDealerData` rather than `isEntitledToGex`'s permissive branch.
+
+The header is spoofable but cannot escalate — forging it only moves the caller
+to the **stricter** branch, and `gex.ts:57-68` reasons that through explicitly.
+
+### 5.0b The blocker this creates: Vespryx has no trial
+
+`subscriptions.ts:830` is explicit: *"Vespryx has no trial, so it would also need
+the $1 card-authorization check that stops dead-card abuse."* TD Pro grants a
+7-day trial to first-timers (`subscriptions.ts:801`); Vespryx is excluded, and
+there is no Whop free tier and no install-based grant anywhere.
+
+So today the funnel's middle stage can only say **"buy it"**, never "try it".
+Given `vespryx_until` already exists and is checked, a no-card trial is a
+short-dated grant rather than new machinery — that is the smallest useful change
+on the paid side.
+
+---
+
+### 5.1 (superseded by §5.0 for this funnel) Free-tier Developer API keys
 
 **A free tier already exists.** `src/middleware/auth.ts:181-184`:
 

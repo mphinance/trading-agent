@@ -120,6 +120,65 @@ derived-only license."* Permitted, never built.
 
 ---
 
+## Entitlements — three of them, all independent
+
+**`subscription_tier`, `has_api_access` and `hasVespryx` are three separate
+Stripe products on the same `users` row.** None is derived from another. A
+Vespryx-only buyer stays `subscription_tier='free'` forever, and
+`developer.ts:99` explicitly forbids gating the Developer API on tier: *"a
+STANDALONE product."*
+
+**`hasVespryx` is a boolean-with-expiry, not a tier.** `vespryx_active` +
+`vespryx_until` (migration 277); `utils/vespryx.ts:64` requires both the flag
+and an unexpired date, failing closed on an unparseable one.
+
+**There is no "beginner+ Vespryx tier".** `dealer-hud`'s QUICKSTART, README,
+AGENTS.md and CLAUDE.md all say there is. It is stale terminology for TD Pro's
+retired `beginner` tier, collapsed into premium/free by migrations 275/276. No
+Vespryx tier ladder exists in the schema.
+
+**Which gate runs on `/gex/*` depends on one header.** `gex.ts:104` — if
+`x-vespryx-client` is present, `hasVespryx` alone; otherwise
+`premium || hasVespryx`. `isVespryxClient` only checks the header *exists*, any
+value. The header is spoofable but cannot escalate: forging it moves you to the
+**stricter** branch.
+
+**🔴 The desktop/MCP tool omits that header, so it gets the looser gate.**
+`tools/td-api.mjs:228-234` sends only `Accept`, `User-Agent`, `Authorization`.
+Result: a TD Pro premium subscriber who never bought Vespryx gets full apex data
+through the MCP path, using tokens copied from a logged-in tab — the fallback
+QUICKSTART itself documents. Same backend predicate, opposite outcome, decided
+by a missing header. **Still open.**
+
+**`error: 'premium_required'` lies about which product.** `gex.ts:174` sends
+that string for *both* TD Pro and Vespryx lockouts, and `gex.ts:205` says so
+outright. `upgrade_url` is the field that actually distinguishes them
+(`vespryx.com` vs `/pricing`). Any UI keying off the error string mis-routes.
+
+**`requireTier` has never heard of `vespryx_active`, and must not.** A
+Vespryx-aware gate has to be added per-route, the way `requireDealerData` was —
+which happened only after the generic version 403'd every Vespryx-only customer
+on `/tactical-grid`.
+
+**Two endpoints disagree about "the plan".** A Vespryx-only buyer has no row in
+`subscriptions` (deliberate, migration 280), so `/api/subscriptions/status`
+reports them as free. The portal must call `/api/subscriptions/vespryx-status`
+instead — pinned by `dealer-hud/test/funnel.test.mjs` because the wrong endpoint
+told a paying customer they were on the free plan.
+
+**Vespryx has no trial, by design.** `subscriptions.ts:830`: *"Vespryx has no
+trial, so it would also need the $1 card-authorization check."* TD Pro's 7-day
+trial is TD-Pro-only. No Whop free tier, no install grant.
+
+**`has_api_access` is cached for 15s** in `apiKeyService.validateKey` — a
+documented stale window, not a bug, but revocation is not instant.
+
+**Bundle product ids are enforced by convention, not code.** A bundle price must
+be in `STRIPE_PRODUCT_IDS_NEW` and *not* in `STRIPE_VESPRYX_PRODUCT_IDS`. A
+hand-edited env var silently drops one half of the grant.
+
+---
+
 ## Vespryx
 
 **A dead session is indistinguishable from an unpaid one.**
