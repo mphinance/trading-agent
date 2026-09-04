@@ -515,13 +515,22 @@ def register_tier3_tools(mcp: Any) -> list[str]:
 # REGISTER ALL TOOLS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def register_momentum_tools(mcp: Any, include_tiers: tuple[int, ...] = (1, 2, 3)) -> list[str]:
+def register_momentum_tools(
+    mcp: Any,
+    include_tiers: tuple[int, ...] = (1, 2, 3),
+    include_tickertrace: bool = True,
+) -> list[str]:
     """
     Register Momentum tools onto an existing FastMCP server instance.
-    
+
     Args:
         mcp: FastMCP instance (e.g. `supermcp`'s `mcp`).
         include_tiers: Which tiers to register (default: Tier 1, 2, and 3).
+        include_tickertrace: Register the 17 `etf_*` TickerTrace tools
+            (default: True). They need no credential — `api.tickertrace.pro`
+            is deliberately open — so there is no configuration reason to
+            leave them out; the flag exists so a host that already mounts
+            TickerTrace's own MCP server can avoid registering it twice.
     """
     all_registered: list[str] = []
     if 1 in include_tiers:
@@ -530,4 +539,8 @@ def register_momentum_tools(mcp: Any, include_tiers: tuple[int, ...] = (1, 2, 3)
         all_registered.extend(register_tier2_tools(mcp))
     if 3 in include_tiers:
         all_registered.extend(register_tier3_tools(mcp))
+    if include_tickertrace:
+        from mcp_server.tickertrace_tools import register_tickertrace_tools
+
+        all_registered.extend(register_tickertrace_tools(mcp))
     return all_registered

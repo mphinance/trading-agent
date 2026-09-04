@@ -45,7 +45,8 @@ PUBLIC_MCP_SERVER = ["mcp_server/"]          # except constellation.py, see belo
 PUBLIC_CORE_MODULES = [
     "cache", "charts", "conviction", "data", "edgar", "knowledge",
     "macro_regime", "market_top", "options", "options_greeks", "risk",
-    "schema", "screener", "technicals", "traderdaddy", "vcp_screener",
+    "schema", "screener", "technicals", "tickertrace", "traderdaddy",
+    "vcp_screener",
 ]
 EXCLUDE = ["mcp_server/constellation.py"]    # dead code: imported by nothing
 

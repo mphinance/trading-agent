@@ -50,6 +50,7 @@ EXPECTED_PUBLIC_FILES = {
     "core/schema.py",
     "core/screener.py",
     "core/technicals.py",
+    "core/tickertrace.py",
     "core/traderdaddy.py",
     "core/vcp_screener.py",
     "mcp_server/__init__.py",
@@ -75,6 +76,7 @@ EXPECTED_PUBLIC_FILES = {
     "mcp_server/scenario.py",
     "mcp_server/server.py",
     "mcp_server/themes.py",
+    "mcp_server/tickertrace_tools.py",
     "mcp_server/tv_analysis.py",
     "mcp_server/upsell.py",
     "mcp_server/uptrend.py",
@@ -122,7 +124,8 @@ class TestExportManifestInventory:
         expected_core = {
             "cache", "charts", "conviction", "data", "edgar", "knowledge",
             "macro_regime", "market_top", "options", "options_greeks", "risk",
-            "schema", "screener", "technicals", "traderdaddy", "vcp_screener",
+            "schema", "screener", "technicals", "tickertrace", "traderdaddy",
+            "vcp_screener",
         }
         assert set(PUBLIC_CORE_MODULES) == expected_core
 

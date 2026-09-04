@@ -59,7 +59,7 @@ class TestRegisterMomentumTools:
         all_tools = register_momentum_tools(mock_mcp, include_tiers=(1, 2, 3))
 
         # Expected 47 tools
-        assert len(all_tools) == 47
+        assert len(all_tools) == 64
         # Tool names must be unique
         assert len(all_tools) == len(set(all_tools))
         # Tools registered on the server must match returned list
@@ -81,13 +81,25 @@ class TestRegisterMomentumTools:
         assert len(t3) == len(set(t3))
         assert len(m3.tools) == len(t3)
 
-        # Sum of individual tiers must equal full registration
+        # Sum of individual tiers must equal full registration, once the
+        # TickerTrace block is excluded -- it is not a tier, it is a separate
+        # data source mounted alongside them (see registry.register_momentum_tools).
         m_all = MockMCP()
-        all_tools = register_momentum_tools(m_all, include_tiers=(1, 2, 3))
+        all_tools = register_momentum_tools(
+            m_all, include_tiers=(1, 2, 3), include_tickertrace=False
+        )
         assert len(all_tools) == len(t1) + len(t2) + len(t3)
+
+        # ...and with it, exactly 17 more.
+        m_with_tt = MockMCP()
+        with_tt = register_momentum_tools(m_with_tt, include_tiers=(1, 2, 3))
+        assert len(with_tt) == len(all_tools) + 17
+        assert len(with_tt) == len(set(with_tt)), "a tool name collided"
 
         # Requesting only tier 1 registers fewer tools
         m_t1_only = MockMCP()
-        t1_registered = register_momentum_tools(m_t1_only, include_tiers=(1,))
+        t1_registered = register_momentum_tools(
+            m_t1_only, include_tiers=(1,), include_tickertrace=False
+        )
         assert len(t1_registered) == len(t1)
         assert len(t1_registered) < len(all_tools)
