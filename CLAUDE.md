@@ -358,6 +358,18 @@ being spent.
   ISO-8859-1 and em-dashes arrive as `â€"`. `td.py` pins it.
 - **Python 3.14 works.** SDK 2.0.18 declares `python_requires='>=3.8,<3.15'`
   with explicit cryptography/grpcio pins for 3.14.
+- **Never `pip install` `webull-openapi-mcp` into this repo's venv.** It is a
+  vendored nested checkout of Webull's own MCP server
+  (`webull-openapi-mcp/`, upstream `github.com/webull-inc/webull-openapi-mcp`),
+  and an editable install puts its top-level `tests` package on the path where
+  it **shadows this repo's `tests/`** — `pytest` then dies at collection with
+  `ModuleNotFoundError: No module named 'tests.test_import_boundaries'`, which
+  reads like a broken test file rather than a packaging collision. Tried and
+  reverted 2026-09-04. The `webull` MCP server entry in `~/.claude.json`
+  instead sets `env.PYTHONPATH` to that directory, which scopes the package to
+  that one stdio process and leaves the venv untouched. Without it the server
+  fails `CONNECTION_CLOSED` — the module genuinely isn't importable — and the
+  temptation is to "just install it". Don't.
 
 ## Layout
 
