@@ -192,6 +192,16 @@ Three things had to change together, and the order matters if you ever unwind it
    register read-only and every order tool would answer 403. The security
    boundary is not the scope — it is the operator secret at `/authorize`, plus
    everything in the next point.
+
+   **The static bearer stays read-only, and that is the point.**
+   `_build_auth()` gives `TRADING_AGENT_TOKEN` the scopes
+   `["read", "safe-write"]` — no `trade` — so the long-lived secret sitting in
+   a file on disk cannot place an order; only a token minted through the
+   human-present `/authorize` gate can. Verified live: a bearer `tools/list`
+   returns **77** tools, not 80, and calling an order tool with it answers
+   `Unknown tool` (FastMCP filters by scope rather than returning 403, which
+   looks like a broken deploy and isn't). Do not "fix" that asymmetry by adding
+   `trade` to the bearer's scope list.
 3. **The MCP notional cap was bypassable, and is now portfolio-aware.** It was
    enforced only in `place_order`, so the two-step tool path
    (`submit_manual_proposal_tool` → `place_from_ticket_tool`) reached the broker
@@ -425,7 +435,11 @@ deploy/            LIVE (M7): three systemd user units, two env contracts,
                    Traefik dynamic config, idempotent install.sh that generates
                    a real token and refuses to deploy a placeholder. See
                    deploy/README.md.
-docs/              API.md, expansion plan, OpenRouter pricing, voice stack
+docs/              API.md, expansion plan, OpenRouter pricing, voice stack.
+                   CONNECTOR_AUTH.md is the operational one: where the token
+                   lives, why the bearer and OAuth credentials differ in what
+                   they can do, how to reconnect the claude.ai connector when
+                   it 401s forever, and the five gates that bound an order.
 ROADMAP.md         Single planning doc: status, known gaps, ideas backlog
 ```
 
