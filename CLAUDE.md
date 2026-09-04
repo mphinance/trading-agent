@@ -55,16 +55,18 @@ Related repos, and why this isn't merged into them:
   halt, alerts, pending approvals, audit chain, conviction/trade-memory
   recall). Neither server holds broker credentials or an order path; see
   rule 3.
-- **Trade memory:** `mcp_server/conviction.py`'s `log_conviction()` /
-  `resolve_convictions()` also call `mcp_server/knowledge.py`'s
+- **Trade memory:** `core/conviction.py`'s `log_conviction()` /
+  `resolve_convictions()` also call `core/knowledge.py`'s
   `ingest_trade_memory()`, which embeds each entry into a ChromaDB
   `trade_memory` collection (separate from that file's book/strategy
   knowledge-base collection). `recall_similar_setups()` does the semantic
   read side — "what happened last time a setup like this one showed up" —
   and is exposed as the `recall_similar_setups` MCP tool via
-  `trading_mcp/vesper_tools.py`. `chromadb` is imported at module level in
-  `knowledge.py`, so an environment without it fails to import that whole
-  module; every caller (including the MCP tool) catches that and degrades to
+  `trading_mcp/vesper_tools.py`. **Embeddings go through OpenRouter**
+  (`/api/v1/embeddings`, reusing `OPENROUTER_API_KEY`) — not Gemini, so the
+  box carries one LLM credential rather than two. `chromadb` is imported
+  behind a `try/except ImportError` guard, so the module imports fine without
+  it and `_CHROMADB_AVAILABLE` goes False; callers degrade to
   `{"available": False, ...}` rather than crashing.
 - **Deploy:** systemd **user** service (see rule 1). Remote supermcp instance is on Vultr via `ssh coolify` (`cd supermcp`).
 
@@ -420,8 +422,11 @@ wb.py              Webull client — credentials, account/position/order reads,
                    caching and the scarce 2-req/2s bucket
 md.py              Market data, research, screeners, watchlists (600/min bucket)
 td.py              TraderDaddy Pro client + td.levels() dealer-gamma compaction
-edgar.py           SEC EDGAR client — filings, XBRL financials, shares
+core/edgar.py      SEC EDGAR client — filings, XBRL financials, shares
                    outstanding, AS-FILER 13D/13G stakes. Needs SEC_USER_AGENT.
+                   (Moved from the repo root in the M0 split, along with
+                   core/knowledge.py and core/conviction.py — this file listed
+                   all three in their old homes until 2026-09-04.)
 alerts.py          Alert store + crossing logic (a level can BE dealer structure)
 watcher.py         Background thread evaluating alerts
 quotes.py          Last price w/ fallback chain: md snapshot -> portfolio -> TDPro
