@@ -194,3 +194,35 @@ class TestPublicExportBoundaries:
         assert not violations, (
             f"Public manifest files must not import excluded modules: {violations}"
         )
+
+
+class TestStaging:
+    """`--out` copies the manifest into a directory. Publishing stays a human
+    act: the script never runs git and never touches a remote."""
+
+    def test_stage_writes_exactly_the_manifest(self, tmp_path):
+        from scripts.export_public import stage
+
+        stats = stage(tmp_path)
+        written = {
+            f"{p.parent.name}/{p.name}" for p in tmp_path.rglob("*.py")
+        }
+        assert written == EXPECTED_PUBLIC_FILES
+        assert stats["file_count"] == len(EXPECTED_PUBLIC_FILES)
+
+    def test_stage_refuses_a_destination_holding_unknown_files(self, tmp_path):
+        """The one irreversible thing this script could do is overwrite a
+        directory that had something else in it. It declines instead."""
+        from scripts.export_public import stage
+
+        (tmp_path / "core").mkdir()
+        (tmp_path / "core" / "something_private.py").write_text("# not ours\n")
+
+        with pytest.raises(RuntimeError, match="does not name"):
+            stage(tmp_path)
+
+    def test_stage_never_writes_an_excluded_file(self, tmp_path):
+        from scripts.export_public import stage
+
+        stage(tmp_path)
+        assert not (tmp_path / "mcp_server" / "constellation.py").exists()
