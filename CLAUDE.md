@@ -173,16 +173,47 @@ move money, and no order execution or risk-gate code is duplicated anywhere.
 That pin now also catches `getattr(guard, "place")` — dynamic dispatch by string
 produces no literal attribute node, and an attribute-only walk went straight past it.
 
-**A4 is written but not switched on.** `trading_mcp/order_tools.py` exists, is
-fully implemented and tested — and `server.py`'s `_register_all_tools()` never
-calls `register_order_tools`, so no client can reach it. Two things must happen
-together whenever that changes, and knowing this in advance saves an afternoon:
-the OAuth scope plumbing currently collapses `valid_scopes` to `{"read"}`
-(`_build_oauth_provider` passes `required_scopes=["read"]`, which the constructor
-reuses for both), so **no credential this server can issue would satisfy
-`require_scopes("trade")`** — registering the tools alone would lock the owner
-out rather than open a hole. Fail-closed, and pinned by
-`test_production_oauth_provider_scope_plumbing`.
+**A4 is LIVE as of 2026-09-04** (M8-24). `server.py`'s `_register_all_tools()`
+now calls `register_order_tools`, so the deployed surface is 80 tools: 77 read
+plus three order tools behind `require_scopes("trade")`.
+
+Three things had to change together, and the order matters if you ever unwind it:
+
+1. **The OAuth scope plumbing was fail-closed and had to be fixed first.**
+   `SingleOperatorOAuthProvider.__init__` took one `required_scopes` argument and
+   passed it as `valid_scopes` too; production calls it with `["read"]`, so the
+   registerable set collapsed to `{"read"}` and no credential this server could
+   issue would ever satisfy `require_scopes("trade")`. Registering the tools
+   alone would have locked the owner out, not opened a hole. The constructor now
+   takes `required_scopes` / `valid_scopes` / `default_scopes` as the three
+   separate things they are.
+2. **`trade` is in `default_scopes`, deliberately.** The claude.ai connector does
+   DCR without naming a scope, so with the SDK default of `["read"]` it would
+   register read-only and every order tool would answer 403. The security
+   boundary is not the scope — it is the operator secret at `/authorize`, plus
+   everything in the next point.
+
+   **The static bearer stays read-only, and that is the point.**
+   `_build_auth()` gives `TRADING_AGENT_TOKEN` the scopes
+   `["read", "safe-write"]` — no `trade` — so the long-lived secret sitting in
+   a file on disk cannot place an order; only a token minted through the
+   human-present `/authorize` gate can. Verified live: a bearer `tools/list`
+   returns **77** tools, not 80, and calling an order tool with it answers
+   `Unknown tool` (FastMCP filters by scope rather than returning 403, which
+   looks like a broken deploy and isn't). Do not "fix" that asymmetry by adding
+   `trade` to the bearer's scope list.
+3. **The MCP notional cap was bypassable, and is now portfolio-aware.** It was
+   enforced only in `place_order`, so the two-step tool path
+   (`submit_manual_proposal_tool` → `place_from_ticket_tool`) reached the broker
+   bounded by nothing but the guard's own, much larger cap. It is now enforced at
+   the single staging chokepoint that every path shares. And it is no longer a
+   flat dollar constant: the operative cap is `min(MCP_MAX_NOTIONAL,
+   MCP_MAX_NOTIONAL_PCT × NLV)`, and it **fails closed** — if NLV cannot be read
+   the cap is 0 and every opening order is refused, rather than falling back to
+   the flat ceiling. A flat $1000 ceiling on the live $1.5k account was 2.5× its
+   buying power; that is not a cap, it is decoration. Closing orders skip it
+   (they cannot increase exposure). Pinned by
+   `test_two_step_path_cannot_bypass_mcp_notional_cap`.
 
 ### 4. Inject live state; never make the model fetch it
 `vesper/llm.py` formats portfolio + signals + dealer gamma into the turn.
@@ -390,12 +421,11 @@ trading_mcp/       PHASE 0: owner-only, READ-ONLY MCP server (separate process
                    10.0.0.1:8500 behind Traefik at agent.mphinance.com (rule 1),
                    and refuses to start with a missing OR placeholder token
                    (core/secret_hygiene.py, rule 2).
-                   order_tools.py / voice_tools.py / drafting.py are written and
-                   tested but NOT registered in server.py, so the deployed
-                   surface is genuinely 60 read-only tools. Wiring them in
-                   converts this server from read-only to order-capable and is a
-                   deliberate step, not a cleanup — see docs/NEXT_STEPS.md. No
-                   tool here may call
+                   order_tools.py IS registered as of 2026-09-04 (M8-24): three
+                   order tools behind require_scopes("trade"), 80 tools total.
+                   This server is NO LONGER read-only. voice_tools.py and
+                   drafting.py remain written, tested and NOT registered. No
+                   non-order tool here may call
                    guard.preview()/guard.place(), resume(), or
                    ApprovalRegistry.submit_decision() — see rule 3's note above,
                    app_spec.txt's A3, and tests/test_trading_mcp.py's AST-based
@@ -405,13 +435,17 @@ deploy/            LIVE (M7): three systemd user units, two env contracts,
                    Traefik dynamic config, idempotent install.sh that generates
                    a real token and refuses to deploy a placeholder. See
                    deploy/README.md.
-docs/              API.md, expansion plan, OpenRouter pricing, voice stack
+docs/              API.md, expansion plan, OpenRouter pricing, voice stack.
+                   CONNECTOR_AUTH.md is the operational one: where the token
+                   lives, why the bearer and OAuth credentials differ in what
+                   they can do, how to reconnect the claude.ai connector when
+                   it 401s forever, and the five gates that bound an order.
 ROADMAP.md         Single planning doc: status, known gaps, ideas backlog
 ```
 
 ## Tests
 
-`pip install -r requirements-dev.txt && pytest -q`. **706 passing.** The suite
+`pip install -r requirements-dev.txt && pytest -q`. **815 passing.** The suite
 is hermetic — no network, no broker, no credentials — because a green build
 must not depend on TDPro or ntfy.sh being up.
 
@@ -506,13 +540,26 @@ verify with live access before building the registry that would close it.
 
 | | |
 |---|---|
-| `trading-agent.service` | **running**, lingering on. 60 read-only tools. |
+| `trading-agent.service` | **running**, lingering on. 80 tools — 77 read + 3 order. |
 | Reachable at | `https://agent.mphinance.com/mcp` — Traefik, LE cert to 2026-12-01 |
 | Binds | `10.0.0.1:8500` (docker bridge — rule 1) |
 | Auth | bearer + OAuth 2.1, converged in one `MultiAuth` |
 | Credentials on box | live Webull **prod**, TDPro, EDGAR |
 | `vesper-loop` / `vesper-listen` | enabled but **stopped** — the agent itself does not run there yet |
-| `VESPER_TRADING` | **0**. Turning it on is the human's keystroke, never an agent's. |
+| `VESPER_TRADING` | **1** in `.env.trading-agent`, at the operator's instruction 2026-09-04. |
+| MCP order caps | `MCP_MAX_NOTIONAL_PCT=0.25` of NLV · `MCP_MAX_NOTIONAL=1000` ceiling · 5 orders/day |
 
-So the box can *read* the live account today; it cannot place an order, on two
-independent counts (order tools unregistered, `VESPER_TRADING=0`).
+So the box **can place an order** as of 2026-09-04. What still bounds it: the
+portfolio-aware notional cap (~$378 on a $1.5k book — the pct term binds, not
+the $1000 ceiling), `MCP_MAX_DAILY_ORDERS=5`, the guard's own $2500 cap, the
+halt file and the circuit breaker. Approval still cannot be given by a tool —
+`resume()` and `submit_decision()` remain unreachable from every MCP module,
+so voice/chat can *originate* an order but never *approve* a pending one.
+
+**Note on the env contract.** `VESPER_TRADING` now lives in
+`.env.trading-agent`, which `deploy/README.md` previously said it never should.
+That separation was written when this server was read-only; arming the MCP
+order path requires the variable in the file the service actually reads,
+because `trading-agent.service` does not read `.env.vesper`. Both files now set
+it and they must be kept in step — a divergence means the MCP surface and the
+agent loop disagree about whether trading is live.

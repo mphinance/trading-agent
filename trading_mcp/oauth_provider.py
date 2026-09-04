@@ -206,8 +206,27 @@ class SingleOperatorOAuthProvider(OAuthProvider):
         operator_secret: str,
         base_url: Any,
         required_scopes: list[str] | None = None,
+        valid_scopes: list[str] | None = None,
+        default_scopes: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
+        """`required_scopes`, `valid_scopes` and `default_scopes` are three
+        different things, and conflating the first two was a real bug.
+
+        - `required_scopes` -- the MINIMUM every accepted token must carry.
+        - `valid_scopes`    -- the MAXIMUM a DCR client may register for.
+        - `default_scopes`  -- what a client that names no scope gets.
+
+        Until M8-24 this constructor took only `required_scopes` and passed
+        that same list as `valid_scopes`. Production calls it with
+        `["read"]`, so the registerable set collapsed to `{"read"}` and no
+        credential this server could issue would ever satisfy
+        `order_tools.py`'s `require_scopes("trade")`. That failed CLOSED, so
+        it was safe while the order tools were unregistered -- but it made
+        wiring them in impossible without also locking the owner out. The
+        fix belongs here, in the plumbing, never in a weakened
+        `require_scopes`.
+        """
         if not operator_secret:
             raise ValueError("operator_secret must be non-empty")
 
@@ -215,8 +234,8 @@ class SingleOperatorOAuthProvider(OAuthProvider):
             "client_registration_options", None
         ) or ClientRegistrationOptions(
             enabled=True,
-            valid_scopes=required_scopes or ["read", "safe-write", "trade"],
-            default_scopes=["read"],
+            valid_scopes=valid_scopes or ["read", "safe-write", "trade"],
+            default_scopes=default_scopes or ["read"],
         )
         revocation_options = kwargs.pop(
             "revocation_options", None

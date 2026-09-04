@@ -1013,28 +1013,41 @@ def test_production_oauth_provider_scope_plumbing(monkeypatch):
     """Pins what `_build_oauth_provider()` ACTUALLY builds, not what a bare
     constructor call builds.
 
-    `_build_oauth_provider` passes `required_scopes=["read"]`, and inside
-    `SingleOperatorOAuthProvider.__init__` that same argument also becomes
-    `valid_scopes`. So in production the set collapses to `{"read"}`: no DCR
-    client can register for `trade`, and no credential this server can issue
-    would ever satisfy `order_tools.py`'s `require_scopes("trade")`.
+    HISTORY (M8-24), because this test previously asserted the opposite and
+    the reversal was deliberate. `SingleOperatorOAuthProvider.__init__` used
+    to take only `required_scopes` and pass that same list as `valid_scopes`.
+    Production calls it with `["read"]`, so the registerable set collapsed to
+    `{"read"}` and no credential this server could issue would ever satisfy
+    `order_tools.py`'s `require_scopes("trade")`. That failed CLOSED, which
+    is why it was safe to ship while the order tools were unregistered -- but
+    it meant wiring them in would have locked the owner out rather than
+    opened a hole. The constructor now takes `required_scopes`,
+    `valid_scopes` and `default_scopes` as the three separate things they
+    are.
 
-    That is FAIL-CLOSED and therefore safe today (the order tools are not even
-    registered in `server.py`). It is pinned because it is a trap for the
-    person who eventually wires the order path in: flipping on
-    `register_order_tools` alone would lock the owner out too, and the fix
-    belongs here, in the scope plumbing, not in a weakened `require_scopes`.
-    If you widen this, widen it deliberately and update this test with it."""
+    `trade` is in `default_scopes` on purpose: the claude.ai connector
+    performs dynamic client registration WITHOUT naming a scope, so with the
+    SDK default of `["read"]` it would silently register read-only and every
+    order tool would answer 403. This is not the security boundary -- the
+    operator secret at `/authorize`, `VESPER_TRADING`, the halt file, the
+    circuit breaker, the portfolio-aware notional cap and the daily order
+    limit are. If you narrow this, narrow it deliberately and expect the
+    phone connector to stop being able to trade."""
     import trading_mcp.server as srv
 
     monkeypatch.setenv("MCP_PUBLIC_URL", "https://agent.example.test")
     provider = srv._build_oauth_provider("m2-production-operator-secret")
 
     assert provider is not None
-    assert set(provider.client_registration_options.valid_scopes) == {"read"}, (
+    opts = provider.client_registration_options
+    assert set(opts.valid_scopes) == {"read", "safe-write", "trade"}, (
         "production OAuth scope plumbing changed -- see this test's docstring "
         "before assuming that is an improvement"
     )
+    assert set(opts.default_scopes) == {"read", "trade"}
+    assert "admin" not in opts.valid_scopes
+    # Every issued token must still carry `read` at minimum.
+    assert set(provider.required_scopes) == {"read"}
 
 
 async def test_authorize_request_for_unregistered_scope_never_issues_a_code(monkeypatch):
