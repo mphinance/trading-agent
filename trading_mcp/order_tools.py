@@ -119,6 +119,78 @@ def _effective_notional_cap() -> tuple[float, dict[str, Any]]:
     }
 
 
+def _validate_close(
+    ticker: str, side: str, quantity: int, asset_type: str
+) -> tuple[bool, str | None]:
+    """Is this order genuinely reducing an existing position?
+
+    `is_closing` is a caller-asserted flag. Nothing in `execution_guard` or
+    `risk.py` validates it -- which was harmless while the only caller was
+    `monitor.py`'s exit cascade, where the flag merely selected market value
+    over strike for the notional of a short option. It stops being harmless
+    the moment a close SKIPS the notional cap on tools an LLM can call, since
+    `is_closing=True` would then be a one-flag bypass of the entire cap.
+
+    So a close must be checked against the live book: a position in that
+    symbol must exist, the order must be on the opposite side of it, and it
+    must not exceed the quantity held. Anything else is not a close, whatever
+    it claims.
+    """
+    try:
+        from trading_mcp.vesper_tools import fetch_account_state
+
+        state = fetch_account_state()
+    except Exception as e:  # pragma: no cover - defensive
+        return False, f"Cannot verify this is a close: account unreadable ({e})."
+
+    if not state.get("available"):
+        return False, (
+            "Cannot verify this is a close: account state unavailable "
+            f"({state.get('fetch_error') or 'no detail'})."
+        )
+
+    ticker = ticker.strip().upper()
+    want_option = asset_type.strip().upper() == "OPTION"
+    held = 0.0
+    for pos in state.get("positions") or []:
+        sym = str(pos.get("symbol", "")).strip().upper()
+        is_option_pos = str(pos.get("instrument_type", "")).upper() == "OPTION"
+        if is_option_pos != want_option:
+            continue
+        # An equity position is keyed by the ticker itself; an option
+        # position carries a contract symbol that begins with the underlying.
+        if sym == ticker or (want_option and sym.startswith(ticker)):
+            try:
+                held += float(pos.get("quantity") or 0)
+            except (TypeError, ValueError):
+                continue
+
+    if held == 0:
+        return False, (
+            f"Refusing: is_closing=True but no {asset_type.upper()} position "
+            f"in {ticker} is held. A close must reduce something you own."
+        )
+
+    side_u = side.strip().upper()
+    if held > 0 and side_u != "SELL":
+        return False, (
+            f"Refusing: is_closing=True with side={side_u}, but the {ticker} "
+            f"position is LONG {held:g}. Closing a long is a SELL."
+        )
+    if held < 0 and side_u != "BUY":
+        return False, (
+            f"Refusing: is_closing=True with side={side_u}, but the {ticker} "
+            f"position is SHORT {abs(held):g}. Closing a short is a BUY."
+        )
+    if quantity > abs(held):
+        return False, (
+            f"Refusing: is_closing=True for {quantity} {ticker} but only "
+            f"{abs(held):g} held. Closing more than you own opens a position "
+            f"in the other direction."
+        )
+    return True, None
+
+
 def _notional_for(
     quantity: int,
     limit_price: float,
@@ -245,7 +317,19 @@ def submit_manual_proposal(
     # path (`submit_manual_proposal_tool` -> `place_from_ticket_tool`) bounded
     # by nothing but the guard's own, much larger, absolute cap. Pinned by
     # `test_two_step_path_cannot_bypass_mcp_notional_cap`; don't move it back.
-    if not is_closing:
+    exempt = False
+    if is_closing:
+        exempt, close_err = _validate_close(ticker, side, quantity, asset_type)
+        if not exempt:
+            return {
+                "available": False,
+                "rejected": True,
+                "reason": close_err,
+                "payload": payload,
+                "calculated_notional": calc_notional,
+            }
+
+    if not exempt:
         cap, detail = _effective_notional_cap()
         if cap <= 0:
             return {
@@ -409,7 +493,13 @@ def place_order(
     if notional is None:
         return {"available": False, "rejected": True, "reason": notional_err}
 
-    if not is_closing:
+    exempt = False
+    if is_closing:
+        exempt, close_err = _validate_close(ticker, side, quantity, asset_type)
+        if not exempt:
+            return {"available": False, "rejected": True, "reason": close_err}
+
+    if not exempt:
         cap, detail = _effective_notional_cap()
         if cap <= 0:
             return {

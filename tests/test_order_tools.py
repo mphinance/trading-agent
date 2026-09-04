@@ -44,7 +44,8 @@ def clean_mcp_order_env(tmp_path, monkeypatch):
     _stub_account(monkeypatch, net_liquidation=8000.0)
 
 
-def _stub_account(monkeypatch, net_liquidation=8000.0, available=True, stale=False):
+def _stub_account(monkeypatch, net_liquidation=8000.0, available=True, stale=False,
+                  positions=None):
     """Point `_effective_notional_cap()` at a synthetic account."""
     import trading_mcp.vesper_tools as vt
 
@@ -56,6 +57,7 @@ def _stub_account(monkeypatch, net_liquidation=8000.0, available=True, stale=Fal
             "stale": stale,
             "fetch_error": None if available else "stubbed outage",
             "net_liquidation": net_liquidation,
+            "positions": positions if positions is not None else [],
         },
     )
 
@@ -323,12 +325,14 @@ def test_notional_cap_fails_closed_when_account_unavailable(monkeypatch):
     assert res_place["rejected"] is True
 
 
-def test_closing_orders_are_not_blocked_by_the_cap(monkeypatch):
-    """Exposure-reducing orders skip the notional cap. The server's stated
-    exposure rule is that anything which cannot increase exposure is
-    permitted; a cap that blocks you from closing a position you already
-    hold is a cap that traps risk on a bad day."""
-    _stub_account(monkeypatch, net_liquidation=1513.34)
+SOFI_LONG = [{"symbol": "SOFI", "instrument_type": "EQUITY", "quantity": 30.0}]
+
+
+def test_genuine_close_is_not_blocked_by_the_cap(monkeypatch):
+    """Exposure-reducing orders skip the notional cap. A cap that blocks you
+    from closing a position you already hold is a cap that traps risk on a
+    bad day -- here $553 against a $378 cap, which must still go through."""
+    _stub_account(monkeypatch, net_liquidation=1513.34, positions=SOFI_LONG)
     monkeypatch.setenv("MCP_MAX_NOTIONAL_PCT", "0.25")
 
     res = ot.submit_manual_proposal(
@@ -336,6 +340,75 @@ def test_closing_orders_are_not_blocked_by_the_cap(monkeypatch):
         is_closing=True,
     )
     assert res.get("staged") is True, res.get("reason")
+
+
+def test_is_closing_cannot_be_asserted_to_bypass_the_cap(monkeypatch):
+    """REGRESSION. `is_closing` is a caller-asserted flag that nothing in
+    execution_guard or risk.py validates. Once a close SKIPS the notional
+    cap -- and these are tools an LLM can call over a connector -- an
+    unvalidated flag is a one-argument bypass of the entire cap. A close must
+    be checked against the live book."""
+    _stub_account(monkeypatch, net_liquidation=1513.34, positions=SOFI_LONG)
+    monkeypatch.setenv("MCP_MAX_NOTIONAL_PCT", "0.25")
+
+    # 1. Nothing held in this name at all.
+    res = ot.submit_manual_proposal(
+        ticker="NVDA", side="BUY", quantity=100, limit_price=50.0,  # $5000
+        is_closing=True,
+    )
+    assert res["rejected"] is True
+    assert "no EQUITY position in NVDA is held" in res["reason"]
+
+    # 2. Held, but the order ADDS to the long rather than reducing it.
+    res_side = ot.submit_manual_proposal(
+        ticker="SOFI", side="BUY", quantity=100, limit_price=18.43,
+        is_closing=True,
+    )
+    assert res_side["rejected"] is True
+    assert "Closing a long is a SELL" in res_side["reason"]
+
+    # 3. Held, right side, but more than owned -- that opens a short.
+    res_qty = ot.submit_manual_proposal(
+        ticker="SOFI", side="SELL", quantity=100, limit_price=18.43,
+        is_closing=True,
+    )
+    assert res_qty["rejected"] is True
+    assert "only 30 held" in res_qty["reason"]
+
+    # 4. Same bypass attempt through the one-shot path.
+    res_place = ot.place_order(
+        ticker="NVDA", side="BUY", quantity=100, limit_price=50.0,
+        is_closing=True, place_fn=MagicMock(),
+    )
+    assert res_place["rejected"] is True
+
+
+def test_partial_close_is_allowed(monkeypatch):
+    """Reducing part of a position is still a close."""
+    _stub_account(monkeypatch, net_liquidation=1513.34, positions=SOFI_LONG)
+    res = ot.submit_manual_proposal(
+        ticker="SOFI", side="SELL", quantity=10, limit_price=18.43,
+        is_closing=True,
+    )
+    assert res.get("staged") is True, res.get("reason")
+
+
+def test_closing_a_short_is_a_buy(monkeypatch):
+    """The mirror case: a negative position closes with a BUY."""
+    _stub_account(
+        monkeypatch, net_liquidation=1513.34,
+        positions=[{"symbol": "WBD", "instrument_type": "EQUITY", "quantity": -5.0}],
+    )
+    res = ot.submit_manual_proposal(
+        ticker="WBD", side="BUY", quantity=5, limit_price=28.27, is_closing=True,
+    )
+    assert res.get("staged") is True, res.get("reason")
+
+    res_wrong = ot.submit_manual_proposal(
+        ticker="WBD", side="SELL", quantity=5, limit_price=28.27, is_closing=True,
+    )
+    assert res_wrong["rejected"] is True
+    assert "Closing a short is a BUY" in res_wrong["reason"]
 
 
 def test_short_option_cap_is_sized_off_strike_not_premium(monkeypatch):
