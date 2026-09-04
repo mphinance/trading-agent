@@ -66,7 +66,22 @@ def _build_oauth_provider(token: str) -> SingleOperatorOAuthProvider | None:
     return SingleOperatorOAuthProvider(
         operator_secret=token,
         base_url=base_url,
+        # Every token must carry `read`; a client may register for up to
+        # `trade`; a client that names no scope gets read+trade. That last
+        # part is deliberate and is what makes the order tools reachable
+        # from the claude.ai connector, which performs DCR without naming a
+        # scope -- with `default_scopes=["read"]` the connector would
+        # register read-only and every order tool would answer 403.
+        #
+        # This is not the security boundary and must not be mistaken for
+        # one. Reaching a trade-scoped token still requires the operator
+        # secret at the `/authorize` gate; placing an order past that still
+        # requires VESPER_TRADING=1, a halt file that is clear, an untripped
+        # circuit breaker, the portfolio-aware MCP notional cap and the
+        # daily order limit.
         required_scopes=["read"],
+        valid_scopes=["read", "safe-write", "trade"],
+        default_scopes=["read", "trade"],
     )
 
 
@@ -151,7 +166,17 @@ mcp = FastMCP(
 
 # ── Tool registration ───────────────────────────────────────────────────────────
 def _register_all_tools() -> int:
-    """Register every read-only tool this server exposes; return the total count."""
+    """Register every tool this server exposes; return the total count.
+
+    M8-24: this surface is no longer read-only. `register_order_tools` wires
+    in the Amendment A4 order path -- three tools, each behind
+    `require_scopes("trade")`, each reaching the broker via
+    `vesper.execution_guard` and nothing else. Rule 3 is unchanged by this:
+    `vesper/execution_guard.py` remains the only module that can move money,
+    no risk check is duplicated here, and `resume()` /
+    `ApprovalRegistry.submit_decision()` remain unreachable from every MCP
+    module. Buttons still move money; a tool call still cannot approve one.
+    """
     from mcp_server.registry import register_momentum_tools
 
     momentum_tools = register_momentum_tools(mcp, include_tiers=(1, 2, 3))
@@ -162,7 +187,16 @@ def _register_all_tools() -> int:
     vesper_tools = register_vesper_tools(mcp)
     logger.info("Registered %d vesper read-only tools", len(vesper_tools))
 
-    total = len(momentum_tools) + len(vesper_tools)
+    from trading_mcp.order_tools import register_order_tools
+
+    order_tools = register_order_tools(mcp)
+    logger.warning(
+        "Registered %d ORDER tools (scope=trade, VESPER_TRADING=%s)",
+        len(order_tools),
+        os.environ.get("VESPER_TRADING", "0"),
+    )
+
+    total = len(momentum_tools) + len(vesper_tools) + len(order_tools)
     logger.info("trading-agent MCP server: %d tools registered total", total)
     return total
 

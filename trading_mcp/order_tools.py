@@ -33,7 +33,15 @@ _STAGED_PAYLOADS: dict[str, dict] = {}
 
 
 def _get_mcp_limits() -> tuple[float, int]:
-    """MCP-specific stricter limits read from env."""
+    """MCP-specific stricter limits read from env.
+
+    `MCP_MAX_NOTIONAL` is an ABSOLUTE CEILING, not the operative cap -- see
+    `_effective_notional_cap()`, which scales it down to the size of the
+    actual book. A flat dollar ceiling on a small account is not a cap: at
+    the $1000 default it was 2.5x the buying power of the live account it
+    was pointed at, so every order it could ever have blocked would have
+    been rejected by the broker first anyway.
+    """
     try:
         max_notional = float(os.environ.get("MCP_MAX_NOTIONAL", "1000.0"))
     except ValueError:
@@ -43,6 +51,99 @@ def _get_mcp_limits() -> tuple[float, int]:
     except ValueError:
         max_daily = 5
     return max_notional, max_daily
+
+
+def _get_notional_pct() -> float:
+    """Fraction of net liquidation value one MCP order may commit."""
+    try:
+        pct = float(os.environ.get("MCP_MAX_NOTIONAL_PCT", "0.25"))
+    except ValueError:
+        pct = 0.25
+    # A pct <= 0 would refuse everything and a pct > 1 would be no cap at
+    # all; both are far more likely to be a typo than an intention.
+    if not (0.0 < pct <= 1.0):
+        pct = 0.25
+    return pct
+
+
+def _effective_notional_cap() -> tuple[float, dict[str, Any]]:
+    """The operative per-order notional cap: min(absolute ceiling, pct x NLV).
+
+    Portfolio-aware by construction. Returns `(cap, detail)`; a cap of 0.0
+    means REFUSE -- this fails CLOSED when net liquidation value cannot be
+    read, deliberately and for the same reason `alerts.resolve_level()`
+    returns None rather than a remembered number: a cap computed from an
+    unknown book is not a cap, and silently falling back to the flat ceiling
+    is exactly the failure being fixed here.
+
+    A `stale` account read is accepted. It is bounded by the absolute
+    ceiling either way, and a slightly old NLV is a far better basis than
+    none; the detail dict reports staleness so the caller can say so.
+    """
+    ceiling, _ = _get_mcp_limits()
+    pct = _get_notional_pct()
+
+    try:
+        from trading_mcp.vesper_tools import fetch_account_state
+
+        state = fetch_account_state()
+    except Exception as e:  # pragma: no cover - defensive
+        return 0.0, {"reason": f"Account state unreadable ({e}).", "ceiling": ceiling}
+
+    if not state.get("available"):
+        return 0.0, {
+            "reason": (
+                "Cannot size a portfolio-aware cap: account state unavailable "
+                f"({state.get('fetch_error') or 'no detail'}). Refusing rather "
+                "than falling back to a flat ceiling."
+            ),
+            "ceiling": ceiling,
+        }
+
+    nlv = state.get("net_liquidation")
+    if not isinstance(nlv, (int, float)) or nlv <= 0:
+        return 0.0, {
+            "reason": f"Cannot size a portfolio-aware cap: net_liquidation={nlv!r}.",
+            "ceiling": ceiling,
+        }
+
+    portfolio_cap = float(nlv) * pct
+    cap = min(ceiling, portfolio_cap)
+    return cap, {
+        "net_liquidation": float(nlv),
+        "pct": pct,
+        "portfolio_cap": portfolio_cap,
+        "ceiling": ceiling,
+        "binding": "portfolio" if portfolio_cap < ceiling else "ceiling",
+        "stale": bool(state.get("stale")),
+    }
+
+
+def _notional_for(
+    quantity: int,
+    limit_price: float,
+    asset_type: str,
+    side: str,
+    strike: float | None,
+    is_closing: bool,
+) -> tuple[float | None, str | None]:
+    """Notional for one order, or `(None, reason)` if it cannot be computed.
+
+    A SELL-to-open option is sized off the STRIKE, not the premium -- the
+    same rule `vesper/execution_guard.py` enforces, and for the same reason:
+    a cash-secured put commits `strike x 100 x qty` on assignment, so
+    reading `limit_price` here lets a five-figure risk past a four-figure
+    cap. Kept in one helper so the two call sites cannot drift apart.
+    """
+    multiplier = 100.0 if asset_type.upper() == "OPTION" else 1.0
+    if asset_type.upper() == "OPTION" and side.upper() == "SELL" and not is_closing:
+        if strike is None or strike <= 0:
+            return None, (
+                "Short option sell-to-open requires strike price for "
+                "strike-based notional sizing."
+            )
+        return quantity * strike * multiplier, None
+    return quantity * limit_price * multiplier, None
 
 
 def _record_and_check_daily_order() -> tuple[bool, int, str | None]:
@@ -130,18 +231,45 @@ def submit_manual_proposal(
     if strike is not None:
         payload["strike"] = strike
 
-    # Calculate notional for short options vs equity
-    multiplier = 100.0 if asset_type == "OPTION" else 1.0
-    if asset_type == "OPTION" and side == "SELL" and not is_closing:
-        if strike is None or strike <= 0:
+    calc_notional, notional_err = _notional_for(
+        quantity, limit_price, asset_type, side, strike, is_closing
+    )
+    if calc_notional is None:
+        return {"available": False, "rejected": True, "reason": notional_err}
+
+    # The MCP notional cap is enforced HERE, at the single staging chokepoint,
+    # and not only in `place_order`. Every path that can reach the broker goes
+    # through this function: `place_order` calls it, and `place_from_ticket`
+    # can only fire a ticket that it staged. Checking the cap solely in
+    # `place_order` -- as this module did originally -- left the two-step tool
+    # path (`submit_manual_proposal_tool` -> `place_from_ticket_tool`) bounded
+    # by nothing but the guard's own, much larger, absolute cap. Pinned by
+    # `test_two_step_path_cannot_bypass_mcp_notional_cap`; don't move it back.
+    if not is_closing:
+        cap, detail = _effective_notional_cap()
+        if cap <= 0:
             return {
                 "available": False,
                 "rejected": True,
-                "reason": "Short option sell-to-open requires strike price for strike-based notional sizing.",
+                "reason": detail.get("reason", "Notional cap unavailable."),
+                "payload": payload,
+                "calculated_notional": calc_notional,
             }
-        calc_notional = quantity * strike * multiplier
-    else:
-        calc_notional = quantity * limit_price * multiplier
+        if calc_notional > cap:
+            return {
+                "available": False,
+                "rejected": True,
+                "reason": (
+                    f"Order notional ~${calc_notional:,.2f} exceeds the "
+                    f"portfolio-aware MCP cap of ${cap:,.2f} "
+                    f"({detail.get('pct', 0) * 100:.0f}% of "
+                    f"${detail.get('net_liquidation', 0):,.2f} NLV, binding "
+                    f"constraint: {detail.get('binding')})."
+                ),
+                "payload": payload,
+                "calculated_notional": calc_notional,
+                "cap_detail": detail,
+            }
 
     # Stage through execution_guard.preview
     try:
@@ -254,8 +382,6 @@ def place_order(
     M8-22. Enforces MCP_MAX_NOTIONAL and MCP_MAX_DAILY_ORDERS, checks halt,
     writes to audit chain before execution.
     """
-    max_mcp_notional, max_daily = _get_mcp_limits()
-
     # 1. Check halt status immediately
     halted, halt_info = is_halted()
     if halted and halt_info:
@@ -273,25 +399,36 @@ def place_order(
             "reason": "Vesper live trading is disabled (VESPER_TRADING != 1).",
         }
 
-    # 3. Check MCP notional limit
-    multiplier = 100.0 if asset_type == "OPTION" else 1.0
-    if asset_type == "OPTION" and side.upper() == "SELL" and not is_closing:
-        if strike is None or strike <= 0:
+    # 3. Check the portfolio-aware MCP notional limit. This is a fast
+    #    pre-check for a clean error before anything is staged; the
+    #    authoritative enforcement is inside submit_manual_proposal below,
+    #    which every order path shares.
+    notional, notional_err = _notional_for(
+        quantity, limit_price, asset_type, side, strike, is_closing
+    )
+    if notional is None:
+        return {"available": False, "rejected": True, "reason": notional_err}
+
+    if not is_closing:
+        cap, detail = _effective_notional_cap()
+        if cap <= 0:
             return {
                 "available": False,
                 "rejected": True,
-                "reason": "Short option requires strike price for strike-based notional check.",
+                "reason": detail.get("reason", "Notional cap unavailable."),
             }
-        notional = quantity * strike * multiplier
-    else:
-        notional = quantity * limit_price * multiplier
-
-    if notional > max_mcp_notional:
-        return {
-            "available": False,
-            "rejected": True,
-            "reason": f"Order notional ~${notional:,.2f} exceeds MCP_MAX_NOTIONAL (${max_mcp_notional:,.2f}).",
-        }
+        if notional > cap:
+            return {
+                "available": False,
+                "rejected": True,
+                "reason": (
+                    f"Order notional ~${notional:,.2f} exceeds the "
+                    f"portfolio-aware MCP cap of ${cap:,.2f} "
+                    f"({detail.get('pct', 0) * 100:.0f}% of "
+                    f"${detail.get('net_liquidation', 0):,.2f} NLV)."
+                ),
+                "cap_detail": detail,
+            }
 
     # 4. Stage through preview
     preview_res = submit_manual_proposal(

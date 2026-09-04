@@ -34,6 +34,31 @@ def clean_mcp_order_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_MAX_NOTIONAL", "2000.0")
     monkeypatch.setenv("MCP_MAX_DAILY_ORDERS", "3")
 
+    # The MCP notional cap is now portfolio-aware (min of the absolute
+    # ceiling and pct x NLV) and fails CLOSED when NLV cannot be read, so
+    # every test needs an account state to size against. These defaults put
+    # the portfolio cap ($8000) well above the ceiling ($2000) so the
+    # ceiling is the binding constraint and the pre-existing expectations
+    # in this file still describe the behaviour under test.
+    monkeypatch.setenv("MCP_MAX_NOTIONAL_PCT", "1.0")
+    _stub_account(monkeypatch, net_liquidation=8000.0)
+
+
+def _stub_account(monkeypatch, net_liquidation=8000.0, available=True, stale=False):
+    """Point `_effective_notional_cap()` at a synthetic account."""
+    import trading_mcp.vesper_tools as vt
+
+    monkeypatch.setattr(
+        vt,
+        "fetch_account_state",
+        lambda: {
+            "available": available,
+            "stale": stale,
+            "fetch_error": None if available else "stubbed outage",
+            "net_liquidation": net_liquidation,
+        },
+    )
+
 
 def test_submit_manual_proposal_stages_ticket_and_never_places(monkeypatch):
     """M8-20: submit_manual_proposal stages a ticket carrying payload hash and returns it."""
@@ -58,9 +83,16 @@ def test_submit_manual_proposal_stages_ticket_and_never_places(monkeypatch):
     assert ot._STAGED_PAYLOADS[ticket_id]["ticker"] == "AAPL"
 
 
-def test_submit_manual_proposal_short_option_sized_off_strike():
+def test_submit_manual_proposal_short_option_sized_off_strike(monkeypatch):
     """M8-20: Short option sell-to-open requires strike and sizes notional off strike * 100 * qty."""
     # 1. Short option missing strike is refused
+    # Lift the MCP cap clear so the GUARD's cap is the binding constraint --
+    # that is the layer this test pins. The MCP cap's own strike-vs-premium
+    # behaviour is covered by
+    # test_short_option_cap_is_sized_off_strike_not_premium.
+    monkeypatch.setenv("MCP_MAX_NOTIONAL", "1000000.0")
+    _stub_account(monkeypatch, net_liquidation=1000000.0)
+
     res_no_strike = ot.submit_manual_proposal(
         ticker="SPY",
         side="SELL",
@@ -93,6 +125,9 @@ def test_submit_manual_proposal_rejections_halt_and_notional(tmp_path, monkeypat
     import core.halt as ch
     halt_file = tmp_path / "halt_state.json"
     monkeypatch.setattr(ch, "_HALT_STATE_PATH", halt_file)
+
+    # Lift the MCP cap clear so the GUARD's cap is the binding constraint.
+    monkeypatch.setenv("MCP_MAX_NOTIONAL", "1000000.0")
 
     # 1. Notional cap rejection ($150 * 50 = $7500 > $5000)
     res_notional = ot.submit_manual_proposal(
@@ -163,7 +198,7 @@ def test_place_order_mcp_specific_limits(monkeypatch, tmp_path):
     )
     assert res_notional["available"] is False
     assert res_notional["rejected"] is True
-    assert "MCP_MAX_NOTIONAL" in res_notional["reason"]
+    assert "portfolio-aware MCP cap" in res_notional["reason"]
 
     # 2. Valid orders up to MCP_MAX_DAILY_ORDERS (limit=3)
     res1 = ot.place_order(ticker="AAPL", side="BUY", quantity=1, limit_price=150.0, place_fn=mock_place_fn)
@@ -218,3 +253,108 @@ def test_order_tools_ast_exposure_pin():
 
         if isinstance(node, ast.Attribute):
             assert node.attr not in ("submit_decision", "resume")
+
+
+def test_two_step_path_cannot_bypass_mcp_notional_cap(monkeypatch):
+    """REGRESSION (M8-24). The MCP notional cap used to live only in
+    `place_order`, so the two-step tool path -- `submit_manual_proposal_tool`
+    then `place_from_ticket_tool` -- reached the broker bounded by nothing
+    but the guard's own, much larger, `VESPER_MAX_NOTIONAL`. That is a real
+    bypass and it would have gone live the moment `register_order_tools` was
+    wired into `server.py`.
+
+    Here the order is inside the guard's $5000 cap but outside the MCP's
+    $2000 one. Staging must refuse it, which means there is no ticket for
+    step two to fire."""
+    mock_place_fn = MagicMock(return_value={"status": "FILLED"})
+
+    res = ot.submit_manual_proposal(
+        ticker="AAPL", side="BUY", quantity=20, limit_price=150.0,  # $3000
+    )
+    assert res["available"] is False, "staging must enforce the MCP cap"
+    assert res["rejected"] is True
+    assert "portfolio-aware MCP cap" in res["reason"]
+    assert "ticket_id" not in res
+
+    # And with no ticket, the second step has nothing to fire.
+    assert not mock_place_fn.called
+
+
+def test_notional_cap_is_portfolio_aware(monkeypatch):
+    """The operative cap scales with the book, not with a flat dollar
+    constant. On a small account the portfolio term binds well below the
+    absolute ceiling."""
+    _stub_account(monkeypatch, net_liquidation=1513.34)
+    monkeypatch.setenv("MCP_MAX_NOTIONAL_PCT", "0.25")
+
+    cap, detail = ot._effective_notional_cap()
+    assert cap == pytest.approx(378.335)
+    assert detail["binding"] == "portfolio"
+    assert detail["ceiling"] == 2000.0
+
+    # An order the flat $2000 ceiling would have waved through is refused.
+    res = ot.submit_manual_proposal(
+        ticker="SOFI", side="BUY", quantity=30, limit_price=18.43,  # ~$553
+    )
+    assert res["rejected"] is True
+    assert "portfolio-aware MCP cap" in res["reason"]
+
+
+def test_notional_cap_fails_closed_when_account_unavailable(monkeypatch):
+    """A cap computed from an unknown book is not a cap. When NLV cannot be
+    read the cap is 0 and every opening order is refused -- it must never
+    silently fall back to the flat ceiling, which is the exact failure this
+    replaced."""
+    _stub_account(monkeypatch, net_liquidation=0.0, available=False)
+
+    cap, detail = ot._effective_notional_cap()
+    assert cap == 0.0
+    assert "account state unavailable" in detail["reason"]
+
+    res = ot.submit_manual_proposal(
+        ticker="AAPL", side="BUY", quantity=1, limit_price=1.0,
+    )
+    assert res["rejected"] is True
+
+    res_place = ot.place_order(
+        ticker="AAPL", side="BUY", quantity=1, limit_price=1.0,
+        place_fn=MagicMock(),
+    )
+    assert res_place["rejected"] is True
+
+
+def test_closing_orders_are_not_blocked_by_the_cap(monkeypatch):
+    """Exposure-reducing orders skip the notional cap. The server's stated
+    exposure rule is that anything which cannot increase exposure is
+    permitted; a cap that blocks you from closing a position you already
+    hold is a cap that traps risk on a bad day."""
+    _stub_account(monkeypatch, net_liquidation=1513.34)
+    monkeypatch.setenv("MCP_MAX_NOTIONAL_PCT", "0.25")
+
+    res = ot.submit_manual_proposal(
+        ticker="SOFI", side="SELL", quantity=30, limit_price=18.43,  # ~$553
+        is_closing=True,
+    )
+    assert res.get("staged") is True, res.get("reason")
+
+
+def test_short_option_cap_is_sized_off_strike_not_premium(monkeypatch):
+    """The strike-vs-premium rule that `execution_guard` enforces has to
+    hold on the MCP path too. A cash-secured put priced at $0.50 premium
+    commits `strike x 100 x qty` on assignment; sizing the cap off the
+    premium is how a five-figure risk sails past a three-figure cap."""
+    _stub_account(monkeypatch, net_liquidation=1513.34)
+    monkeypatch.setenv("MCP_MAX_NOTIONAL_PCT", "0.25")
+
+    notional, err = ot._notional_for(
+        quantity=1, limit_price=0.50, asset_type="OPTION",
+        side="SELL", strike=190.0, is_closing=False,
+    )
+    assert err is None
+    assert notional == 19000.0, "must be strike x 100, not premium x 100"
+
+    res = ot.submit_manual_proposal(
+        ticker="AAPL", side="SELL", quantity=1, limit_price=0.50,
+        asset_type="OPTION", strike=190.0,
+    )
+    assert res["rejected"] is True
