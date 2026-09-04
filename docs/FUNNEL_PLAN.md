@@ -109,6 +109,104 @@ repo competes with that for a trader audience.
 That is degradation rather than a wall, already built. GEX being public is a
 gift: the free tier gets a genuinely good hook that costs nothing to give away.
 
+### 4a. The free tier already exists — it is just labelled as a paywall
+
+**You do not need to build a free tier.** Verified live, unauthenticated, no
+headers, no account:
+
+```
+GET /api/gex/SPY        → 200  success:true  locked:true   + REAL DATA
+GET /api/ticker/SPY     → 200  no lock at all — full quote, OHLC, bid/ask
+GET /api/gex/SPY/apex   → 200  success:false locked:true   + no data
+```
+
+What `/gex/{sym}` hands an anonymous caller today:
+
+| field | value |
+|---|---|
+| `spotPrice` | 773.15 |
+| `totalGEX` | 5,332,888,033 |
+| `interpretation.marketRegime` | "Positive Gamma" |
+| `interpretation.priceAction` | "Expect price stability and mean reversion…" |
+| `levelCount` | **5** — it tells you how many levels exist |
+| `levels` | **absent** — the ladder is what you pay for |
+
+That is degradation, not a wall: regime, total, spot, a readable interpretation,
+and an honest count of what is being withheld. It is exactly the gate shape
+earlier revisions of this plan argued should be built. It exists.
+
+**Two different envelopes, and only one client tells them apart:**
+
+| endpoint | `success` | `locked` | data | meaning |
+|---|---|---|---|---|
+| `/gex/{sym}` | `true` | `true` | **partial** | degraded — free tier |
+| `/gex/{sym}/apex` | `false` | `true` | none | walled — genuinely paid |
+
+`success: true` **and** `locked: true` simultaneously is the trap. A client
+keying on `locked` shows a paywall and discards data it was just handed; a
+client keying on `success` renders it. Both readings are defensible, so
+different surfaces behave differently — which is most of why this reads as
+"unusable without paying."
+
+#### Per-surface: who shows the free data
+
+| surface | behaviour | verdict |
+|---|---|---|
+| Direct API | returns partial data with the lock flags | ✅ correct |
+| **Chrome extension** — `background.js:568` returns `{ok:false, locked:true, …, data}` | keeps `data` alongside the flag | ✅ **already correct** |
+| **MCP / desktop** — `td-api.mjs:327` `if (json && json.locked) throw` | throws on *any* lock, partial data included | ❌ **discards the free tier** |
+
+So: **it already works with the Chrome extension.** The extension was built to
+carry a locked-but-populated response and render the half it has. The MCP and
+desktop path is the one that doesn't — `get_gex_ticker` raises `LOCKED` at an
+anonymous user instead of handing them the regime and total GEX they are
+entitled to see.
+
+That throw is not careless — the comment above it explains that a half-empty
+envelope "flows downstream as if it were data and quietly degrades a paint,"
+which is right for *drawing walls on a chart* and wrong for MCP, where the
+interpretation text is the useful part. The fix is to distinguish the two
+envelopes rather than to remove the throw:
+
+- `success:true && locked:true` → return the payload, plus a note naming what is
+  missing (`levelCount` says how many).
+- `success:false && locked:true` → throw as today.
+
+Also note `td-api.mjs`'s comment describes the envelope as
+`{success:false, locked:true}` — that is stale. `/gex/{sym}` sends
+`success:true`. The client's model of the API is one release behind the API.
+
+#### What a free MCP user gets, once that is fixed
+
+| tool | free (no token) | with Vespryx |
+|---|---|---|
+| `get_ticker` | ✅ full quote — never locked | same |
+| `get_gex_ticker` | ✅ regime, total GEX, spot, interpretation, `levelCount` | + the level ladder |
+| `get_apex_levels` | ❌ walled | ✅ apex levels |
+| `get_dealer_payload` | ✅ the gex half, `apexNote` explaining the rest | ✅ both |
+| `get_token_status` | ✅ local only, no network | same |
+
+Three of five dealer tools work with **no account at all** — `tdGet` only adds
+the `Authorization` header when a token exists (`td-api.mjs:233`), so an
+anonymous caller is a supported path, not an accident.
+
+#### The labelling, which is doing active harm
+
+Three fields on that free response argue against you:
+
+| field | says | reality |
+|---|---|---|
+| `message` | *"Dealer levels are a paid feature."* | attached to a response that just gave away the regime and total GEX |
+| `error` | `premium_required` | it is **Vespryx** that is required, not TD Pro premium (§5.0) |
+| `upgrade_url` | `/pricing` | TD Pro's page — the Vespryx branch needs `x-vespryx-client` (§5.0a) |
+
+And `/apex` unauthenticated says **"GEX is a premium feature"** — naming the one
+thing that is free.
+
+**This is copy and client-side handling, not schema work.** It ships before the
+trial (§5.0b) and before anything in §5, and it is the cheapest item in this
+document: stop describing a working free tier as a locked door.
+
 ### What the paid key surface can and cannot serve
 
 `/api/v1/mcp` serves 18 modules — gex, unusual activity, dark pool, directional

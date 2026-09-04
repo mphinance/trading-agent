@@ -108,10 +108,35 @@ used to call it, which meant the module could never ship publicly and needed an
 email/password login that an OAuth-only account cannot supply. *Fixed 2026-09-03
 (`8bb1dcb`).*
 
-**GEX is already public.** `GET /gex/{sym}` and `GET /ticker/{sym}` need **no
-Authorization header at all**. `GET /gex/{sym}/apex` is the gated one, returning
-`200 {locked:true, error:'premium_required'}`. The free/paid line already exists
-in the data layer, and it is degradation rather than a wall.
+**Two lock envelopes that look identical and are not.** Verified live,
+unauthenticated:
+
+| endpoint | `success` | `locked` | data |
+|---|---|---|---|
+| `/gex/{sym}` | **`true`** | `true` | **partial** — spot, totalGEX, regime, interpretation, `levelCount`; no `levels` |
+| `/gex/{sym}/apex` | `false` | `true` | none |
+| `/ticker/{sym}` | — | — | full quote, never locked |
+
+`success:true` **and** `locked:true` at once is the trap: a client keying on
+`locked` shows a paywall and throws away real data; one keying on `success`
+renders it. Both are defensible, so surfaces disagree.
+
+**The extension gets this right; the MCP/desktop tool does not.**
+`background.js:568` returns `{ok:false, locked:true, …, data}` — it keeps the
+payload. `td-api.mjs:327` does `if (json && json.locked) throw`, discarding the
+free tier for anonymous MCP callers. The throw is deliberate (a half-empty
+envelope "quietly degrades a paint") — right for drawing walls, wrong for MCP,
+where the interpretation text is the useful part.
+
+**`td-api.mjs`'s comment about the envelope is stale.** It documents
+`{success:false, locked:true}`; `/gex/{sym}` actually sends `success:true`. The
+client's model of the API is a release behind the API.
+
+**The free response is labelled as a paywall.** `message` says "Dealer levels
+are a paid feature" on a response that just gave away regime and total GEX;
+`error` says `premium_required` when it is Vespryx that is required; and
+`/apex` unauthenticated says **"GEX is a premium feature"** — naming the one
+thing that is free.
 
 **Apex and conviction are not on any API-key surface.** Neither has a public tool
 module, on any branch — despite `reference/data-licensing.md` §3 classifying both
