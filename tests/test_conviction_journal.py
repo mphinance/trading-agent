@@ -429,3 +429,92 @@ def test_playbook_performance_and_calibration_adjustment(temp_journal):
     assert perf["win_rate_pct"] == 75.0
     assert perf["adjustment"] == 0.10  # Bonus for high win rate
 
+
+
+# ── Embedding vector-space integrity (M8-25) ────────────────────────────────
+
+def test_embedding_refuses_without_credential_by_default(monkeypatch):
+    """REGRESSION. core/knowledge.py used to fall back to an MD5 word-hash
+    'embedding' whenever the API key was missing or any batch call raised,
+    writing those vectors into the SAME persistent collection as real ones.
+    That is silently corrupt: the two spaces are not comparable, recall
+    returns confident nonsense with no error, and adding a working key later
+    does not repair rows already written in the wrong space.
+
+    Production must refuse. The deterministic path is reachable only through
+    the explicit test-only flag that conftest sets."""
+    from core import knowledge as k
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("KNOWLEDGE_ALLOW_FAKE_EMBEDDINGS", raising=False)
+
+    with pytest.raises(k.EmbeddingUnavailable) as exc:
+        k._embed_texts(["a bullish pullback into the 21 EMA"])
+    assert "OPENROUTER_API_KEY" in str(exc.value)
+
+    with pytest.raises(k.EmbeddingUnavailable):
+        k._embed_query("same again")
+
+
+def test_deterministic_embeddings_only_via_explicit_flag(monkeypatch):
+    """The escape hatch works, and is genuinely opt-in."""
+    from core import knowledge as k
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("KNOWLEDGE_ALLOW_FAKE_EMBEDDINGS", "1")
+
+    vecs = k._embed_texts(["one", "two"])
+    assert len(vecs) == 2
+    assert all(len(v) == k.EMBEDDING_DIMENSIONS for v in vecs)
+    # Deterministic, and lexical rather than semantic -- which is exactly why
+    # it must never reach a real collection.
+    assert vecs[0] == k._embed_texts(["one"])[0]
+
+
+def test_embedding_never_writes_a_partial_batch(monkeypatch):
+    """A mid-batch API failure must fail the whole call. Returning what
+    succeeded would write some rows in the real space while the caller
+    believes the batch completed -- the same mixed-space corruption by a
+    different route."""
+    from core import knowledge as k
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-used-offline")
+    monkeypatch.delenv("KNOWLEDGE_ALLOW_FAKE_EMBEDDINGS", raising=False)
+
+    class _BoomClient:
+        def __init__(self, *a, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, *a, **kw): raise RuntimeError("connection reset")
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _BoomClient)
+
+    with pytest.raises(k.EmbeddingUnavailable) as exc:
+        k._embed_texts(["a", "b", "c"])
+    assert "batch 0" in str(exc.value)
+
+
+def test_embedding_refuses_a_short_response(monkeypatch):
+    """Fewer vectors back than inputs sent is a partial write in disguise."""
+    from core import knowledge as k
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-used-offline")
+    monkeypatch.delenv("KNOWLEDGE_ALLOW_FAKE_EMBEDDINGS", raising=False)
+
+    class _ShortResp:
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"index": 0, "embedding": [0.0] * 768}]}
+
+    class _ShortClient:
+        def __init__(self, *a, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, *a, **kw): return _ShortResp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _ShortClient)
+
+    with pytest.raises(k.EmbeddingUnavailable) as exc:
+        k._embed_texts(["a", "b"])
+    assert "refusing a partial write" in str(exc.value)

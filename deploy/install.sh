@@ -78,6 +78,12 @@ MUST_DIFFER_FROM_EXAMPLE=(
     "TD_API_KEY"
     "TDPRO_API_KEY"
     "SEC_USER_AGENT"
+    # Added 2026-09-04: OPENROUTER_API_KEY was NOT on this list, and the
+    # placeholder from .env.vesper.example was found live on the deploy box
+    # as a result. The list is the guardrail -- a credential missing from it
+    # is a credential nothing checks.
+    "OPENROUTER_API_KEY"
+    "GEMINI_API_KEY"
     "TELEGRAM_BOT_TOKEN"
     "TELEGRAM_AUTHORIZED_USER_IDS"
     "DISCORD_BOT_TOKEN"

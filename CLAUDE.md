@@ -358,6 +358,21 @@ being spent.
   ISO-8859-1 and em-dashes arrive as `â€"`. `td.py` pins it.
 - **Python 3.14 works.** SDK 2.0.18 declares `python_requires='>=3.8,<3.15'`
   with explicit cryptography/grpcio pins for 3.14.
+- **`pip install chromadb` breaks the Webull SDK, and reports success while
+  doing it.** chromadb pulls `googleapis-common-protos>=1.75.3` →
+  `protobuf>=6.33.5`, but `webull-openapi-python-sdk` 2.0.18 requires
+  `protobuf<6`. A plain install upgrades protobuf to 7.x and prints the
+  conflict as a non-fatal `ERROR:` line that scrolls past
+  `Successfully installed`. Pinning protobuf back then breaks chromadb
+  instead, with a `Gencode/Runtime VersionError` from
+  `google/rpc/error_details_pb2`. The fix is the package in the middle:
+  `googleapis-common-protos<1.66` (already pinned in `requirements.txt`
+  alongside `protobuf>=4.25.0,<6`). All three coexist under those pins —
+  verified 2026-09-04 with a chroma add/query round-trip plus `webull.trade`,
+  `stream.py` and `trading_mcp.server` imports on the deploy box. **Worth
+  knowing: nothing surfaced this at import time.** The REST account read kept
+  working on protobuf 7.x and every generated `pb2` module still imported, so
+  the only signal was that scrolled-past pip line.
 - **Never `pip install` `webull-openapi-mcp` into this repo's venv.** It is a
   vendored nested checkout of Webull's own MCP server
   (`webull-openapi-mcp/`, upstream `github.com/webull-inc/webull-openapi-mcp`),

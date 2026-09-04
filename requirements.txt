@@ -52,6 +52,22 @@ python-dotenv>=1.0
 typing_extensions>=4.0
 chromadb>=0.5
 
+# chromadb and the Webull SDK fight over protobuf, and pip will happily leave
+# you with a broken venv while reporting success. chromadb pulls
+# googleapis-common-protos>=1.75.3, which requires protobuf>=6.33.5;
+# webull-openapi-python-sdk 2.0.18 requires protobuf<6. Installing chromadb
+# unpinned upgrades protobuf to 7.x and silently violates the SDK's
+# constraint; pinning protobuf back then breaks chromadb with a
+# Gencode/Runtime VersionError out of google/rpc/error_details_pb2.
+#
+# googleapis-common-protos is the package in the middle, and <1.66 is the last
+# line that works with protobuf 5.x. With these two pins all three coexist --
+# verified on the deploy box 2026-09-04: chroma add/query round-trip,
+# webull.trade, stream.py and trading_mcp.server all import and run.
+# Do not relax either pin without re-running that check.
+googleapis-common-protos<1.66
+protobuf>=4.25.0,<6
+
 # vesper/graph.py: persistent (disk-backed) checkpointer for human-approval
 # threads. MemorySaver (langgraph's built-in default) loses every paused
 # thread on a process restart -- fine for a single watched `vesper scan` run,

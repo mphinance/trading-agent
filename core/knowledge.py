@@ -4,8 +4,27 @@ Knowledge Module — ChromaDB-powered RAG for Sam.
 Gives Sam a brain loaded with 139+ trading book summaries,
 the Options Field Manual, and the Agentic Trader's Playbook.
 
-Uses Gemini embeddings API (free tier: 1,500 req/min).
+Embeddings go through OpenRouter (`/api/v1/embeddings`, OpenAI-schema), reusing
+`OPENROUTER_API_KEY` -- the credential this project already holds for
+`vesper/llm.py`. That is the whole reason it is not Gemini: every additional
+secret on the deploy box is another thing to rotate and another placeholder
+that can quietly go live (rule 2).
+
 ChromaDB stores to data/chromadb/ (project-local, persists across restarts).
+
+ON MIXING VECTOR SPACES -- the thing that used to be wrong here. Embeddings are
+only comparable to other embeddings from the SAME model. This module previously
+fell back to `_deterministic_embedding()` -- an MD5 word-hash, lexical and not
+semantic -- whenever the API key was missing OR any single batch call raised.
+Both paths wrote those hash vectors into the SAME persistent collection as real
+ones, so a collection could silently end up holding two incompatible spaces,
+and `recall_similar_setups` would return confident, plausible, meaningless
+neighbours with no error anywhere. Worse, it is not self-healing: adding a
+working key later does not fix rows already written in the wrong space.
+
+So the fallback is now opt-in and test-only (`KNOWLEDGE_ALLOW_FAKE_EMBEDDINGS=1`),
+and every other failure raises. Refusing to embed loses one call; poisoning a
+persistent store loses the store.
 """
 
 from __future__ import annotations
@@ -32,16 +51,50 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHROMADB_PATH = PROJECT_ROOT / "data" / "chromadb"
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-EMBEDDING_MODEL = "gemini-embedding-001"
+OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings"
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "openai/text-embedding-3-small")
+EMBEDDING_DIMENSIONS = 768
 EMBEDDING_BATCH_SIZE = 20
+EMBEDDING_TIMEOUT_SEC = 60.0
+
+
+class EmbeddingUnavailable(RuntimeError):
+    """Raised when text cannot be embedded in the real vector space.
+
+    Deliberately NOT caught-and-substituted anywhere in this module: the
+    caller either gets real vectors or an error, never a quietly different
+    vector space written into a persistent collection.
+    """
+
+
+def _embedding_api_key() -> str:
+    """The OpenRouter key, or "" if it is absent or still a placeholder.
+
+    The `your_` guard matches `vesper/llm.py`'s `is_llm_enabled()` and exists
+    for the same reason: `.env.vesper.example` ships
+    `OPENROUTER_API_KEY=your_openrouter_api_key`, and on 2026-09-04 that
+    placeholder was found sitting in the live env file on the deploy box.
+    Treating it as a real key turns a clear "not configured" into an opaque
+    401 at request time (rule 2 -- a placeholder must never be mistaken for a
+    credential)."""
+    key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not key or key.startswith("your_"):
+        return ""
+    return key
+
+
+def _fake_embeddings_allowed() -> bool:
+    """Test-only escape hatch. The suite is hermetic (no network, no
+    credentials), so it needs deterministic vectors -- but nothing should be
+    able to reach them by accident, which is exactly how the old silent
+    fallback poisoned collections."""
+    return os.getenv("KNOWLEDGE_ALLOW_FAKE_EMBEDDINGS", "").strip() == "1"
 
 # ---------------------------------------------------------------------------
 # Lazy-loaded clients
 # ---------------------------------------------------------------------------
 
 _chroma_client: Optional[Any] = None
-_genai_client = None
 
 
 def _get_chroma() -> Any:
@@ -73,51 +126,76 @@ def _deterministic_embedding(text: str, dim: int = 768) -> list[float]:
     return vec
 
 
-def _get_genai():
-    global _genai_client
-    if _genai_client is None:
-        from google import genai
-        _genai_client = genai.Client(api_key=GEMINI_API_KEY)
-    return _genai_client
-
-
 def _embed_texts(texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
-    """Embed texts using Gemini embedding API. Handles batching with robust offline fallback."""
-    if not GEMINI_API_KEY:
-        return [_deterministic_embedding(t) for t in texts]
+    """Embed texts via OpenRouter's OpenAI-schema `/embeddings` endpoint.
 
-    try:
-        from google.genai import types
+    `task_type` is accepted for call-site compatibility with the previous
+    Gemini implementation and ignored -- the OpenAI embedding schema has no
+    equivalent, and silently pretending otherwise would be worse than saying
+    so here.
 
-        client = _get_genai()
-        all_embeddings = []
+    Raises `EmbeddingUnavailable` rather than substituting anything. See the
+    module docstring on mixing vector spaces.
+    """
+    if not texts:
+        return []
 
+    api_key = _embedding_api_key()
+    if not api_key:
+        if _fake_embeddings_allowed():
+            return [_deterministic_embedding(t, EMBEDDING_DIMENSIONS) for t in texts]
+        raise EmbeddingUnavailable(
+            "OPENROUTER_API_KEY is not set, so text cannot be embedded. Refusing "
+            "rather than writing hash vectors into a persistent collection -- see "
+            "core/knowledge.py's module docstring. Note this key must be present "
+            "in the env contract the calling SERVICE reads: trading-agent.service "
+            "reads .env.trading-agent, not .env.vesper."
+        )
+
+    import httpx
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "HTTP-Referer": "https://github.com/mphinance/webull-sidecar",
+        "X-Title": "Vesper Quant Trading System",
+    }
+
+    all_embeddings: list[list[float]] = []
+    with httpx.Client(timeout=EMBEDDING_TIMEOUT_SEC) as client:
         for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
             batch = texts[i:i + EMBEDDING_BATCH_SIZE]
+            payload = {
+                "model": EMBEDDING_MODEL,
+                "input": batch,
+                "dimensions": EMBEDDING_DIMENSIONS,
+            }
             try:
-                result = client.models.embed_content(
-                    model=EMBEDDING_MODEL,
-                    contents=batch,
-                    config=types.EmbedContentConfig(
-                        task_type=task_type,
-                        output_dimensionality=768,
-                    ),
-                )
-                all_embeddings.extend([e.values for e in result.embeddings])
+                resp = client.post(OPENROUTER_EMBEDDINGS_URL, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()["data"]
             except Exception as e:
-                logger.warning("Embedding error (batch %d): %s, using fallback", i, e)
-                all_embeddings.extend([_deterministic_embedding(t) for t in batch])
+                # A partial result is the dangerous shape: it would write some
+                # rows in the real space and leave the caller believing the
+                # whole batch succeeded. Fail the entire call instead.
+                raise EmbeddingUnavailable(
+                    f"embedding request failed at batch {i} ({type(e).__name__}: {e})"
+                ) from e
 
-        return all_embeddings
-    except Exception as e:
-        logger.warning("Embedding client failure (%s), using fallback", e)
-        return [_deterministic_embedding(t) for t in texts]
+            if len(data) != len(batch):
+                raise EmbeddingUnavailable(
+                    f"embedding response returned {len(data)} vectors for "
+                    f"{len(batch)} inputs; refusing a partial write"
+                )
+            # The API does not promise input order, but does return `index`.
+            for item in sorted(data, key=lambda d: d.get("index", 0)):
+                all_embeddings.append(item["embedding"])
+
+    return all_embeddings
 
 
 def _embed_query(text: str) -> list[float]:
-    """Embed a single query text."""
-    results = _embed_texts([text], task_type="RETRIEVAL_QUERY")
-    return results[0] if results else _deterministic_embedding(text)
+    """Embed a single query text. Propagates `EmbeddingUnavailable`."""
+    return _embed_texts([text], task_type="RETRIEVAL_QUERY")[0]
 
 
 # ---------------------------------------------------------------------------

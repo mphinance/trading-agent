@@ -134,6 +134,17 @@ def _isolated_vesper_state(tmp_path, monkeypatch):
     A test-specific fixture that does the same redirect (there are several)
     is harmless on top of this — monkeypatch just reapplies the same value.
     """
+    # The suite is hermetic -- no network, no credentials -- so anything that
+    # embeds text needs deterministic vectors. core/knowledge.py refuses to
+    # embed without OPENROUTER_API_KEY rather than silently substituting hash
+    # vectors (that silent substitution used to poison persistent collections
+    # with two incompatible vector spaces; see that module's docstring). This
+    # flag is the explicit, test-only opt-in to the deterministic path. It is
+    # set HERE and never in application code, so nothing in production can
+    # reach fake embeddings by accident -- pinned by
+    # test_embedding_refuses_without_credential_by_default.
+    monkeypatch.setenv("KNOWLEDGE_ALLOW_FAKE_EMBEDDINGS", "1")
+
     vesper_data_dir = tmp_path / "vesper_data"
     vesper_data_dir.mkdir(parents=True, exist_ok=True)
 
