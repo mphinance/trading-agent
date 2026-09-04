@@ -147,22 +147,67 @@ The gap is a *different switch*: `has_api_access`, which gates minting a
 subscription — and the 5-day trial uses `missing_payment_method: 'cancel'`, so a
 card is required up front. A free user can log in and cannot get a key at all.
 
-**The change:** let `free`-tier users mint a key with a lower
-`rate_limit_per_min`. The `api_keys` table already stores the rate limit per key,
-so the throttle exists. One rule, not a pricing change.
+**🔴 Do NOT just flip the flag.** An earlier revision of this plan called it
+"one rule, not a pricing change". That was wrong, and dangerously so.
 
-*Verify first:* whether `has_api_access` is genuinely independent of
-`subscription_tier` in the schema, or whether the Stripe webhook is its only
-writer. If it is the only writer, adding a second path is the whole change.
+`src/middleware/apiKeyAuth.ts:96-97` stamps **every** API-key caller:
 
-### 5.2 A scope column, or the free key IS the paid key
+```ts
+is_premium: true,
+subscription_tier: 'premium' as const,
+```
 
-Today a key is all-endpoints-or-nothing: the `ApiKey` type carries only
-`rate_limit_per_min`, `is_active`, `revoked_at`. No scope, no tier, no expiry.
+Hardcoded, regardless of what the user's row actually says. Their own code
+comments on the consequence at `src/routes/publicApi.ts:145-147`:
 
-**So if you flip `has_api_access` for free users today, a free key is identical to
-a paid one.** 5.1 without 5.2 gives the paid surface away. Needs a
-`scope`/`allowed_tools` column checked in `finishApiKeyAuth`.
+> *"Its `requireTier('premium')` gate is NOT a defence on this surface: every
+> `td_live_` caller is stamped `subscription_tier: 'premium'` by
+> middleware/apiKeyAuth.ts, so the tier check passes unconditionally here."*
+
+So the moment a free user gets `has_api_access = true`, they hold a key that
+passes **every** `requireTier('premium')` gate in the application — not the
+reduced surface this plan wants, the entire product. §5.2 is therefore not a
+follow-up to §5.1; it is a **prerequisite**.
+
+Confirmed alongside it:
+
+- **Only Stripe writes `has_api_access`** — four handlers in
+  `src/routes/subscriptions.ts` (`:2904`, `:3365`, `:3489`, `:3624`). No admin
+  or comp route touches it; comping is done by hand in the database.
+- **The mint path checks nothing else.** `src/routes/developer.ts:349-350` reads
+  `has_api_access` and that is the entire guard, plus a 5-key cap. It never
+  looks at `subscription_tier`.
+- **`rate_limit_per_min` is a column default of 30**, never written by
+  `generateKey` — so a lower free-tier limit means passing an explicit value in
+  the INSERT (`apiKeyService.ts:62-67`). No migration required.
+- **A manual grant is never auto-revoked.** The revocation cascade in
+  `handleSubscriptionDeleted` keys off a matching Stripe subscription id; a
+  hand-granted key has none, so removal is also manual.
+- **Analytics will misreport it.** Free traffic logs as `tier: 'premium'`
+  (`services/screeners/runLog.ts:31-39`), and `adminComped.ts:53` filters
+  `WHERE subscription_tier <> 'free'` — so the one admin view built to audit
+  "who has access without paying" cannot see these users.
+
+### 5.2 Fix the premium stamp, then add scope — prerequisite, not follow-up
+
+Two changes, in this order:
+
+1. **Stop hardcoding premium.** `apiKeyAuth.ts:96-97` should carry the real
+   `subscription_tier` — which `apiKeyService.validateKey` already fetches via
+   its JOIN (`apiKeyService.ts:82-88`) and then discards. The values are right
+   there; they are simply overwritten with a literal. **Auditing every
+   `requireTier('premium')` route is part of this change**, because today they
+   are all passing unconditionally for key callers and nobody has been relying
+   on them working.
+2. **Add a `scope` / `allowed_tools` column**, checked in `finishApiKeyAuth`
+   between the `has_api_access` check (`:63`) and the rate-limit step (`:71`).
+   The `api_keys` table (DDL: `database/migrations/142_developer_api_access.sql`)
+   has `id, user_id, name, key_prefix, key_hash, rate_limit_per_min, is_active,
+   last_used_at, created_at, revoked_at` — no scope, no tier, no expiry.
+
+Migrations are numbered `.sql` files under `database/migrations/`, applied by
+hand with `node database/run-migration.js <file>.sql`. No framework, no
+tracking table — so a migration is a deliberate, manual act here.
 
 ### 5.3 A device flow
 
@@ -301,15 +346,16 @@ the public tool surface at an internal namespace, which is not a style problem.
 | # | step | gate |
 |---|---|---|
 | ~~1~~ | ~~Repoint `core/traderdaddy.py` at `/api/v1/*`~~ **DONE `8bb1dcb`** | ✅ verified live |
-| 2 | Verify: can `has_api_access` be set without Stripe? (§5.1) | yes/no, in the schema |
-| 3 | Add the `scope`/`allowed_tools` column + check (§5.2) | a scoped key is refused outside its scope |
-| 4 | Let `free` tier mint a capped key (§5.1) | a carded-out stranger gets a working key |
-| 5 | Make the free tools surface the gap ("3 of these have unusual flow today") | the paid layer is visible from inside the free one |
-| 6 | Device flow, with the signup link in the un-entitled response (§5.3) | no copy-paste; buy happens in-flow |
-| 7 | Fix `QUICKSTART.md` Path 2 — it tells paid users to clone a **private** repo (404) | link resolves |
-| 8 | Update **`mphinance/momentum-mcp`** from this repo (§6); README around the free/paid split; `server.json`; publish to PyPI | `uvx momentum-mcp` works from a clean machine |
-| 9 | Instrument: installs, gate-hits, attributed signups. 90-day checkpoint | a number written down beforehand |
-| 10 | *Later:* apex + conviction public tool modules (§5.4) | projection allowlist + guard test |
+| ~~2~~ | ~~Can `has_api_access` be set without Stripe?~~ **ANSWERED** — only 4 Stripe handlers write it; comping is a manual DB write | ✅ |
+| 3 | **Stop hardcoding `subscription_tier: 'premium'`** in apiKeyAuth.ts:96-97, and audit every `requireTier('premium')` route that has been passing unconditionally because of it (§5.2) | a free-tier key is refused where premium is required |
+| 4 | Add the `scope`/`allowed_tools` column + check (§5.2) | a scoped key is refused outside its scope |
+| 5 | Only now: let `free` tier mint a capped key (§5.1) | a carded-out stranger gets a working, *limited* key |
+| ~~6~~ | ~~Make the free tools surface the gap~~ **DONE `4b804a8`** ("3 of these have unusual flow today") | the paid layer is visible from inside the free one |
+| 7 | Device flow, with the signup link in the un-entitled response (§5.3) | no copy-paste; buy happens in-flow |
+| 8 | Fix `QUICKSTART.md` Path 2 — it tells paid users to clone a **private** repo (404) | link resolves |
+| 9 | Update **`mphinance/momentum-mcp`** from this repo (§6); README around the free/paid split; `server.json`; publish to PyPI | `uvx momentum-mcp` works from a clean machine |
+| 10 | Instrument: installs, gate-hits, attributed signups. 90-day checkpoint | a number written down beforehand |
+| 11 | *Later:* apex + conviction public tool modules (§5.4) | projection allowlist + guard test |
 
 Steps 1 and 7 are worth doing whatever happens to the funnel.
 
@@ -343,6 +389,7 @@ Steps 1 and 7 are worth doing whatever happens to the funnel.
 | Apex/conviction reachable by key | Neither is on any key surface. Session-only |
 | Create `quant-mcp` as the public repo | **`mphinance/momentum-mcp` already exists** — public, 26 stars, 8 forks. Update it; do not restart at zero |
 | `core/traderdaddy.py` is the blocker (§7) | Fixed and deployed 2026-09-03 (`8bb1dcb`); the live server's TMpro half works again |
+| Free-tier keys are "one rule, not a pricing change" | **Wrong and dangerous.** `apiKeyAuth.ts:96-97` hardcodes `subscription_tier: 'premium'` for every key caller, so flipping the flag grants the whole product. Scope work is a prerequisite, not a follow-up |
 
 **Verified and unchanged:** the 16-module manifest and its zero `vesper`
 reachability; no broker client in the public graph; `td_live_` keys hashed,
