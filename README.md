@@ -10,7 +10,9 @@ Discord** — chart attached — before anything touches your account.
   Plug it into **Claude Desktop**, **Claude Code**, **Codex CLI**, or anything
   else that speaks MCP. `trading_mcp/` is the owner-only one — **80 tools**,
   the extra 16 reading live account state, and three of those able to place an
-  order. See [`docs/TOOLS.md`](docs/TOOLS.md).
+  order. **New here?** [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) explains
+  what the 80 tools are and how the safety model works;
+  [`docs/TOOLS.md`](docs/TOOLS.md) is the full inventory.
 - 🧩 **64 Claude Code skills** ship in `skills/` — VCP/CANSLIM screens,
   gamma/breadth/regime detectors, backtesting, a full edge-research
   pipeline, dividend SOPs, and more. Picked up automatically, zero setup.
@@ -44,7 +46,10 @@ plan) — see [Credentials](#credentials).
 
 ## Contents
 
-- [Connecting an MCP host](#connecting-an-mcp-host-claude-desktop-claude-code-codex-)
+- [Documentation](#documentation) — start here if you're reading, not running
+- [Connecting an MCP host](#connecting-an-mcp-host) — Claude Desktop, Claude Code, Codex
+  - [The portable server](#the-portable-server-mcp_server)
+  - [The owner-only server](#the-owner-only-server-trading_mcp)
 - [Skills](#skills)
 - [Run](#run)
   - [Credentials](#credentials)
@@ -54,9 +59,31 @@ plan) — see [Credentials](#credentials).
 - [Tests](#tests)
 - [The order path](#the-order-path)
 - [Deploy](#deploy)
-- [More detail](#more-detail)
 
-## Connecting an MCP host (Claude Desktop, Claude Code, Codex, ...)
+## Documentation
+
+| document | for whom |
+| --- | --- |
+| [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) | **Someone who's been sent the tool list.** What the 80 tools group into, what the Vesper half means, the five gates that bound an order, and why a tool can originate one but never approve one. No repo access assumed — this is the one to share. |
+| [`docs/TOOLS.md`](docs/TOOLS.md) | The full 80-tool inventory, grouped by which credential each group needs. |
+| [`docs/HANDOFF.md`](docs/HANDOFF.md) | **Someone taking over the repo.** First hour, where it runs, which env file is actually live, where state lives, the traps, and an honest list of what isn't finished. |
+| [`CLAUDE.md`](CLAUDE.md) | **The design contract.** Seven critical rules — the order path, the kill switch, the LLM narrate/reject-only boundary, push-vs-poll for the monitor, dealer-gamma alert semantics — and why each exists. Authoritative; keep it current. |
+| [`docs/CONNECTOR_AUTH.md`](docs/CONNECTOR_AUTH.md) | Where the token lives, why the bearer and OAuth credentials differ in what they can do, and how to reconnect the claude.ai connector when it 401s forever. |
+| [`docs/GOTCHAS.md`](docs/GOTCHAS.md) | The estate-wide trap list — including ones that bite from a *different* repo than the one you're editing. |
+| [`docs/API.md`](docs/API.md) | Both MCP surfaces, module by module. |
+| [`docs/WEBULL_ORDER_PAYLOADS.md`](docs/WEBULL_ORDER_PAYLOADS.md) | Verified request shapes and the option-chain filtering gotchas. |
+| [`deploy/README.md`](deploy/README.md) | Units, env contracts, Traefik, rollback runbook. |
+| [`ROADMAP.md`](ROADMAP.md) | Status, known gaps, ideas backlog — including rejected ideas and why. |
+
+A doc carrying a **superseded** banner is a historical record kept for the
+reasoning, not current design. Trust the banner.
+
+## Connecting an MCP host
+
+There are two servers and they connect differently. `mcp_server/` is the one
+you can hand to anyone; `trading_mcp/` is the one wired to a live account.
+
+### The portable server (`mcp_server/`)
 
 `mcp_server/` is a real MCP server — 56 read-only tools (screeners, technical
 indicators, options/VoPR analytics, macro & breadth detectors, TraderDaddy
@@ -67,10 +94,9 @@ needed, that used to be a real gap (`mcp_server/`'s own deps were declared in
 `pyproject.toml` but never actually installed by `requirements.txt`, and
 `mcp>=2` broke the pre-2.0 FastMCP API the code actually uses; both fixed).
 It reads the same `./.env` as everything else; most tools need no extra key
-at all (yfinance, TradingView), a few want
-`TRADERDADDY_API_URL`/`_EMAIL`/`_PASSWORD` or
-`OPENROUTER_API_KEY`/`GEMINI_API_KEY`. It is safe to hand to any of these —
-it never touches `vesper/execution_guard.py` and cannot place an order.
+at all (yfinance, TradingView, SEC EDGAR), 12 want `TD_API_KEY`, and
+`OPENROUTER_API_KEY` covers the LLM-backed ones. It is safe to hand to any of
+these — it never touches `vesper/execution_guard.py` and cannot place an order.
 
 **Claude Desktop** — Settings → Developer → Edit Config:
 
@@ -78,9 +104,9 @@ it never touches `vesper/execution_guard.py` and cannot place an order.
 {
   "mcpServers": {
     "momentum": {
-      "command": "/path/to/webull-sidecar/.venv/bin/python",
+      "command": "/path/to/trading-agent/.venv/bin/python",
       "args": ["-m", "mcp_server.server"],
-      "cwd": "/path/to/webull-sidecar"
+      "cwd": "/path/to/trading-agent"
     }
   }
 }
@@ -89,7 +115,7 @@ it never touches `vesper/execution_guard.py` and cannot place an order.
 **Claude Code** — from the repo root:
 
 ```bash
-claude mcp add momentum --scope project -- /path/to/webull-sidecar/.venv/bin/python -m mcp_server.server
+claude mcp add momentum --scope project -- /path/to/trading-agent/.venv/bin/python -m mcp_server.server
 ```
 
 `--scope project` writes it to a `.mcp.json` at the repo root. That file isn't
@@ -101,7 +127,7 @@ uncommitted and let each person run the command for themselves.
 
 ```toml
 [mcp_servers.momentum]
-command = "/path/to/webull-sidecar/.venv/bin/python"
+command = "/path/to/trading-agent/.venv/bin/python"
 args = ["-m", "mcp_server.server"]
 ```
 
@@ -110,6 +136,32 @@ args = ["-m", "mcp_server.server"]
 connection rather than a local subprocess — nothing in this repo starts it
 that way by default, and the code's allowed-hosts list is hardcoded to one
 specific domain, so treat SSE mode as something to adapt, not use as-is.
+
+### The owner-only server (`trading_mcp/`)
+
+A separate process, and the one that's actually deployed. 80 tools, 65
+`skill://` resources and 2 prompts, reachable over HTTPS rather than spawned as
+a subprocess:
+
+```
+https://agent.mphinance.com/mcp
+```
+
+It adds 13 read-only views over live account and agent state on top of the 64
+shared tools, plus 3 order tools. Those 3 sit behind an OAuth `trade` scope
+that the static bearer token deliberately does **not** carry, so a long-lived
+secret sitting in a file cannot place an order — only a token minted through
+the human-present `/authorize` gate can.
+
+One consequence looks like a broken deploy and isn't: a bearer `tools/list`
+returns **77** tools, not 80, and calling an order tool with it answers
+`Unknown tool` rather than 403, because MCP filters by scope. Don't "fix" that
+by giving the bearer `trade`.
+
+[`docs/CONNECTOR_AUTH.md`](docs/CONNECTOR_AUTH.md) is the operational guide —
+including how to reconnect the claude.ai connector when it 401s forever.
+[`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) is what to send someone asking
+what this server *is*.
 
 ## Skills
 
@@ -180,7 +232,7 @@ push.
 
 ```bash
 git clone <this repo>
-cd webull-sidecar
+cd trading-agent
 python3 -m venv .venv                              # 3.8-3.14 all fine on webull SDK 2.0.18
 ./.venv/bin/pip install -r requirements.txt
 
@@ -253,7 +305,9 @@ trading_mcp/        Owner-only MCP server, SEPARATE process — 80 tools, 65 ski
                     resources, 2 prompts. Deployed behind Traefik. See docs/TOOLS.md.
 tests/              pytest, hermetic — Webull and Agent SDKs stubbed in conftest
 deploy/             Three systemd user units + two env contracts + Traefik config
-docs/               API/design docs, vendored Webull OpenAPI reference
+docs/               MCP_OVERVIEW.md (external explainer), HANDOFF.md (onboarding),
+                    TOOLS.md (80-tool inventory), CONNECTOR_AUTH.md, GOTCHAS.md,
+                    API.md, vendored Webull OpenAPI reference
 ROADMAP.md          Single planning doc: status, known gaps, ideas backlog
 ```
 
@@ -334,10 +388,7 @@ editing it to rotate a credential changes nothing the service sees. Read
 than copying one: `install.sh` refuses to deploy while any credential still
 equals its `.example` value.
 
-## More detail
+---
 
-[CLAUDE.md](CLAUDE.md) has the full picture: the critical design rules (order
-path, kill switch, LLM narrate/reject-only boundary, push-vs-poll for the
-monitor, dealer-gamma alert semantics, voice-over-Telegram design), the
-rate-limit gotchas, and the current verified/unverified status of each
-subsystem.
+Everything else is in [Documentation](#documentation) above.
+[CLAUDE.md](CLAUDE.md) is the one to read before changing anything.

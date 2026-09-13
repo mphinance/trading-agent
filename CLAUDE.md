@@ -1,4 +1,4 @@
-# CLAUDE.md — webull-sidecar
+# CLAUDE.md — trading-agent (Vesper)
 
 ## What this repo is
 
