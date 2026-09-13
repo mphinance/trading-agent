@@ -1,20 +1,35 @@
 # MCP tool inventory
 
-Pulled from the live server (`agent.mphinance.com`, `tools/list`) on
-2026-09-03. **60 tools registered.**
+Verified against `trading_mcp/server.py` by importing it on **2026-09-13**.
+**80 tools registered.**
 
 | group | count | credential | ships publicly |
 |---|---|---|---|
-| **Free** | **32** | none | ✅ |
-| **TMpro** | **15** | `TD_API_KEY` | ✅ (degraded without a key) |
-| **Vesper** | **13** | owner-only | ❌ private |
+| **Free** | **35** | none | ✅ |
+| **TickerTrace `etf_*`** | **17** | none | ✅ |
+| **TMpro** | **12** | `TD_API_KEY` | ✅ (degraded without a key) |
+| **Vesper (read)** | **13** | owner-only | ❌ private |
+| **Order path** | **3** | owner-only **+ `trade` OAuth scope** | ❌ private |
 
-The public repo (`mphinance/momentum-mcp`) ships **47**. The 13 Vesper tools
-read live account and agent state and stay private.
+The first 64 are general-purpose market tooling and would work for anybody. The
+last 16 only mean anything if you hold the account.
+
+> **An unauthenticated or bearer-token `tools/list` returns 77, not 80.** The
+> three order tools carry `require_scopes("trade")`, and FastMCP *filters* by
+> scope rather than returning a 403 — so calling one with the static bearer
+> answers `Unknown tool`. That looks like a broken deploy and isn't. See
+> [`CONNECTOR_AUTH.md`](CONNECTOR_AUTH.md).
+
+Two servers register from the same registry and should not be confused:
+
+| server | process | tools | can it place an order? |
+|---|---|---|---|
+| `mcp_server/server.py` | stdio "momentum" | 56 | **No.** Holds no broker credentials and has no order path. That property is load-bearing. |
+| `trading_mcp/server.py` | owner-only, deployed | **80** | Yes, through three scope-gated tools. |
 
 ---
 
-## Free — 32 tools, no account, no key
+## Free — 35 tools, no account, no key
 
 yfinance, TradingView, SEC EDGAR and local computation. An MCP server runs on
 the caller's machine, so these cost nothing to serve.
@@ -41,6 +56,7 @@ the caller's machine, so these cost nothing to serve.
 |---|---|
 | `analyze_technicals` | 24 indicators — EMA stack, RSI, MACD, ADX, ATR, Bollinger |
 | `get_tv_analysis` | TradingView 26-indicator consensus |
+| `get_momentum_pulse` | Momentum scores 0-100 — EMA stack, RSI, ADX, computed locally |
 | `get_historical_data` | OHLCV price history |
 | `generate_chart` | Candlestick chart with EMA overlays (8/21/34/55/89) |
 | `generate_alpha_card` | Shareable HTML card combining technicals + TV analysis |
@@ -57,13 +73,14 @@ the caller's machine, so these cost nothing to serve.
 ### Market state
 | tool | what it does |
 |---|---|
-| `detect_market_top` | Distribution days + leadership deterioration |
 | `detect_ftd` | Follow-Through Days on major indices |
 | `detect_macro_regime` | Growth / Inflation / Deflation / Goldilocks |
 | `analyze_breadth` | Breadth health score, 0-100 |
 | `analyze_uptrend_participation` | % of market above EMA50/200 |
 | `detect_themes` | Trending themes via thematic-ETF clustering |
 | `detect_bubble_risk` | Euphoria / bubble score, 0-15 |
+| `get_exposure_recommendation` | Suggested capital deployment, 0-100% |
+| `get_market_environment` | Cross-asset environment report |
 
 ### Analysis
 | tool | what it does |
@@ -72,18 +89,46 @@ the caller's machine, so these cost nothing to serve.
 | `analyze_scenario` | Bull/base/bear scenarios around a catalyst |
 | `model_price_distribution` | Statistical price targets from historical vol |
 | `analyze_recent_gap` | Scores the most recent overnight gap reaction, 0-100 |
+| `get_alpha_signals` | Signals from the background signal factory |
 | `fetch_ticker_news` | Recent headlines from RSS |
 | `extract_article_text` | Full article body, ads and nav stripped |
 
 ---
 
-## TMpro — 15 tools, need `TD_API_KEY`
+## TickerTrace — 17 `etf_*` tools, no credential
 
-These call `/api/v1/*` on the TraderMatrix Pro backend. Without a key they
-return an error; the intent (§4a of the funnel plan) is that they degrade to a
-partial result naming what is missing.
+Institutional positioning derived from daily ETF holdings: **71 tracked funds**
+over **~2,270 underlyings**, served by `api.tickertrace.pro`. Registered by
+default (`register_momentum_tools(..., include_tickertrace=True)`).
 
-### Flow & positioning — 10
+| tool | what it does |
+|---|---|
+| `etf_briefing` | Pre-market institutional briefing: top buys and sells, multi-provider |
+| `etf_signals` | Conviction-scored institutional buy/sell signals from daily holdings |
+| `etf_institutional_flow` | Aggregate accumulation/distribution across all active-equity funds |
+| `etf_institutional_trend` | Per-ticker accumulation/distribution trend by day, week, month |
+| `etf_holdings_changes` | Raw position changes, filterable by provider |
+| `etf_divergences` | Where different funds traded the SAME name in opposite directions |
+| `etf_layering_patterns` | 3+ independent stock-pickers opening the same new position in a window |
+| `etf_sector_flow` | Sector-level inflows and outflows from fund holdings |
+| `etf_stock_activity` | Everything institutional for one stock: who holds it, how weights moved |
+| `etf_fund_detail` | One ETF's top holdings, options count, AUM |
+| `etf_list_funds` | All 71 tracked funds with holdings counts and top positions |
+| `etf_list_tickers` | The most widely-held underlyings across every tracked fund |
+| `etf_income_overview` | Option-income funds by structure: covered-call, synthetic, leap-proxy, swap |
+| `etf_income_fund_detail` | One income fund's full book: call coverage, moneyness, overlay |
+| `etf_options_listings` | CBOE daily diff: newly optionable stocks and new weekly listings |
+| `etf_signal_performance` | Historical backtest of the TickerTrace conviction signals |
+| `etf_global_stats` | Coverage stats: funds, underlyings, options contracts |
+
+---
+
+## TMpro — 12 tools, need `TD_API_KEY`
+
+These reach the TraderDaddy Pro backend (marketed as TraderMatrix Pro; same
+service). Without a key they degrade rather than crash.
+
+### Flow & positioning — 10, directly TDPro-backed
 | tool | what it does |
 |---|---|
 | `get_gex_overview` | Gamma exposure for SPY/QQQ/IWM. Flip level = regime boundary |
@@ -97,16 +142,20 @@ partial result naming what is missing.
 | `get_earnings_flow` | Pre-earnings institutional positioning |
 | `get_politician_trades` | Congressional disclosures |
 
-### Partly TMpro-backed — 5
-These work without a key but lose their flow inputs.
+### Indirectly TDPro-backed — 2
+These import a module that reaches TDPro, so they lose an input without a key.
 
-| tool | what it does |
+| tool | via |
 |---|---|
-| `get_alpha_signals` | Signals from the background signal factory |
-| `get_momentum_pulse` | Momentum scores 0-100 — EMA stack, RSI, ADX |
-| `screen_pead` | Post-Earnings Announcement Drift setups |
-| `get_exposure_recommendation` | Suggested capital deployment, 0-100% |
-| `get_market_environment` | Cross-asset environment report |
+| `screen_pead` | `mcp_server/pead_screener.py` |
+| `detect_market_top` | `core/market_top.py` |
+
+> **Corrected 2026-09-13.** This section previously listed 15 and named
+> `get_alpha_signals`, `get_momentum_pulse`, `get_exposure_recommendation` and
+> `get_market_environment` as "partly TMpro-backed". Traced through the imports,
+> none of `mcp_server/warmer.py`, `mcp_server/exposure.py` or
+> `mcp_server/environment.py` touches `core/traderdaddy` — those four are free
+> tools and are listed above.
 
 **Not on this surface:** `apex levels` and `conviction`. Neither has a public
 tool module on the key surface — apex is reachable only through a Vespryx
@@ -114,7 +163,7 @@ session (see the funnel plan §5.0).
 
 ---
 
-## Vesper — 13 tools, private
+## Vesper — 13 read tools, private
 
 Read-only views over the trading agent's own state. They touch live account
 data, the approval queue and the audit ledger, so they never ship publicly.
@@ -137,6 +186,63 @@ data, the approval queue and the audit ledger, so they never ship publicly.
 
 ---
 
+## Order path — 3 tools, private, `trade` scope
+
+**Live since Amendment A4 (2026-09-04).** Registered by
+`trading_mcp/order_tools.py`, each decorated `@mcp.tool(auth=require_scopes("trade"))`.
+They reach the broker through `vesper.execution_guard` and nothing else.
+
+| tool | what it does |
+|---|---|
+| `submit_manual_proposal_tool` | Stage an order through the guards; returns a `ticket_id` |
+| `place_from_ticket_tool` | Fire a previously staged ticket by id |
+| `place_order_tool` | One-call placement under the stricter MCP limits |
+
+The two-step path exists so that no single call can both construct and fire an
+order. `preview()` stages a ticket carrying a SHA-256 of the exact payload;
+`place()` takes a ticket id, never an order, so what was approved is
+byte-for-byte what reaches the broker. Tickets are single-use and expire in
+120s.
+
+**What bounds these, all enforced in code:**
+
+- `VESPER_TRADING` — kill switch, defaults **off**.
+- `core/halt.py` — emergency freeze, checked before anything else.
+  `core/circuit_breaker.py` trips it automatically on a 15% trailing-peak NLV
+  drawdown.
+- The MCP notional cap — `min(MCP_MAX_NOTIONAL, MCP_MAX_NOTIONAL_PCT × NLV)`,
+  enforced at the single staging chokepoint every path shares, and it **fails
+  closed**: if NLV cannot be read the cap is 0 and every opening order is
+  refused. Closing orders skip it, since they cannot increase exposure.
+- `MCP_MAX_DAILY_ORDERS`.
+- The guard's own caps in `vesper/execution_guard.py` — notional, quantity,
+  optional symbol allowlist, optional buying-power fraction.
+
+**What these tools cannot do.** `resume()` and
+`ApprovalRegistry.submit_decision()` are unreachable from every MCP module,
+with zero exceptions, pinned mechanically by an AST walk in
+`tests/test_trading_mcp.py`. So a tool call can *originate* an order and can
+never *approve* a pending one. Approval is an inline Telegram or Discord
+button. `vesper/execution_guard.py` remains the only module in the repo that
+can move money.
+
+---
+
+## Also registered: 65 skill resources and 2 prompts
+
+Not tools, and easy to miss in a `tools/list`.
+
+- **65 MCP resources** at `skill://…` (`trading_mcp/resources.py`) — playbooks a
+  client can load instead of re-deriving method in the prompt: 0DTE flow rules,
+  VCP and CANSLIM screening, breadth and regime frameworks, position sizing,
+  dividend-growth process, the edge-research pipeline. `skill://rules` is the
+  operating contract for the server itself.
+- **2 prompts** (`trading_mcp/prompts.py`) — `morning_brief` for pre-market, and
+  `copilot_setup`, designed to be invoked on a 30-60 second cadence for live
+  setup monitoring.
+
+---
+
 ## Note on the two GEX paths
 
 They are different surfaces with different credentials:
@@ -149,3 +255,7 @@ They are different surfaces with different credentials:
 Only the Vespryx path has an anonymous tier today, and a client bug currently
 discards it (`td-api.mjs:327` throws on any `locked:true`, including the
 locked-*with-data* envelope). Funnel plan §4a.
+
+Whichever path you use: dealer gamma is a map of positioning, not a forecast.
+It marks where hedging is concentrated, which is why price often *reacts*
+there. It never means price will travel there. See CLAUDE.md rule 4a.

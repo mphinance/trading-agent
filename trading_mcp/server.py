@@ -1,27 +1,33 @@
 """
-trading_mcp.server: owner-only MCP server exposing this repo's read-only
-trading tooling to Claude.
+trading_mcp.server: owner-only MCP server exposing this repo's trading
+tooling to Claude. No longer read-only as of Amendment A4 (2026-09-04).
 
-PHASE 0 — READ-ONLY ONLY. No tool registered here may call
-guard.preview(), guard.place(), halt()/resume(), or
-ApprovalRegistry.submit_decision(). The order path stays exactly where
-CLAUDE.md rule 3 puts it: vesper/execution_guard.py, reached only from
-inside the LangGraph executor node after a Telegram/Discord approval.
-"Any adapter that grows its own order path is a new threat model, not a
-small addition" — this server does not grow one.
+Three order tools, in trading_mcp/order_tools.py, reach the broker via
+vesper.execution_guard and nothing else, each gated by require_scopes("trade").
+Every other tool in this package remains read-only, and what A4 did NOT
+change still holds: vesper/execution_guard.py is the only module that can
+move money (CLAUDE.md rule 3), no risk check is duplicated here, and
+resume() / ApprovalRegistry.submit_decision() remain unreachable from every
+MCP module — a tool can originate an order but never approve a pending one.
+Buttons move money.
 
 This is a SEPARATE process from mcp_server/server.py (the existing stdio
-"momentum" server, left completely alone — its no-broker-credentials
-property is load-bearing) and from supermcp (a different, subscriber-facing
-server on another host that this package never talks to).
+"momentum" server, which genuinely has no broker credentials and no order
+path — left completely alone) and from supermcp (a different,
+subscriber-facing server on another host that this package never talks to).
 
 Standalone:
     .venv/bin/python -m trading_mcp.server
 
 Transport is chosen by MCP_TRANSPORT (default "stdio", no auth needed since
 stdio carries no headers). An "http" transport REQUIRES TRADING_AGENT_TOKEN
-to be set and binds to 127.0.0.1 only — see CLAUDE.md rule 1: loopback or
-Tailscale, never 0.0.0.0.
+and refuses to start on a missing OR placeholder/low-entropy token
+(core/secret_hygiene.py). MCP_HOST defaults to 127.0.0.1 so reaching any
+wider interface is always an explicit act — this is not "loopback only" as
+a deployment posture, it's a safe default. In production MCP_HOST is set to
+the docker bridge 10.0.0.1 because Traefik is containerised and cannot reach
+the host's loopback; Traefik terminates TLS at https://agent.mphinance.com/mcp
+(CLAUDE.md rule 1). The bearer token and OAuth 2.1 are the entire access gate.
 """
 
 from __future__ import annotations

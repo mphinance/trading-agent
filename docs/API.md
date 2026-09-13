@@ -7,17 +7,26 @@ Commit `de60d51` deleted that browser-dashboard architecture along with
 "History that will otherwise confuse you" for the full story. None of it is
 coming back. This is a from-scratch rewrite describing what is actually here
 today. See [README.md](../README.md) for setup/run instructions — this doc is
-the detailed reference for the CLI, the MCP tool inventory, and the order
-path; it doesn't repeat what the README already covers.
+the detailed reference for the CLI, both MCP servers' tool inventories, and
+the order path (now two of them, see below); it doesn't repeat what the
+README already covers.
+
+**Updated 2026-09-13 for Amendment A4 (2026-09-04).** A4 added a second,
+owner-only MCP server (`trading_mcp/`) that can place a real order through
+three scope-gated tools. Before A4 this document could correctly say "no MCP
+tool can place an order" — that sentence is now false and every instance of
+it below has been corrected. See "The order path" and "`trading_mcp/`
+(owner-only surface)" for what changed and what didn't.
 
 ## What exists now
 
 | Surface | What it is | Can place an order? |
 | --- | --- | --- |
 | **CLI** (`vesper.py`) | The operational surface. Scan/analyze/monitor/loop/listen/alerts/halt/status/paper/audit. | Only via the LangGraph pipeline + a human approval tap. |
-| **MCP server** (`mcp_server/`, entrypoint `mcp_server/server.py`) | Read-only quant tooling — screeners, technicals, options analytics, macro/breadth, research, backtesting — exposed to MCP hosts over stdio (FastMCP; `MCP_TRANSPORT=sse` is supported by the code but nothing in this repo starts it that way). | **No.** No broker credentials, no `wb.py` import, no order-placement tool anywhere in the directory. |
+| **MCP server** (`mcp_server/`, entrypoint `mcp_server/server.py`) | Read-only quant tooling — screeners, technicals, options analytics, macro/breadth, research, backtesting — exposed to MCP hosts over stdio (FastMCP; `MCP_TRANSPORT=sse` is supported by the code but nothing in this repo starts it that way). | **No.** No broker credentials, no `wb.py` import, no order-placement tool anywhere in the directory. This property is unchanged by A4 and is the whole reason `trading_mcp/` exists as a *separate* process instead of adding tools here. |
+| **`trading_mcp/` server** (owner-only, entrypoint `trading_mcp/server.py`) | A **separate process** from `mcp_server/`. 80 tools = the same 64 momentum/TickerTrace tools re-registered from `mcp_server/registry.py`, plus 13 read-only Vesper-state tools, plus (as of Amendment A4, 2026-09-04) 3 order tools. Also exposes 65 `skill://` resources and 2 prompts (`copilot_setup`, `morning_brief`). Internet-reachable in production, behind auth — see its own section below. | **Yes, for a `trade`-scoped credential.** Three tools in `trading_mcp/order_tools.py` reach `vesper.execution_guard` directly, bounded by MCP-specific caps on top of the guard's own. A bearer-token credential cannot use them (see below). |
 | **Telegram / Discord bots** (`vesper/bot/`) | Outbound-only approval channels — long-poll (Telegram) / gateway connection (Discord). Render proposal cards, resolve Approve/Reject taps, accept `/halt` and `/resume`. | Indirectly — a tap resolves a paused graph node, which is the only thing that can reach `executor_node`. |
-| **HTTP** | **Nothing serves it.** `vesper/bot/inbound.py` defines `create_inbound_app()` (an aiohttp app with `/webhook/telegram`, `/webhook/discord`, `/webhook/approval`, `/health`, `/approvals`), but nothing in this repo calls it or runs `web.run_app()` on it. It exists as an alternative approval-delivery mechanism that was never wired up — see rule 1 in CLAUDE.md. | N/A — not running. |
+| **HTTP** | Two different things share this row. `vesper/bot/inbound.py` defines `create_inbound_app()` (an aiohttp app with `/webhook/telegram`, `/webhook/discord`, `/webhook/approval`, `/health`, `/approvals`), and nothing in this repo calls it or runs `web.run_app()` on it — it's an alternative approval-delivery mechanism that was never wired up (CLAUDE.md rule 1). Separately, `trading_mcp/server.py` **does** serve HTTP in production — see the dedicated section below; it is not this dead code path. | Inbound app: N/A, not running. `trading_mcp`: see the row above. |
 
 There is no SSE stream and no browser UI. Rate-limit budgets (2 req/2s
 account reads, 600/min market data and order calls) live in `wb.py` and
@@ -71,10 +80,34 @@ account reads, 600/min market data and order calls) live in `wb.py` and
 
 ## The order path
 
-There is no MCP tool and no HTTP route that can place an order. The only way
-one reaches Webull is: the LangGraph pipeline drafts a proposal → the
-deterministic risk gate passes it → a human taps Approve on a Telegram or
-Discord card → `executor_node` calls `vesper/execution_guard.py`.
+**As of Amendment A4 (2026-09-04) there are two ways to reach Webull, not
+one.** Before A4 this section could correctly say no MCP tool and no HTTP
+route could place an order; that is no longer true, and CLAUDE.md rule 3 was
+amended rather than broken to accommodate it. Both paths below terminate in
+the same single module:
+
+1. **The human-approved pipeline (unchanged).** The LangGraph pipeline drafts
+   a proposal → the deterministic risk gate passes it → a human taps Approve
+   on a Telegram or Discord card → `executor_node` calls
+   `vesper/execution_guard.py`.
+2. **The `trading_mcp/` order tools (new in A4).** A `trade`-scoped MCP
+   credential calls `submit_manual_proposal_tool` → `place_from_ticket_tool`,
+   or the one-call `place_order_tool`, in `trading_mcp/order_tools.py` — each
+   reaches `vesper.execution_guard` directly, with **no human approval tap in
+   this path at all**. What bounds it instead: `VESPER_TRADING`, the halt
+   file, the circuit breaker, a portfolio-aware MCP-specific notional cap,
+   a daily order-count limit, and the guard's own caps below. See
+   "`trading_mcp/` (owner-only surface)" further down for the full mechanism,
+   the scope model that gates it, and exactly what still can't be done this
+   way (approving a *pending* proposal — `resume()` and
+   `ApprovalRegistry.submit_decision()` remain unreachable from every MCP
+   module, with zero exceptions).
+
+**What did not change:** `vesper/execution_guard.py` is still the *only*
+module that can move money — path 2 is a second way to *call* it, not a
+second place the broker-write logic lives. No risk-gate or order-placement
+code is duplicated anywhere; `tests/test_trading_mcp.py` pins this
+mechanically with an AST walk, not just a docstring promise.
 
 ### Pipeline (`vesper/graph.py`)
 
@@ -185,10 +218,14 @@ vesper.py alerts --disarm <id>
 - Delivery is `notify.Notifier` → ntfy and/or Telegram. The ntfy topic is
   treated as a credential (128 bits of randomness, never surfaced by any
   status output).
-- There is no `/api/alerts` route and no MCP alert tools — `Watcher`
-  (`watcher.py`) is a plain background thread started inside `vesper loop`
-  (`vesper/alerts_runner.py`), not an asyncio task, because the Webull SDK
-  calls it makes are blocking.
+- There is no `/api/alerts` route, and arming/disarming is CLI-only — there
+  is no MCP tool anywhere that can arm, disarm, or evaluate an alert.
+  `trading_mcp/vesper_tools.py`'s `list_alerts` tool (see below) is a
+  **read-only** exception: it lists every armed/pending/triggered alert with
+  each dynamic level re-resolved live, but cannot create or remove one.
+- `Watcher` (`watcher.py`) is a plain background thread started inside
+  `vesper loop` (`vesper/alerts_runner.py`), not an asyncio task, because the
+  Webull SDK calls it makes are blocking.
 
 ---
 
@@ -196,16 +233,26 @@ vesper.py alerts --disarm <id>
 
 FastMCP server registered under the name `"momentum"`, stdio transport by
 default (`MCP_TRANSPORT` env var can switch it to SSE; nothing in this repo
-starts it that way). **52 `@mcp.tool` registrations**, all defined in
+starts it that way). **56 `@mcp.tool` registrations**, all defined in
 `mcp_server/server.py` with implementations imported from the other files in
 the directory. Holds **no broker credentials**, does not import `wb.py`, and
 has **no order-placement tool** — confirmed by reading every file in the
-directory, not just the entrypoint.
+directory, not just the entrypoint. That property is unchanged by Amendment
+A4; it's exactly why the order tools were added to a different process
+(`trading_mcp/`, documented below) instead of here.
 
-(The server's own internal strings are stale and disagree with each other —
-the FastMCP `instructions` text says "33 quantitative trading tools," the
-startup log line says "35 tools registered." The actual count, from the
-`@mcp.tool` decorators themselves, is 52.)
+This is a genuinely separate server process from `trading_mcp/` below —
+different entrypoint, different auth, different tool count, and **not the
+same 56 tools re-exposed**. `trading_mcp/` builds most of its momentum
+tooling from a *different* code path, `mcp_server/registry.py`'s
+`register_momentum_tools()` (47 tiered tools + 17 TickerTrace `etf_*` tools =
+64), which this file's `server.py` does not call — this file defines its own
+56 tools inline instead. The two overlap heavily in what they can do, but
+are not the same registration, and their counts (56 here vs. 64 of
+`trading_mcp/`'s 80) don't correspond 1:1. Don't confuse the two processes:
+this one is stdio-only, holds no credentials, and is what a local MCP host
+(Claude Code, Claude Desktop) talks to; `trading_mcp/` is the
+internet-reachable, owner-only one — see its own section below.
 
 ### Screening
 
@@ -271,10 +318,20 @@ startup log line says "35 tools registered." The actual count, from the
 | Tool | Required args | Description |
 | --- | --- | --- |
 | `get_fundamentals` | `ticker` | P/E, EPS, revenue growth, margin, short interest, analyst targets, earnings dates, market cap. |
+| `get_sec_filings` | `ticker` | SEC EDGAR filing index straight from the primary source (the recent-events sweep). `forms` narrows to types like `["8-K", "10-Q"]`. Needs `SEC_USER_AGENT` (CLAUDE.md). |
+| `get_sec_financials` | `ticker` | Multi-period financials from SEC XBRL, including the accrual gap (net income minus operating cash flow — positive means earnings are accrual-driven, not cash-backed). |
+| `get_shares_outstanding` | `ticker` | Cover-page share count straight from the 10-Q/10-K, not an aggregator's derived figure; flags an implausible diluted count instead of silently returning it. |
+| `get_stakes_held` | `ticker` | AS-FILER 13D/13G — stakes this company holds *in other* public companies, not who owns this ticker. |
 | `fetch_ticker_news` | `ticker` | Recent RSS news headlines for a stock. |
 | `extract_article_text` | `url` | Full-text extraction of a news article, ads/nav stripped. |
 | `search_knowledge` | `query` | RAG search over a 139-book trading-knowledge library. |
 | `generate_alpha_card` | `ticker` | Branded HTML analysis card combining technicals + TV consensus for sharing. |
+
+The four EDGAR tools above (`get_sec_filings`, `get_sec_financials`,
+`get_shares_outstanding`, `get_stakes_held`) exist in `mcp_server/server.py`
+today but were missing from this table before this pass — they are not new
+code, just previously undocumented, and are exactly the gap between the old
+52 count and the real one.
 
 ### Backtesting
 
@@ -299,8 +356,134 @@ startup log line says "35 tools registered." The actual count, from the
 | `analyze_scenario` | `ticker`, `catalyst` | Bull/base/bear price-target scenarios for a given catalyst. |
 | `model_price_distribution` | `ticker` | Confidence-interval (68/95/99%) price targets from historical volatility. |
 
-Full tool count: **52**, verified against `mcp_server/server.py`'s
-`@mcp.tool` decorators (no discrepancy from the count above).
+Full tool count: **56**, verified 2026-09-13 by counting `@mcp.tool`
+decorators directly in `mcp_server/server.py`. (An earlier version of this
+doc said 52 — undercounting the four EDGAR tools above, not a code change.)
+
+## `trading_mcp/` (owner-only surface)
+
+A **separate process** from `mcp_server/server.py` above — separate
+entrypoint (`python -m trading_mcp.server`), separate auth, separate tool
+count. It is the deployed, internet-reachable server: 77 read tools plus (as
+of Amendment A4, 2026-09-04) 3 order tools, for **80 total**, plus 65
+`skill://` resources and 2 prompts. It genuinely holds live Webull, TDPro and
+EDGAR credentials, unlike `mcp_server/`.
+
+### Tool composition (80)
+
+| Source | Count | What |
+| --- | --- | --- |
+| `mcp_server/registry.py`'s `register_momentum_tools()` | 64 | 47 momentum tools (tiers 1-3) + 17 TickerTrace `etf_*` tools. A parallel registration path to `mcp_server/server.py`'s own inline 56 — built for reuse across hosts (this server, `supermcp`), not a re-export of that exact set; tier/tickertrace boundaries don't line up 1:1 with the 56 documented above. |
+| `trading_mcp/vesper_tools.py`'s `register_vesper_tools()` | 13 | Read-only Vesper state (see table below). |
+| `trading_mcp/order_tools.py`'s `register_order_tools()` | 3 | Order placement, gated by `require_scopes("trade")` (see below). |
+
+The 13 read-only Vesper tools: `get_account_state`, `get_halt_status`,
+`get_drawdown_status`, `get_paper_positions`, `get_paper_summary`,
+`list_alerts`, `list_pending_proposals`, `get_proposal`, `get_audit_trail`,
+`verify_audit_chain`, `get_playbook_calibration`, `recall_similar_setups`,
+`get_position_monitor_status`. None of these import `core.halt`'s `halt()`
+or `resume()`, or `ApprovalRegistry.submit_decision()` — every one is a pure
+read, even the ones (`get_halt_status`, `get_proposal`) that sit right next
+to state-changing functions in the same module.
+
+Also registered, separately from the 80 tools: **65 `skill://` resources**
+(`trading_mcp/resources.py` — every skill under `skills/` as `skill://<name>`,
+plus `skill://rules`) and **2 prompts** (`trading_mcp/prompts.py` —
+`copilot_setup`, for the 30-60s voice setup-monitoring cadence, and
+`morning_brief`).
+
+### The 3 order tools and the preview → ticket → place handshake
+
+`trading_mcp/order_tools.py`, each carrying `@mcp.tool(auth=require_scopes("trade"))`:
+
+- **`submit_manual_proposal_tool`** — stages an order through the same
+  deterministic guards as the human-approval path and returns a `ticket_id`.
+  Two-step, matching `execution_guard`'s own preview/place split.
+- **`place_from_ticket_tool`** — fires a previously staged ticket. This is
+  the second step of the pair above.
+- **`place_order_tool`** — stage-and-fire in one call, for when the
+  two-step dance isn't needed.
+
+All three funnel into `vesper.execution_guard.guard` — no new broker-write
+code, no duplicated risk logic. Rule 3's ticket handshake (single-use,
+120-second expiry, payload re-hashed and matched against the ticket's stored
+digest before anything reaches the broker) applies identically here.
+
+**The notional cap used to be bypassable through this exact two-step path**
+(fixed in the same change that shipped A4): it was enforced only inside
+`place_order`, so `submit_manual_proposal_tool` → `place_from_ticket_tool`
+reached the broker bounded by nothing but `execution_guard`'s own, much
+larger cap. It is now enforced at the single staging chokepoint
+(`submit_manual_proposal`) every path shares — pinned by
+`test_two_step_path_cannot_bypass_mcp_notional_cap` in
+`tests/test_trading_mcp.py`.
+
+### MCP-specific order caps (on top of, not instead of, the guard's own)
+
+- **`MCP_MAX_NOTIONAL`** — an absolute ceiling (default `1000`). Documented
+  as exactly that: a ceiling, not the operative cap.
+- **`MCP_MAX_NOTIONAL_PCT`** — a fraction of net liquidation value (default
+  `0.25`). The *operative* cap is `min(MCP_MAX_NOTIONAL, MCP_MAX_NOTIONAL_PCT
+  × NLV)` — the smaller of the two, not the flat constant alone. A flat
+  $1000 ceiling on a small live account was 2.5x its buying power, i.e. no
+  cap at all in practice.
+- **Fails closed.** If NLV cannot be read, the effective cap is **0** and
+  every *opening* order is refused — never a silent fallback to the flat
+  ceiling. Closing orders skip this cap entirely, since they cannot increase
+  exposure.
+- **`MCP_MAX_DAILY_ORDERS`** — a plain count limit (default `5`), tracked in
+  `trading_mcp/order_tools.py`'s own state file, separate from anything
+  `execution_guard.py` tracks.
+
+### Scope model, and the 77-vs-80 behavior
+
+- The static bearer credential (`TRADING_AGENT_TOKEN`) gets scopes
+  `["read", "safe-write"]` — **deliberately not `trade`**. A long-lived
+  secret sitting in a file on disk cannot place an order under any
+  circumstance; only a token minted through the human-present `/authorize`
+  OAuth 2.1 gate can carry `trade`.
+- Consequence that looks like a bug and is not: an unauthenticated or
+  bearer-authenticated `tools/list` returns **77** tools, not 80, and
+  calling one of the three order tools with a bearer answers `Unknown tool`
+  rather than `403` — FastMCP filters the tool list by scope instead of
+  exposing-then-rejecting. Do not "fix" that asymmetry by adding `trade` to
+  the bearer's scope list; it is the point.
+- `trade` is in the OAuth provider's `default_scopes`, deliberately — the
+  claude.ai connector performs dynamic client registration without naming a
+  scope, so a `default_scopes=["read"]` would register the connector
+  read-only and every order tool would answer 403 even to the owner. The
+  actual security boundary is not the scope grant, it's the operator secret
+  required at `/authorize` — reaching a `trade`-scoped token still requires
+  a human at that gate, and placing an order past that still requires
+  `VESPER_TRADING=1`, a clear halt file, an untripped circuit breaker, and
+  the MCP caps above.
+- **`resume()` and `ApprovalRegistry.submit_decision()` remain unreachable
+  from every MCP module — zero exceptions, order tools included.** A tool
+  can *originate* an order (`submit_manual_proposal_tool`, `place_order_tool`)
+  but can never approve one that's pending in the human-gate path. Voice/chat
+  and the Telegram/Discord approval buttons are and remain two different,
+  non-overlapping mechanisms. `tests/test_trading_mcp.py` pins this with an
+  AST walk over every MCP module's source — not just `ast.Call` nodes, but
+  attribute access, import aliases, and dotted paths too, because the live
+  order path itself calls `guard.place` by passing the bound method to
+  `asyncio.to_thread` rather than invoking it inline, and an earlier version
+  of the pin that only matched `ast.Call` would have missed a tool copying
+  that exact idiom.
+
+### Network posture
+
+Binds the docker bridge `10.0.0.1:8500` in production — not `0.0.0.0` and
+not loopback either, because Traefik is containerised and cannot reach the
+host's loopback interface. Traefik terminates TLS at
+`https://agent.mphinance.com/mcp`. `MCP_HOST` defaults to `127.0.0.1`, so
+reaching anything wider than loopback is always an explicit act, never an
+accident of a missing env var. The server refuses to open an HTTP listener
+at all — `SystemExit` — with no `TRADING_AGENT_TOKEN`, or with one that
+`core/secret_hygiene.py` judges to be a placeholder or low-entropy (CLAUDE.md
+rule 2). stdio transport (the default, used by local MCP hosts) needs no
+token at all, since stdio carries no headers.
+
+---
 
 ## More detail
 

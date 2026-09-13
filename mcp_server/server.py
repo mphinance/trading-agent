@@ -109,7 +109,7 @@ mcp = FastMCP(
     "momentum",
     instructions=(
         "Welcome to the Momentum MCP Server — powered by TraderDaddy Pro.\n\n"
-        "This server provides 33 quantitative trading tools for AI agents:\n"
+        "This server provides 56 quantitative trading tools for AI agents:\n"
         "• Stock screening (22 presets + custom filters)\n"
         "• Technical analysis (24 indicators: EMA stack, RSI, MACD, ADX, ATR, Bollinger, etc.)\n"
         "• Options analysis via VoPR™ engine (vol surface, Black-Scholes, A-F grading)\n"
@@ -174,7 +174,7 @@ def trading_assistant() -> str:
     """Start a trading analysis session with access to institutional-grade tools."""
     return (
         "You are a quantitative trading analyst with access to the Momentum MCP server "
-        "powered by TraderDaddy Pro. You have 33 tools for stock screening, technical analysis, "
+        "powered by TraderDaddy Pro. You have 56 tools for stock screening, technical analysis, "
         "options analysis (VoPR™ engine), institutional flow data, backtesting, and a "
         "139-book trading knowledge base.\n\n"
         "Start by understanding what the user wants to analyze, then use the appropriate tools. "
@@ -864,7 +864,7 @@ if __name__ == "__main__":
     port = int(os.getenv("MCP_PORT", "8401"))
     sse_path = os.getenv("MCP_SSE_PATH", "/mcp/sse")
     logger.info(
-        "Starting momentum MCP server on %s:%s%s (transport=%s, 35 tools registered)...",
+        "Starting momentum MCP server on %s:%s%s (transport=%s, 56 tools registered)...",
         host, port, sse_path, transport,
     )
     if transport == "sse":

@@ -5,9 +5,12 @@ setups, reads dealer-gamma structure off TraderDaddy Pro, drafts and
 risk-gates an order, then asks you to approve it over **Telegram or
 Discord** — chart attached — before anything touches your account.
 
-- 🔌 **MCP server built in** — 52 read-only quant tools. Plug it into
-  **Claude Desktop**, **Claude Code**, **Codex CLI**, or anything else that
-  speaks MCP.
+- 🔌 **Two MCP servers built in.** `mcp_server/` is the portable one — 56
+  read-only quant tools over stdio, no broker credentials, no order path.
+  Plug it into **Claude Desktop**, **Claude Code**, **Codex CLI**, or anything
+  else that speaks MCP. `trading_mcp/` is the owner-only one — **80 tools**,
+  the extra 16 reading live account state, and three of those able to place an
+  order. See [`docs/TOOLS.md`](docs/TOOLS.md).
 - 🧩 **64 Claude Code skills** ship in `skills/` — VCP/CANSLIM screens,
   gamma/breadth/regime detectors, backtesting, a full edge-research
   pipeline, dividend SOPs, and more. Picked up automatically, zero setup.
@@ -19,11 +22,16 @@ Discord** — chart attached — before anything touches your account.
   without a human tap.
 
 > **This is a single-operator personal tool, not a hosted product.** No
-> authentication, no multi-tenancy, no browser UI or HTTP API — a local CLI
-> plus two outbound-only bot connections. **It can place real orders**; the
-> kill switch (`VESPER_TRADING`) defaults **off**, and every proposal still
-> needs a deterministic risk-gate pass and a human approval tap. See
-> [CLAUDE.md](CLAUDE.md) for the full design rules.
+> multi-tenancy, no user model, no browser UI. There *is* one HTTP listener:
+> `trading_mcp/server.py`, which binds the docker bridge `10.0.0.1:8500`
+> behind Traefik at `https://agent.mphinance.com/mcp`, with a bearer token and
+> OAuth 2.1 as the entire access gate. Both approval paths stay outbound-only
+> — Telegram long-polls, Discord holds a gateway connection.
+>
+> **It can place real orders**; the kill switch (`VESPER_TRADING`) defaults
+> **off**, and every agent-originated proposal needs a deterministic
+> risk-gate pass and a human approval tap. See [CLAUDE.md](CLAUDE.md) for the
+> full design rules.
 
 **Needs a [TraderDaddy Pro](https://www.traderdaddy.pro) Developer API key.**
 Dealer-gamma structure, most of the scanner's discovery (screeners, unusual
@@ -50,7 +58,7 @@ plan) — see [Credentials](#credentials).
 
 ## Connecting an MCP host (Claude Desktop, Claude Code, Codex, ...)
 
-`mcp_server/` is a real MCP server — 52 read-only tools (screeners, technical
+`mcp_server/` is a real MCP server — 56 read-only tools (screeners, technical
 indicators, options/VoPR analytics, macro & breadth detectors, TraderDaddy
 intel, backtesting, a knowledge-base search) — and it talks stdio by default,
 so any MCP-compatible host can spawn it as a subprocess. `pip install -r
@@ -173,11 +181,12 @@ push.
 ```bash
 git clone <this repo>
 cd webull-sidecar
-python3 -m venv .venv                              # 3.8-3.14 all fine on webull SDK 2.0.16
+python3 -m venv .venv                              # 3.8-3.14 all fine on webull SDK 2.0.18
 ./.venv/bin/pip install -r requirements.txt
 
-cp .env.example .env                                # then fill in real values
-vi .env
+cp .env.vesper.example .env                         # then fill in real values
+vi .env                                             # NEVER paste a placeholder through — generate:
+                                                    #   openssl rand -hex 32
 
 ./.venv/bin/python vesper.py status                 # confirms Webull + TDPro connectivity
 ```
@@ -194,6 +203,16 @@ vi .env
 | `VESPER_CIRCUIT_BREAKER_PCT` | 15% | Trailing-peak NLV drawdown that trips the emergency halt automatically. |
 | `OPENROUTER_MODEL` | — | Model used for thesis narrative + risk red-team (rule 6 in CLAUDE.md — narrate/reject only, never originate or upsize). |
 
+The MCP order tools sit behind a *second*, stricter set of bounds, enforced at
+the single staging chokepoint every path shares:
+
+| Variable | Purpose |
+| --- | --- |
+| `MCP_MAX_NOTIONAL` | Absolute $ ceiling for one MCP-originated order. |
+| `MCP_MAX_NOTIONAL_PCT` | Fraction of NLV for one MCP-originated order. The operative cap is `min()` of the two, and it **fails closed** — if NLV can't be read the cap is 0 and every opening order is refused. Closing orders skip it; they can't increase exposure. |
+| `MCP_MAX_DAILY_ORDERS` | Orders per day from the MCP surface. |
+| `TRADING_AGENT_TOKEN` | Static bearer for the owner MCP server. Carries `read` + `safe-write`, deliberately **not** `trade` — a long-lived secret on disk cannot place an order. Generate it (`openssl rand -hex 32`); the server refuses to start on a placeholder or low-entropy value. |
+
 ## Layout
 
 ```
@@ -206,33 +225,51 @@ vesper/
   state.py          Pydantic models (OrderProposal, OrderLeg, TradingState, ...)
   execution_guard.py  THE ORDER PATH — the only module that can move money
   risk.py           RiskEnforcer: sizing + capital-allocation buckets
-  circuit_breaker.py  Trailing-peak NLV drawdown -> automatic halt
-  halt.py           Emergency freeze, checked before anything else
+  halt.py           Thin compat re-export of core/halt.py, kept only because
+                    execution_guard.py (never edited) imports from here
   monitor.py        Position monitor + exit cascade
   llm.py            OpenRouter: thesis narrative + risk red-team, narrate/reject only
-  nodes/            regime, scanner, analyst, playbooks, risk_gate, human_gate, executor, reflection
+  agents/           Specialist swarm: technical, flow, fundamental, gamma,
+                    synthesis/debate supervisor, adversarial risk
+  nodes/            regime, scanner, analyst, swarm_node, playbooks, synthesis_node,
+                    risk_gate, human_gate, executor, reflection (the actual edge order)
   bot/              Telegram + Discord approval adapters, channel manager
   brokers/          public_broker.py (second, partial adapter)
 
-wb.py               Webull client — credentials, account/order reads, the scarce 2-req/2s bucket
-md.py               Market data, research, screeners (separate 600/min bucket — don't merge with wb.py)
-td.py               TraderDaddy Pro client + dealer-gamma compaction (td.levels())
+core/               Shared layer both vesper/ and trading_mcp/ import from
+  wb.py             Webull client — credentials, account/order reads, the scarce 2-req/2s bucket
+  md.py             Market data, research, screeners (separate 600/min bucket — don't merge with wb.py)
+  td.py             TraderDaddy Pro client + dealer-gamma compaction (td.levels())
+  halt.py           Emergency freeze, checked before anything else
+  circuit_breaker.py  Trailing-peak NLV drawdown -> automatic halt
+  secret_hygiene.py   Refuses a placeholder or low-entropy credential (rule 2)
 alerts.py           Alert store + crossing logic (a level can BE dealer structure)
 watcher.py          Background thread evaluating alerts
 notify.py           Alert delivery: ntfy and/or Telegram
 stream.py           MQTT quote push + gRPC trade-event push, wakes the monitor on a fill
-mcp_server/         Quant tooling exposed over MCP (FastMCP, stdio) — screeners, backtests, options analytics
+mcp_server/         Quant tooling exposed over MCP (FastMCP, stdio) — screeners, backtests,
+                    options analytics. 56 tools, no broker credentials, no order path.
+trading_mcp/        Owner-only MCP server, SEPARATE process — 80 tools, 65 skill
+                    resources, 2 prompts. Deployed behind Traefik. See docs/TOOLS.md.
 tests/              pytest, hermetic — Webull and Agent SDKs stubbed in conftest
-deploy/             systemd unit + Tailscale-gated installer — STALE, see below
+deploy/             Three systemd user units + two env contracts + Traefik config
 docs/               API/design docs, vendored Webull OpenAPI reference
 ROADMAP.md          Single planning doc: status, known gaps, ideas backlog
 ```
 
-There is no `server.py`, no browser UI, and no HTTP API — an earlier version
-of this repo had those, and they were deliberately removed rather than kept
-around unused. `mcp_server/` is a separate thing: it exposes quant tooling
-(screeners, technicals, backtests) to MCP hosts, not a bridge to the broker —
-it holds no credentials and cannot place an order.
+There is no `server.py` and no browser UI — an earlier version of this repo
+had those, and they were deliberately removed rather than kept around unused.
+
+The two MCP packages are different things and the difference is load-bearing.
+`mcp_server/` exposes quant tooling (screeners, technicals, backtests) to MCP
+hosts over stdio; it holds no broker credentials and has no order path, and
+that property is deliberate. `trading_mcp/` is a separate process that *does*
+hold them: it adds 13 read-only views over live account and agent state, plus
+three order tools behind an OAuth `trade` scope. Even there, the order tools
+reach the broker only through `vesper/execution_guard.py` and duplicate no
+risk check of their own — and `resume()` and `submit_decision()` are
+unreachable from every MCP module, so a tool call can originate an order but
+can never approve a pending one.
 
 ## Tests
 
@@ -248,7 +285,7 @@ version, the other shells out to an npm-only binary), so
 (halt, circuit breaker, paper ledger, approval registry, graph checkpoints) to
 a temp dir, so a test run cannot touch real state or your account.
 
-CI (`.github/workflows/ci.yml`) runs the suite on Python 3.10 and 3.14, plus a
+CI (`.github/workflows/ci.yml`) runs the suite on Python 3.12 and 3.13, plus a
 `compileall` pass and a credential-shaped-string scan, on every push and PR.
 
 ## The order path
@@ -268,8 +305,13 @@ numbers are not a live account.*
 
 **Not exercised against a live account yet.** The order path is tested end to
 end against a stub broker, which proves the wiring, not Webull's acceptance of
-it. See the Status section of [CLAUDE.md](CLAUDE.md) for exactly what has and
-hasn't been verified live.
+it. The request *payload shapes* are verified — established by sending real
+`preview_order` / `preview_option` calls, which are non-committal — and that
+caught three genuine errors in the single-leg path. Multi-leg combos beyond a
+single option leg are refused at the executor on purpose: the correct strategy
+enum is unverified, and a guessed payload to a live order endpoint is not an
+acceptable way to find out. See the Status section of [CLAUDE.md](CLAUDE.md)
+for exactly what has and hasn't been verified live.
 
 ## Deploy
 
@@ -278,7 +320,19 @@ Deployment is managed via three systemd user services under `deploy/`:
 - `vesper-loop.service` (autonomous scan and monitor loop)
 - `vesper-listen.service` (inbound webhook and approval listener)
 
-Configuration is split into `.env.trading-agent` and `.env.vesper`. See `deploy/README.md`.
+`trading-agent.service` is the one that's actually live. Traefik terminates
+TLS in front of it at `https://agent.mphinance.com/mcp`; the bind is the docker
+bridge rather than loopback because Traefik is containerised and can't reach
+the host's loopback. `MCP_HOST` defaults to `127.0.0.1`, so widening it is
+always an explicit act.
+
+Configuration is split into `.env.trading-agent` and `.env.vesper`. **Which
+file is live is not obvious and getting it wrong has already cost a day of
+production exposure** — a bare `.env` on a deployed box is read by nothing, so
+editing it to rotate a credential changes nothing the service sees. Read
+`deploy/README.md` before touching either, and generate every secret rather
+than copying one: `install.sh` refuses to deploy while any credential still
+equals its `.example` value.
 
 ## More detail
 

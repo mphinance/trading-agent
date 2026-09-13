@@ -243,18 +243,35 @@ registered. It did not degrade one tool; it killed the process. *Fixed.*
 **The knowledge base ships code with no data.** `data/chromadb/` is 16 MB and
 gitignored, so `search_knowledge` returns nothing on a fresh install.
 
-**M8's tools are written, tested, and never registered.**
-`trading_mcp/server.py`'s `_register_all_tools()` does not call
-`register_order_tools` / `register_voice_tools` / `register_drafting_tools`, so
-`halt`, `watch_setup`, `draft_proposal` and `place_order` are unreachable — while
-`SERVER_INSTRUCTIONS` and the `copilot_setup` prompt actively tell clients to
-call them. The advertised emergency halt does not exist on the wire.
+**Some of M8's tools are written, tested, and still never registered.**
+`trading_mcp/server.py`'s `_register_all_tools()` calls `register_order_tools`
+(since A4, 2026-09-04 — the three order tools ARE on the wire), but still does
+not call `register_voice_tools` or `register_drafting_tools`. So `halt`,
+`watch_setup` and `draft_proposal` remain unreachable while `SERVER_INSTRUCTIONS`
+and the `copilot_setup` prompt actively tell clients to call them. **The
+advertised emergency halt still does not exist on the wire** — `get_halt_status`
+reads the freeze, nothing on this surface sets it. Reach for the CLI
+(`vesper.py halt`) in an emergency, not a tool call.
 
-**And wiring them in would lock you out, not open a hole.**
-`_build_oauth_provider` passes `required_scopes=["read"]`, which the constructor
-reuses as `valid_scopes` — collapsing it to `{"read"}`. No credential the server
-can issue would satisfy `require_scopes("trade")`. Fail-closed, and pinned by
+**The scope plumbing that would once have locked you out is fixed.**
+`_build_oauth_provider` used to pass `required_scopes=["read"]` and have the
+constructor reuse it as `valid_scopes`, collapsing the registerable set to
+`{"read"}` — so wiring in the order tools would have locked the owner out rather
+than opened a hole. `SingleOperatorOAuthProvider.__init__` now takes
+`required_scopes` / `valid_scopes` / `default_scopes` as the three separate
+things they are, and production passes `valid_scopes=["read", "safe-write",
+"trade"]`. This had to be fixed *before* registering the tools, and the order
+matters if you ever unwind it. Still pinned by
 `test_production_oauth_provider_scope_plumbing`.
+
+**The static bearer is deliberately read-only, and that asymmetry is not a bug.**
+`TRADING_AGENT_TOKEN` carries `["read", "safe-write"]`, never `trade`, so a
+long-lived secret sitting in a file on disk cannot place an order — only a token
+minted through the human-present `/authorize` gate can. The symptom: a bearer
+`tools/list` returns **77** tools, not 80, and calling an order tool with it
+answers `Unknown tool` rather than 403, because FastMCP filters by scope. That
+reads exactly like a broken deploy. Do not "fix" it by adding `trade` to the
+bearer's scope list.
 
 **An AST pin that matches only `Call` nodes is defeatable.** The rule-3 guard
 pin missed `getattr(guard, "place")` — dynamic dispatch by string produces no
