@@ -485,11 +485,19 @@ deploy/            LIVE (M7): three systemd user units, two env contracts,
                    Traefik dynamic config, idempotent install.sh that generates
                    a real token and refuses to deploy a placeholder. See
                    deploy/README.md.
-docs/              API.md, expansion plan, OpenRouter pricing, voice stack.
+docs/              HANDOFF.md is the onboarding doc — first hour, where it
+                   runs, which env file is live, the traps. MCP_OVERVIEW.md is
+                   the external-facing explainer (share that one, not HANDOFF).
+                   TOOLS.md is the 80-tool inventory grouped by credential.
                    CONNECTOR_AUTH.md is the operational one: where the token
                    lives, why the bearer and OAuth credentials differ in what
                    they can do, how to reconnect the claude.ai connector when
                    it 401s forever, and the five gates that bound an order.
+                   API.md documents both MCP surfaces. Also: expansion plan,
+                   OpenRouter pricing, voice stack (superseded notice).
+                   A doc carrying a "superseded" banner is a historical record
+                   kept for the reasoning, not current design — trust the
+                   banner.
 ROADMAP.md         Single planning doc: status, known gaps, ideas backlog
 ```
 
