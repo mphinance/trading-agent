@@ -1,27 +1,52 @@
 # Vesper
 
-**A LangGraph trading agent for Webull that speaks MCP.** It scans for
-setups, reads dealer-gamma structure off TraderDaddy Pro, drafts and
-risk-gates an order, then asks you to approve it over **Telegram or
-Discord** — chart attached — before anything touches your account.
+**A LangGraph trading agent for Webull, and the MCP tooling it runs on.** Two
+things live in this repo, and you have probably arrived for one of them.
 
-- 🔌 **Two MCP servers built in.** `mcp_server/` is the portable one — 56
-  read-only quant tools over stdio, no broker credentials, no order path.
-  Plug it into **Claude Desktop**, **Claude Code**, **Codex CLI**, or anything
-  else that speaks MCP. `trading_mcp/` is the owner-only one — **80 tools**,
-  the extra 16 reading live account state, and three of those able to place an
-  order. **New here?** [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) explains
-  what the 80 tools are and how the safety model works;
-  [`docs/TOOLS.md`](docs/TOOLS.md) is the full inventory.
-- 🧩 **64 Claude Code skills** ship in `skills/` — VCP/CANSLIM screens,
-  gamma/breadth/regime detectors, backtesting, a full edge-research
-  pipeline, dividend SOPs, and more. Picked up automatically, zero setup.
-- 🤖 **LangGraph pipeline** drafts the trade; a **deterministic risk gate**
-  (not an LLM) enforces notional/quantity/buying-power caps before a human
-  ever sees it.
-- ✅ **Telegram/Discord approval** — preview → confirm ticket handshake,
-  SHA-256'd payload, single-use, 120s TTL. Nothing reaches the broker
-  without a human tap.
+**The tools.** `mcp_server/` is a portable MCP server — 56 tools, no broker
+credentials, no order path, nothing to sign up for. Screeners, 24-indicator
+technicals, an options volatility engine with an A-F grade, SEC EDGAR
+primary-source filings, dealer-gamma structure, and institutional ETF flow
+across 71 funds. Point Claude Desktop, Claude Code or any MCP host at it and
+it works immediately. The owner-only server, `trading_mcp/`, is a separate
+process with **80** — the same quant tooling plus 13 read-only views on a live
+account and 3 tools that can place an order.
+→ [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) explains all 80 and the safety
+model; [`docs/TOOLS.md`](docs/TOOLS.md) is the inventory.
+
+**The agent.** Vesper scans for setups, reads dealer-gamma positioning, drafts
+an order and runs it through a **deterministic risk gate** — Python, not a
+model — then **stops**. It waits for a human to tap Approve on a Telegram or
+Discord card with the chart attached. Only then does it execute, and it then
+monitors the position for an exit.
+
+That stop is the part worth reading the code for.
+
+**What stops it.** An agent wired to a brokerage account is only as good as the
+things it can't do. These are enforced in code, and each has a test pinning the
+decision:
+
+- **One module can move money.** `vesper/execution_guard.py`. Everything else
+  reads. An adapter that grows its own order path is a new threat model, not a
+  small addition.
+- **Preview, then confirm, then place.** Staging an order returns a ticket
+  carrying a SHA-256 of the exact payload; placing takes a *ticket id*, never
+  an order. No single call can both construct and fire one, and what was
+  approved is byte-for-byte what reaches the broker. Single-use, 120s TTL.
+- **A tool can originate an order. A tool can never approve one.** The
+  functions that resume a paused run or record a decision are unreachable from
+  every MCP module — pinned by a test that walks the AST, not by convention.
+  Voice and chat ask questions; buttons move money.
+- **The LLM may narrate, reject, or shrink — never originate or increase.**
+  Strategies are deterministic. The model appends narrative *after* the numbers
+  are fixed, and the risk red-team runs only *after* the deterministic gate
+  passed, where it may reject or halve a position and nothing else.
+- **Two kill switches.** `VESPER_TRADING` defaults off; a halt file freezes
+  everything and a circuit breaker trips it automatically on a 15%
+  trailing-peak drawdown.
+
+**64 Claude Code skills** also ship in `skills/`, picked up automatically by
+any Claude Code session opened here — see [Skills](#skills).
 
 > **This is a single-operator personal tool, not a hosted product.** No
 > multi-tenancy, no user model, no browser UI. There *is* one HTTP listener:
@@ -30,19 +55,20 @@ Discord** — chart attached — before anything touches your account.
 > OAuth 2.1 as the entire access gate. Both approval paths stay outbound-only
 > — Telegram long-polls, Discord holds a gateway connection.
 >
-> **It can place real orders**; the kill switch (`VESPER_TRADING`) defaults
-> **off**, and every agent-originated proposal needs a deterministic
-> risk-gate pass and a human approval tap. See [CLAUDE.md](CLAUDE.md) for the
-> full design rules.
+> **It can place real orders.** See [CLAUDE.md](CLAUDE.md) for the full design
+> rules before changing anything.
 
-**Needs a [TraderDaddy Pro](https://www.traderdaddy.pro) Developer API key.**
-Dealer-gamma structure, most of the scanner's discovery (screeners, unusual
-options flow, pre-market gappers, bounce signals), and the 0DTE playbook all
-read live TDPro data — without `TD_API_KEY` set, those sources degrade
-silently to nothing rather than crashing, and you're left with the free
-yfinance/TradingView-backed VCP and squeeze screens. It's a standalone
-subscription ($49.99/mo, or $29.99/mo alongside a TraderDaddy Pro platform
-plan) — see [Credentials](#credentials).
+**On [TraderDaddy Pro](https://www.traderdaddy.pro).** The two halves depend on
+it differently, and the distinction matters if you're deciding whether to
+subscribe. **The tools mostly don't**: 12 of the 64 quant tools need
+`TD_API_KEY` — the flow, gamma and positioning ones — and the other 52 run on
+yfinance, TradingView, SEC EDGAR, TickerTrace or local computation. **The agent
+mostly does**: four of the scanner's seven discovery sources are TDPro
+(unusual activity, its screener, pre-market gappers, bounce signals), as are
+the regime and playbook nodes, so without a key the agent falls back to the
+free VCP and squeeze screens and loses its dealer-gamma reads. It's a
+standalone subscription ($49.99/mo, or $29.99/mo alongside a platform plan) —
+see [Credentials](#credentials).
 
 ## Contents
 
