@@ -1,5 +1,17 @@
 # Vesper: Dynamic Multi-Agent Workflow Plan
 
+> **Historical record — implemented differently than proposed.** A swarm/
+> synthesis architecture has since landed, but not via the `Send`-API dynamic
+> dispatch and standalone Supervisor nodes this doc lays out. The actual graph
+> edge order today is `regime → scanner → analyst → swarm_node → playbooks →
+> synthesis_node → risk_gate → human_gate → executor → reflection`, with
+> specialist agents (technical, flow, fundamental, gamma, synthesis/debate
+> supervisor, adversarial risk) living in `vesper/agents/` and wired in via
+> `vesper/nodes/swarm_node.py` and `vesper/nodes/synthesis_node.py`. The
+> "Current State" bullets throughout this doc (no swarm, no synthesis step)
+> are stale. See `CLAUDE.md`'s Layout section and `vesper/agents/` for what
+> actually shipped.
+
 This document outlines the step-by-step implementation plan for transitioning Vesper from a single-agent linear flow to a dynamic, multi-agent swarm architecture inspired by HKUDS's `ClawTeam` and `AI-Trader`. 
 
 Based on an analysis of the current `vesper/graph.py` architecture, here are the 5 exact integration points where the Supervisor pattern will be injected:

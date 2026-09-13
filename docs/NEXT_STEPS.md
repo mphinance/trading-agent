@@ -1,5 +1,16 @@
 # Vesper — the plan from here
 
+> **SUPERSEDED as of 2026-09-04 (Amendment A4).** This doc reflects 2026-09-03,
+> pre-A4. Its central claim — "the deployed server is genuinely read-only, with
+> exactly 60 tools registered" (see "M8 correction" below) — was reversed the
+> next day: A4 registered `order_tools.py`'s three order tools behind
+> `require_scopes("trade")`, so the deployed count is 80 (77 read + 3 order),
+> not 60, and the server is no longer read-only. The `required_scopes`/
+> `valid_scopes` collapse bug described just below that (the trap that would
+> have made `trade` scope unissuable) was also fixed as part of A4, not left
+> open. "706 tests passing" is now 823. For current status see `CLAUDE.md`
+> (rule 3 and the Status section) and `docs/TOOLS.md`.
+
 **29 of 110 features done. 706 tests passing. The MCP server is live and connected.**
 
 This is the working plan: what is true today, what happens next and in what order, which

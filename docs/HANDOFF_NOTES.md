@@ -1,5 +1,9 @@
 # Handoff Notes — Mechanical Coding Tasks
 
+> **Historical record, 2026-09-03.** Kept as a session log, not current status.
+> The "765 passed" baseline below is now 823. See `CLAUDE.md`'s Tests section
+> for the current count.
+
 **Session Date:** 2026-09-03  
 **Status:** Tasks 1, 2, 3, and 4 Completed. All work uncommitted.
 

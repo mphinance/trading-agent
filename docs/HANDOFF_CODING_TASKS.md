@@ -1,5 +1,12 @@
 # Coding handoff — mechanical tasks
 
+> **Historical record, 2026-09-03.** This was one unattended session's task
+> list; all tasks below are completed. Rule 2's standing instruction "Do not
+> touch ... `trading_mcp/order_tools.py`" is **moot, not live policy** — that
+> file has since been built out and, under Amendment A4 (2026-09-04), is
+> registered in production behind `require_scopes("trade")`. Don't read this
+> doc as current guidance on what's off-limits; see `CLAUDE.md` rule 3.
+
 **For:** an implementing model working unattended in `/home/mpha/projects/trading-agent`.
 **Written:** 2026-09-03. Everything here is verified against the code; line
 numbers were accurate at time of writing but **confirm before editing**.
