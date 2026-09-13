@@ -215,6 +215,14 @@ it — that's the full, current list; this table is a sample, not an index.
 Invoke one by name (`/vcp-screener`, `/stock-recap`, ...) or just describe
 what you want and Claude picks the matching skill.
 
+This is a vendored subset (63 of 64 names match) of the 129-skill
+[alpha-skills](https://github.com/mphinance/alpha-skills) suite — that repo is
+canonical for new/updated skills; several of its screeners (`vcp-screener`,
+`canslim-screener`, etc.) currently hit a paid FMP API where this repo's
+`mcp_server/` already covers the same ground for free, so a skill written
+against `mcp_server/`'s tools instead of FMP is the natural next step for
+either repo, not yet done.
+
 ## Run
 
 ```bash
