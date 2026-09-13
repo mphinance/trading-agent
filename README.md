@@ -13,6 +13,13 @@ process with **80** — the same quant tooling plus 13 read-only views on a live
 account and 3 tools that can place an order.
 → [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) explains all 80 and the safety
 model; [`docs/TOOLS.md`](docs/TOOLS.md) is the inventory.
+Its standalone, lighter sibling is [momentum-mcp](https://github.com/mphinance/momentum-mcp) —
+same free/no-broker design philosophy in its own repo, useful if you want the
+tools without the agent. Both are part of the
+[mphinance AI trading stack](https://github.com/mphinance/alpha-skills) alongside
+[alpha-skills](https://github.com/mphinance/alpha-skills) (analysis Skills) and
+[awesome-broker-mcp](https://github.com/mphinance/awesome-broker-mcp) (which broker to
+actually trade through).
 
 **The agent.** Vesper scans for setups, reads dealer-gamma positioning, drafts
 an order and runs it through a **deterministic risk gate** — Python, not a
