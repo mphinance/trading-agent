@@ -153,3 +153,15 @@ def test_no_call_site_builds_an_api_agent_url():
         and "no /api/v1 equivalent" not in line
     ]
     assert not offenders, f"internal-namespace URL construction found: {offenders}"
+
+
+async def test_get_iv_rank_fails_soft_pending_a_real_endpoint(spy):
+    """No confirmed /api/v1 path exists yet for IV rank (every plausible guess
+    404s live -- see the function's docstring). It must degrade to a clear
+    SignalResult error rather than ever hit the wire with a guessed path or
+    return a value that looks like real data."""
+    result = await td.get_iv_rank("ASTS")
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert spy.url is None, "get_iv_rank must not make a network call with an unconfirmed path"

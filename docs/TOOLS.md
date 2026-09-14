@@ -1,20 +1,21 @@
 # MCP tool inventory
 
-Verified against `trading_mcp/server.py` by importing it on **2026-09-13**.
-**80 tools registered.**
+Verified against `trading_mcp/server.py` by importing it on **2026-09-13**
+(counts below updated 2026-09-14 for `get_iv_rank` + `reprice_option`).
+**82 tools registered.**
 
 | group | count | credential | ships publicly |
 |---|---|---|---|
-| **Free** | **35** | none | ✅ |
+| **Free** | **36** | none | ✅ |
 | **TickerTrace `etf_*`** | **17** | none | ✅ |
-| **TMpro** | **12** | `TD_API_KEY` | ✅ (degraded without a key) |
+| **TMpro** | **13** | `TD_API_KEY` | ✅ (degraded without a key) |
 | **Vesper (read)** | **13** | owner-only | ❌ private |
 | **Order path** | **3** | owner-only **+ `trade` OAuth scope** | ❌ private |
 
-The first 64 are general-purpose market tooling and would work for anybody. The
+The first 66 are general-purpose market tooling and would work for anybody. The
 last 16 only mean anything if you hold the account.
 
-> **An unauthenticated or bearer-token `tools/list` returns 77, not 80.** The
+> **An unauthenticated or bearer-token `tools/list` returns 79, not 82.** The
 > three order tools carry `require_scopes("trade")`, and FastMCP *filters* by
 > scope rather than returning a 403 — so calling one with the static bearer
 > answers `Unknown tool`. That looks like a broken deploy and isn't. See
@@ -25,7 +26,7 @@ Two servers register from the same registry and should not be confused:
 | server | process | tools | can it place an order? |
 |---|---|---|---|
 | `mcp_server/server.py` | stdio "momentum" | 56 | **No.** Holds no broker credentials and has no order path. That property is load-bearing. |
-| `trading_mcp/server.py` | owner-only, deployed | **80** | Yes, through three scope-gated tools. |
+| `trading_mcp/server.py` | owner-only, deployed | **82** | Yes, through three scope-gated tools. |
 
 ---
 
@@ -69,6 +70,7 @@ the caller's machine, so these cost nothing to serve.
 | `find_best_to_buy` | Best directional option to buy, 21-60 DTE |
 | `sweep_setups` | Opportunity board across multiple tickers |
 | `calculate_position_size` | Fixed-fractional, ATR or Kelly sizing |
+| `reprice_option` | Guesstimate a contract's price at a different spot (e.g. premarket) and/or IV, via Black-Scholes |
 
 ### Market state
 | tool | what it does |
@@ -123,12 +125,12 @@ default (`register_momentum_tools(..., include_tickertrace=True)`).
 
 ---
 
-## TMpro — 12 tools, need `TD_API_KEY`
+## TMpro — 13 tools, need `TD_API_KEY`
 
 These reach the TraderDaddy Pro backend (marketed as TraderMatrix Pro; same
 service). Without a key they degrade rather than crash.
 
-### Flow & positioning — 10, directly TDPro-backed
+### Flow & positioning — 11, directly TDPro-backed
 | tool | what it does |
 |---|---|
 | `get_gex_overview` | Gamma exposure for SPY/QQQ/IWM. Flip level = regime boundary |
@@ -141,6 +143,7 @@ service). Without a key they degrade rather than crash.
 | `get_earnings_calendar` | Who reports this week |
 | `get_earnings_flow` | Pre-earnings institutional positioning |
 | `get_politician_trades` | Congressional disclosures |
+| `get_iv_rank` ⚠️ | Self-relative IV rank (0-100), rich vs. cheap premium — **registered but not yet wired**: no working `/api/v1` REST path has been found (every plausible one 404s); it fails soft with an explicit error until someone supplies the real endpoint. See `core/traderdaddy.py`'s `get_iv_rank` docstring. |
 
 ### Indirectly TDPro-backed — 2
 These import a module that reaches TDPro, so they lose an input without a key.

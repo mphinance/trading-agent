@@ -55,6 +55,7 @@ def register_tier1_tools(mcp: Any) -> list[str]:
         get_market_stats as _get_market_stats,
         get_politician_trades as _get_politician_trades,
         get_earnings_flow as _get_earnings_flow,
+        get_iv_rank as _get_iv_rank,
     )
     from mcp_server.fundamentals import get_fundamentals as _get_fundamentals
     from mcp_server.edgar_tools import (
@@ -120,6 +121,11 @@ def register_tier1_tools(mcp: Any) -> list[str]:
     async def get_politician_trades() -> dict[str, Any]:
         """Congressional stock trading disclosures."""
         return _out(await _get_politician_trades())
+
+    @mcp.tool()
+    async def get_iv_rank(symbol: str) -> dict[str, Any]:
+        """Self-relative IV rank (0-100): is this ticker's option premium rich or cheap vs its own 52-week range."""
+        return _out(await _get_iv_rank(symbol=symbol))
 
     @mcp.tool()
     async def get_alpha_signals(
@@ -195,7 +201,7 @@ def register_tier1_tools(mcp: Any) -> list[str]:
     registered = [
         "get_market_pulse", "get_market_stats", "get_put_call_ratios", "get_sector_flow",
         "get_unusual_activity", "get_signals", "get_gex_overview", "get_earnings_calendar",
-        "get_earnings_flow", "get_politician_trades", "get_alpha_signals", "get_fundamentals",
+        "get_earnings_flow", "get_politician_trades", "get_iv_rank", "get_alpha_signals", "get_fundamentals",
         "get_sec_filings", "get_sec_financials", "get_shares_outstanding", "get_stakes_held",
         "fetch_ticker_news", "extract_article_text", "calculate_position_size",
     ]
@@ -480,6 +486,7 @@ def register_tier3_tools(mcp: Any) -> list[str]:
         find_best_to_buy as _find_best_to_buy,
         sweep_setups as _sweep_setups,
     )
+    from core.reprice import reprice_option as _reprice_option
 
     @mcp.tool()
     async def analyze_options_setup(
@@ -511,8 +518,24 @@ def register_tier3_tools(mcp: Any) -> list[str]:
         """Opportunity Board: scan multiple tickers for best options trades."""
         return _out(await _sweep_setups(tickers=tickers, budget=budget, max_tickers=max_tickers))
 
+    @mcp.tool()
+    async def reprice_option(
+        ticker: str, strike: float, expiration: str, option_type: str = "call",
+        target_spot: float | None = None, iv_override: float | None = None,
+        contracts: int = 1,
+    ) -> dict[str, Any]:
+        """Guesstimate a specific contract's price at a different spot (e.g. premarket) and/or IV.
+        Carries forward real quoted IV (flagging it when stale) or a realized-vol fallback,
+        reprices via Black-Scholes, and reports an IV-sensitivity table. iv_override is a
+        fraction (0.85 = 85%)."""
+        return _out(await _reprice_option(
+            ticker=ticker, strike=strike, expiration=expiration, option_type=option_type,
+            target_spot=target_spot, iv_override=iv_override, contracts=contracts,
+        ))
+
     registered = [
-        "analyze_options_setup", "find_best_to_sell", "find_best_to_buy", "sweep_setups"
+        "analyze_options_setup", "find_best_to_sell", "find_best_to_buy", "sweep_setups",
+        "reprice_option",
     ]
     logger.info("Registered %d Tier 3 tools", len(registered))
     return registered
