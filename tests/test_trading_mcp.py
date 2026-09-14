@@ -91,7 +91,7 @@ async def test_server_registers_expected_tool_count():
 
     tools = await srv.mcp.list_tools()
     names = [t.name for t in tools]
-    assert len(names) == 79, f"expected 66 momentum+tickertrace + 13 vesper = 79 tools, got {len(names)}: {sorted(names)}"
+    assert len(names) == 80, f"expected 67 momentum+tickertrace + 13 vesper = 80 tools, got {len(names)}: {sorted(names)}"
 
 
 async def test_no_duplicate_tool_names_between_momentum_and_vesper():
@@ -1168,14 +1168,14 @@ _FORBIDDEN_TOOL_NAME_GUESSES = (
 
 
 async def test_forbidden_actions_absent_from_full_tool_list():
-    """None of the 79 registered tools (66 momentum + 13 Vesper) is named
+    """None of the 80 registered tools (67 momentum + 13 Vesper) is named
     after guard.preview/place, submit_decision, or resume -- not a
     scoped-down version, not an alias, no tool at all."""
     import trading_mcp.server as srv
 
     tools = await srv.mcp.list_tools()
     names = {t.name for t in tools}
-    assert len(names) == 79, f"expected 79 registered tools, got {len(names)}"
+    assert len(names) == 80, f"expected 80 registered tools, got {len(names)}"
 
     for guess in _FORBIDDEN_TOOL_NAME_GUESSES:
         assert guess not in names, f"forbidden action {guess!r} is registered as a tool"
@@ -2181,7 +2181,7 @@ assert srv.mcp is not None
 assert srv.mcp.name == "trading-agent"
 
 tools = asyncio.run(srv.mcp.list_tools())
-assert len(tools) == 79, f"expected 79 registered tools, got {len(tools)}"
+assert len(tools) == 80, f"expected 80 registered tools, got {len(tools)}"
 
 # Confirm the four named surfaces each return their normal shape (a plain
 # dict, no unhandled exception) by calling them through the same

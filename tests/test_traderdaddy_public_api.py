@@ -165,3 +165,30 @@ async def test_get_iv_rank_fails_soft_pending_a_real_endpoint(spy):
     assert result.status == "error"
     assert result.error is not None
     assert spy.url is None, "get_iv_rank must not make a network call with an unconfirmed path"
+
+
+@pytest.mark.parametrize(
+    "iv_rank,expected_zone",
+    [
+        (0, "ICE_COLD"),
+        (9.9, "ICE_COLD"),
+        (10, "CHEAP"),
+        (24.9, "CHEAP"),
+        (25, "BELOW_AVERAGE"),
+        (49.9, "BELOW_AVERAGE"),
+        (50, "ABOVE_AVERAGE"),
+        (74.9, "ABOVE_AVERAGE"),
+        (75, "RICH"),
+        (89.9, "RICH"),
+        (90, "SCORCHING"),
+        (100, "SCORCHING"),
+        (-5, "ICE_COLD"),   # clamps rather than erroring
+        (150, "SCORCHING"),  # clamps rather than erroring
+    ],
+)
+def test_classify_iv_rank_bands(iv_rank, expected_zone):
+    result = td.classify_iv_rank(iv_rank)
+    assert result["zone"] == expected_zone
+    assert 0.0 <= result["iv_rank"] <= 100.0
+    assert result["verdict"]
+    assert result["emoji"]

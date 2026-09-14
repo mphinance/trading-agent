@@ -626,12 +626,44 @@ async def get_ticker_gex_historical(symbol: str) -> SignalResult:
     return await _agent_get(f"gex/{symbol.upper()}/historical")
 
 
+# (low, high, zone, emoji, verdict) — low is inclusive, high is exclusive except
+# the last band. Tuned for two specific decisions, not a generic "vol regime"
+# read: wheeling/CSPs (wants rank high) and buying naked calls/puts (wants
+# rank low). Ranges match the common tastytrade-style IV-rank convention
+# (50 as the rich/cheap midpoint), not something derived from this account's
+# own trade history.
+_IV_RANK_BANDS: list[tuple[float, float, str, str, str]] = [
+    (0, 10, "ICE_COLD", "🟢🟢", "Options are dirt cheap here. Great hunting ground for long calls/puts or debit spreads — brutal for wheeling/CSPs, you're not getting paid to sell."),
+    (10, 25, "CHEAP", "🟢", "Leans toward buying premium. Wheel/CSP income will be thin at this level."),
+    (25, 50, "BELOW_AVERAGE", "⚪", "No strong edge either way. Wheeling is OK but not rich; buying is OK but not a screaming discount."),
+    (50, 75, "ABOVE_AVERAGE", "🟡", "Leans toward selling premium. Decent wheel/CSP entry; buying naked options gets pricier."),
+    (75, 90, "RICH", "🟠", "Favors selling — CSPs, covered calls, credit spreads pay well here. Buying naked premium is expensive."),
+    (90, 100.0001, "SCORCHING", "🔴", "Best premium-selling conditions (wheel/CSP heaven). Avoid buying naked options — you're paying a fear/event premium."),
+]
+
+
+def classify_iv_rank(iv_rank: float) -> dict[str, Any]:
+    """Map a 0-100 IV rank to a fast, actionable read for two decisions this
+    account actually makes: wheeling/CSPs (wants rank high) and buying naked
+    calls/puts (wants rank low). Pure function — no network, never raises;
+    out-of-range input clamps to the nearest band rather than erroring, since
+    a caller passing 100.0 or -0.3 from a rounding edge shouldn't lose the read.
+    """
+    r = max(0.0, min(100.0, float(iv_rank)))
+    for low, high, zone, emoji, verdict in _IV_RANK_BANDS:
+        if low <= r < high:
+            return {"iv_rank": r, "zone": zone, "emoji": emoji, "verdict": verdict}
+    band = _IV_RANK_BANDS[-1]
+    return {"iv_rank": r, "zone": band[2], "emoji": band[3], "verdict": band[4]}
+
+
 @smart_cache(open_ttl=180, closed_ttl=3600)
 async def get_iv_rank(symbol: str) -> SignalResult:
     """
     Self-relative implied-volatility rank (0-100) for a symbol — is this
     name's option premium rich or cheap vs. its OWN 52-week range. High rank
-    favors selling premium; low rank favors buying it.
+    favors selling premium; low rank favors buying it. When a reading is
+    available, ``classify_iv_rank()`` attaches a fast wheel-vs-buy verdict.
 
     TODO(human): the `mcp__traderdaddy__get_iv_rank` MCP tool answers this
     live (verified against ASTS: ivRank 6.5, source "cboe"), but no /api/v1
@@ -642,7 +674,13 @@ async def get_iv_rank(symbol: str) -> SignalResult:
     upstream than api.traderdaddy.pro entirely. Someone who can see the
     TraderDaddy backend routing needs to supply the real path below — until
     then this fails soft with a message that says exactly that, rather than
-    guessing and returning silently-wrong data.
+    guessing and returning silently-wrong data. Once wired up, attach the
+    verdict before returning:
+
+        result = await _agent_get(f"iv-rank/{symbol.upper()}")  # or wherever it lands
+        if result.success and result.data.get("ivRank") is not None:
+            result.data["read"] = classify_iv_rank(result.data["ivRank"])
+        return result
 
     Args:
         symbol: Ticker symbol (e.g. AAPL, SPY, TSLA).
