@@ -58,8 +58,8 @@ class TestRegisterMomentumTools:
         mock_mcp = MockMCP()
         all_tools = register_momentum_tools(mock_mcp, include_tiers=(1, 2, 3))
 
-        # Expected 47 tools
-        assert len(all_tools) == 64
+        # tiers 1-3 (49) + tickertrace (17)
+        assert len(all_tools) == 66
         # Tool names must be unique
         assert len(all_tools) == len(set(all_tools))
         # Tools registered on the server must match returned list

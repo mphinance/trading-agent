@@ -46,6 +46,7 @@ EXPECTED_PUBLIC_FILES = {
     "core/market_top.py",
     "core/options.py",
     "core/options_greeks.py",
+    "core/reprice.py",
     "core/risk.py",
     "core/schema.py",
     "core/screener.py",
@@ -123,8 +124,8 @@ class TestExportManifestInventory:
     def test_core_modules_completeness(self):
         expected_core = {
             "cache", "charts", "conviction", "data", "edgar", "knowledge",
-            "macro_regime", "market_top", "options", "options_greeks", "risk",
-            "schema", "screener", "technicals", "tickertrace", "traderdaddy",
+            "macro_regime", "market_top", "options", "options_greeks", "reprice",
+            "risk", "schema", "screener", "technicals", "tickertrace", "traderdaddy",
             "vcp_screener",
         }
         assert set(PUBLIC_CORE_MODULES) == expected_core

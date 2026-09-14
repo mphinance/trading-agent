@@ -6,7 +6,7 @@ Two things this file exists to pin down, beyond ordinary correctness:
    `trading_mcp/vesper_tools.py` are written by different hands against a
    documented contract (`register_vesper_tools(mcp) -> list[str]`); a
    signature drift or a name collision with one of `mcp_server/registry.py`'s
-   47 momentum tools would only show up at process start otherwise.
+   49 momentum tools would only show up at process start otherwise.
 2. **Rule 3 stays mechanically enforced.** "Any adapter that grows its own
    order path is a new threat model, not a small addition" (CLAUDE.md) is
    easy to honor today and easy to erode one convenience wrapper at a time.
@@ -85,13 +85,13 @@ def vtools():
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def test_server_registers_expected_tool_count():
-    """47 momentum tools (tiers 1-3) + the 13 Vesper read-only tools, with no
+    """49 momentum tools (tiers 1-3) + the 13 Vesper read-only tools, with no
     signature mismatch or import error between the two registration passes."""
     import trading_mcp.server as srv
 
     tools = await srv.mcp.list_tools()
     names = [t.name for t in tools]
-    assert len(names) == 77, f"expected 64 momentum+tickertrace + 13 vesper = 77 tools, got {len(names)}: {sorted(names)}"
+    assert len(names) == 79, f"expected 66 momentum+tickertrace + 13 vesper = 79 tools, got {len(names)}: {sorted(names)}"
 
 
 async def test_no_duplicate_tool_names_between_momentum_and_vesper():
@@ -1168,14 +1168,14 @@ _FORBIDDEN_TOOL_NAME_GUESSES = (
 
 
 async def test_forbidden_actions_absent_from_full_tool_list():
-    """None of the 60 registered tools (47 momentum + 13 Vesper) is named
+    """None of the 79 registered tools (66 momentum + 13 Vesper) is named
     after guard.preview/place, submit_decision, or resume -- not a
     scoped-down version, not an alias, no tool at all."""
     import trading_mcp.server as srv
 
     tools = await srv.mcp.list_tools()
     names = {t.name for t in tools}
-    assert len(names) == 77, f"expected 77 registered tools, got {len(names)}"
+    assert len(names) == 79, f"expected 79 registered tools, got {len(names)}"
 
     for guess in _FORBIDDEN_TOOL_NAME_GUESSES:
         assert guess not in names, f"forbidden action {guess!r} is registered as a tool"
@@ -2181,7 +2181,7 @@ assert srv.mcp is not None
 assert srv.mcp.name == "trading-agent"
 
 tools = asyncio.run(srv.mcp.list_tools())
-assert len(tools) == 77, f"expected 77 registered tools, got {len(tools)}"
+assert len(tools) == 79, f"expected 79 registered tools, got {len(tools)}"
 
 # Confirm the four named surfaces each return their normal shape (a plain
 # dict, no unhandled exception) by calling them through the same

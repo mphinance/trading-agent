@@ -30,14 +30,16 @@ Examples:
   python vesper.py listen               # Long-poll Telegram for Approve/Reject/halt/resume taps
   python vesper.py loop                 # Unattended: scheduled scans + continuous position monitor
   python vesper.py loop --live          # Same, but drafts pause for remote approval (run `listen` too)
+  python vesper.py reprice ASTS --strike 70 --expiry 2026-10-16 --otype call --spot 57 --iv 85
+                                         # Guesstimate a contract's price at a given (e.g. premarket) spot/IV
         """
     )
-    
+
     parser.add_argument(
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen", "loop", "alerts", "audit"],
+        choices=["scan", "analyze", "0dte", "morning", "monitor", "halt", "resume", "status", "paper", "listen", "loop", "alerts", "audit", "reprice"],
         help="Action command",
     )
     parser.add_argument("ticker", nargs="?", default=None, help="Target symbol for analysis")
@@ -64,6 +66,13 @@ Examples:
     parser.add_argument("--verify", action="store_true", help="audit: verify the hash chain's integrity")
     parser.add_argument("--reason", default=None, help="halt: optional reason recorded in the halt state")
     parser.add_argument("--mark", action="store_true", help="paper: mark open positions to market before printing the ledger")
+    parser.add_argument("--strike", type=float, default=None, help="reprice: option strike price")
+    parser.add_argument("--expiry", default=None, help="reprice: option expiration date, YYYY-MM-DD")
+    parser.add_argument("--otype", default="call", choices=["call", "put"], help="reprice: option type")
+    parser.add_argument("--spot", type=float, default=None, help="reprice: hypothetical spot price (e.g. premarket); defaults to the live price")
+    parser.add_argument("--iv", type=float, default=None, help="reprice: assumed IV as a percent, e.g. 85 for 85%%; defaults to market quote or realized-vol estimate")
+    parser.add_argument("--contracts", type=int, default=1, help="reprice: number of contracts, for the dollar total")
+    parser.add_argument("--entry", type=float, default=None, help="reprice: cost basis paid per share, to show live P&L")
 
     args = parser.parse_args()
 
@@ -246,6 +255,57 @@ Examples:
             print(f"   Reason: {result['break_reason']}")
         print("=" * 60)
         sys.exit(0 if result["valid"] else 1)
+
+    if args.command == "reprice":
+        from core.reprice import reprice_option
+
+        if not args.ticker or args.strike is None or not args.expiry:
+            print("\n❌ reprice needs a ticker, --strike, and --expiry, e.g.:")
+            print("   vesper.py reprice ASTS --strike 70 --expiry 2026-10-16 --otype call --spot 57 --iv 85")
+            sys.exit(1)
+
+        iv_override = (args.iv / 100.0) if args.iv is not None else None
+        result = asyncio.run(reprice_option(
+            ticker=args.ticker, strike=args.strike, expiration=args.expiry,
+            option_type=args.otype, target_spot=args.spot, iv_override=iv_override,
+            contracts=args.contracts,
+        ))
+
+        print("\n" + "=" * 60)
+        print(f"🎯 VESPER REPRICE — {args.ticker.upper()} {args.otype.upper()} ${args.strike} exp {args.expiry}")
+        print("=" * 60)
+        if result.get("error"):
+            print(f"❌ {result['error']}")
+            sys.exit(1)
+
+        theo = result["theoretical"]
+        print(f"Spot used:      ${result['spot_used']:.2f}  (DTE: {result['dte']})")
+        print(f"IV used:        {result['iv_used_pct']:.1f}%  (source: {result['iv_source']})")
+        if result.get("stale_quote"):
+            print(f"⚠️  Market quote is stale: {result['stale_reason']}")
+        mq = result.get("market_quote")
+        if mq:
+            print(f"Last real quote: bid ${mq['bid']:.2f} / ask ${mq['ask']:.2f} / last ${mq['last_price']:.2f} "
+                  f"(traded {mq['last_trade_age_days']}d ago, vol {int(mq['volume'] or 0)}, OI {int(mq['open_interest'] or 0)})")
+        print(f"\nTheoretical price: ${theo['price']:.2f}/share  →  ${result['total_cost_est']:.2f} for {result['contracts']} contract(s)")
+        print(f"  Delta: {theo['delta']}  Gamma: {theo['gamma']}  Theta/day: {theo['theta_per_day']}  Vega/vol-pt: {theo['vega_per_vol_point']}")
+
+        calib = result.get("calibration")
+        if calib:
+            print(f"\nCalibration check (same model, current spot ${calib['current_spot']:.2f}):")
+            print(f"  theo ${calib['theo_price_at_current_spot']:.2f}  vs.  last real trade ${calib['last_traded_option_price']:.2f}")
+
+        print("\nIV sensitivity:")
+        for row in result["iv_sensitivity"]:
+            print(f"  IV {row['iv_pct']:>5.1f}%  →  ${row['price']:.2f}/share  (delta {row['delta']})")
+
+        if args.entry is not None:
+            pnl_per_share = theo["price"] - args.entry
+            pnl_total = pnl_per_share * 100 * result["contracts"]
+            pnl_pct = (pnl_per_share / args.entry * 100) if args.entry else 0.0
+            print(f"\nP&L vs. entry ${args.entry:.2f}: {pnl_per_share:+.2f}/share ({pnl_pct:+.1f}%)  →  ${pnl_total:+.2f} total")
+        print("=" * 60)
+        sys.exit(0)
 
     if args.command == "morning":
         from vesper.morning import generate_morning_plan

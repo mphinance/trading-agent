@@ -626,6 +626,38 @@ async def get_ticker_gex_historical(symbol: str) -> SignalResult:
     return await _agent_get(f"gex/{symbol.upper()}/historical")
 
 
+@smart_cache(open_ttl=180, closed_ttl=3600)
+async def get_iv_rank(symbol: str) -> SignalResult:
+    """
+    Self-relative implied-volatility rank (0-100) for a symbol — is this
+    name's option premium rich or cheap vs. its OWN 52-week range. High rank
+    favors selling premium; low rank favors buying it.
+
+    TODO(human): the `mcp__traderdaddy__get_iv_rank` MCP tool answers this
+    live (verified against ASTS: ivRank 6.5, source "cboe"), but no /api/v1
+    REST path for it could be found by pattern-matching this module's other
+    per-symbol endpoints (gex/{symbol}, earnings-flow/flow/{symbol}, etc — all
+    404 for iv-rank variants) or by probing the base host for an OpenAPI/docs
+    listing (none exposed). That MCP tool may be backed by a different
+    upstream than api.traderdaddy.pro entirely. Someone who can see the
+    TraderDaddy backend routing needs to supply the real path below — until
+    then this fails soft with a message that says exactly that, rather than
+    guessing and returning silently-wrong data.
+
+    Args:
+        symbol: Ticker symbol (e.g. AAPL, SPY, TSLA).
+    """
+    return SignalResult.error_msg(
+        f"get_iv_rank({symbol.upper()}) has no confirmed /api/v1 REST path yet. "
+        "The mcp__traderdaddy__get_iv_rank MCP tool works and returns "
+        "ivRank/ivRankZone/source/interpretation, but every plausible REST "
+        "path (iv-rank/{symbol}, options/iv-rank/{symbol}, iv-percentile/"
+        "{symbol}, etc.) 404s against api.traderdaddy.pro — it may live on a "
+        "different upstream. Needs the real endpoint path supplied by someone "
+        "with backend visibility."
+    )
+
+
 # ── Enhanced Signals ──────────────────────────────────────────────────────────
 
 async def get_signal_stats() -> SignalResult:
