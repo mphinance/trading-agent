@@ -485,16 +485,88 @@ deploy/            LIVE (M7): three systemd user units, two env contracts,
                    Traefik dynamic config, idempotent install.sh that generates
                    a real token and refuses to deploy a placeholder. See
                    deploy/README.md.
+autonomous/        An autonomous-coding harness (Anthropic's autonomous-coding
+                   quickstart, wired to THIS repo) that has actually been used
+                   to help build Vesper — `./autonomous/run.sh N` runs N
+                   sessions of `prompts/coding_prompt.md` against
+                   `feature_list.json` (75 features, M1-M9), each one
+                   orient/regression-check/one-feature/verify/commit/push. It
+                   runs on the Claude subscription, not the API — an exported
+                   `ANTHROPIC_API_KEY` would silently rebill it per-token, and
+                   `run.sh` warns if it sees one. `overrides/security.py`
+                   replaces upstream's bash allowlist: `ssh` reaches only
+                   `coolify`, and the remote command is inspected (no `sudo`,
+                   no `docker`, `systemctl --user` only against
+                   `trading-agent*`/`vesper-*` units); no credential literals
+                   in any command (this transcript is read on stream, rule 5);
+                   no `.env` cat; no `git push --force`/`git clean`. `client.py`
+                   additionally makes `vesper/execution_guard.py` and `.env`
+                   read-only to the agent — the same module rule 3 says nobody
+                   edits. Four items are `blocked: true` and need a human
+                   keystroke, never the agent's: installing Traefik (`sudo`),
+                   adding the claude.ai connector (browser login), **arming
+                   `VESPER_TRADING=1`** (this is rule 3's operator-keystroke
+                   line, holding even for the harness that built the rule),
+                   and confirming voice on the phone. `harness/` is upstream's
+                   clone plus the overrides applied, gitignored and disposable.
+                   See `autonomous/README.md`.
+plugins/mph-kit/   Michael's own portable Claude Code plugin (skills, slash
+                   commands, subagents) — installed via
+                   `/plugin install mph-kit` from the `mphinance/alpha-skills`
+                   marketplace so a new machine matches instantly. This is the
+                   **canonical** copy of anything in it (Substack pipeline,
+                   `stock-deep-dive`/`stock-recap`, design tools, meta-tools
+                   like `skill-forge`/`orchestrate`) — edit skills here, under
+                   `plugins/mph-kit/skills/`, never in the top-level `skills/`
+                   directory, which is the broader vendored alpha-skills
+                   archive (community + experimental), not this kit. Mostly
+                   orthogonal to trading, EXCEPT: `mph-kit/skills/stock-recap`
+                   and this repo's own top-level `skills/stock-recap` have
+                   actually diverged, contradicting the "canonical copy" claim
+                   above for this one skill — the top-level copy has a live
+                   cron job (Disclaw `stock-recap daily (commit history)`),
+                   git-tracked history through 2026-08-27, and dated
+                   self-corrections (e.g. "the earlier 'no chart PNGs by
+                   design' call was wrong", 2026-08-02) that `mph-kit`'s copy
+                   never picked up. Verified 2026-09-14 by diffing both
+                   SKILL.md files — not asserted from the README. Treat the
+                   top-level `skills/stock-recap` as the live one until
+                   someone reconciles them; don't edit `mph-kit`'s copy
+                   assuming it will propagate.
 docs/              HANDOFF.md is the onboarding doc — first hour, where it
                    runs, which env file is live, the traps. MCP_OVERVIEW.md is
                    the external-facing explainer (share that one, not HANDOFF).
-                   TOOLS.md is the 80-tool inventory grouped by credential.
+                   TOOLS.md is the 83-tool inventory grouped by credential.
                    CONNECTOR_AUTH.md is the operational one: where the token
                    lives, why the bearer and OAuth credentials differ in what
                    they can do, how to reconnect the claude.ai connector when
                    it 401s forever, and the five gates that bound an order.
-                   API.md documents both MCP surfaces. Also: expansion plan,
-                   OpenRouter pricing, voice stack (superseded notice).
+                   API.md documents both MCP surfaces. Three doc clusters live
+                   here too and are easy to miss because none of them are
+                   named above: (1) the **SuperMCP-consolidation** cluster —
+                   `SUPERMCP_CONSOLIDATION_PLAN.md` (the full "fold Vesper into
+                   the live supermcp hub" proposal — **status PROPOSAL, not
+                   implemented, explicitly requires Michael's sign-off before
+                   any of it is built, because it reverses several deliberate
+                   safety decisions on a live brokerage account**),
+                   `SUPERMCP_EXECUTION_PLAN.md` (the much narrower scope he
+                   actually signed off on — MCP side up, trading owner-only,
+                   voice-approves-orders explicitly NOT in scope),
+                   `CONSOLIDATION_NEXT_STEPS.md`, `SUPERMCP_REMOTE_STATE.md`,
+                   `SUPERMCP_SWAGGER_AND_AUTH_PLAN.md`,
+                   `SUPERMCP_VS_VESPER_TOOLS.md`, `AUTH_TRADE_SCOPE_LOCKDOWN.md`
+                   — read the plan doc's own status line before treating
+                   anything in this cluster as authorized; (2) **read-only
+                   infra surveys** — `COOLIFY_MAP.md`, `DISCORD_STACK.md`
+                   (both explicitly no start/stop/restart/deploy performed to
+                   produce them); (3) **business/growth docs**, not
+                   engineering ones — `FUNNEL_PLAN.md`, `TIERS_AND_FUNNEL.md`,
+                   `EXPANSION_AND_DISTRIBUTION_PLAN.md`. Also: OpenRouter
+                   pricing, voice stack (superseded notice),
+                   `MULTI_AGENT_WORKFLOW.md` (superseded — the swarm/synthesis
+                   architecture that actually landed is the `vesper/agents/` +
+                   `nodes/swarm_node.py`/`synthesis_node.py` one already
+                   described above, not this doc's proposed shape).
                    A doc carrying a "superseded" banner is a historical record
                    kept for the reasoning, not current design — trust the
                    banner.
