@@ -180,7 +180,7 @@ That pin now also catches `getattr(guard, "place")` — dynamic dispatch by stri
 produces no literal attribute node, and an attribute-only walk went straight past it.
 
 **A4 is LIVE as of 2026-09-04** (M8-24). `server.py`'s `_register_all_tools()`
-now calls `register_order_tools`, so the deployed surface is 82 tools: 79 read
+now calls `register_order_tools`, so the deployed surface is 83 tools: 80 read
 plus three order tools behind `require_scopes("trade")`.
 
 Three things had to change together, and the order matters if you ever unwind it:
@@ -451,8 +451,8 @@ notify.py          Alert delivery: ntfy and/or Telegram
 stream.py          MQTT quote push + gRPC trade-event push onto one bus
 tickertrace_mcp.py / momentum_mcp.py   Data-source MCP clients
 mcp_server/        Quant tooling exposed over MCP (FastMCP, stdio). registry.py's
-                   register_momentum_tools() registers tiers 1-3 (49 tools) PLUS,
-                   by default, 17 TickerTrace `etf_*` tools (66 total) onto
+                   register_momentum_tools() registers tiers 1-3 (50 tools) PLUS,
+                   by default, 17 TickerTrace `etf_*` tools (67 total) onto
                    any FastMCP instance in-process — used by both server.py here
                    and trading_mcp/server.py below. conviction.py is the
                    conviction journal; knowledge.py is the Chroma-backed
@@ -460,7 +460,7 @@ mcp_server/        Quant tooling exposed over MCP (FastMCP, stdio). registry.py'
 trading_mcp/       Owner-only MCP server (separate process from mcp_server/server.py
                    and from supermcp), no longer read-only as of Amendment A4
                    (2026-09-04) — see below. server.py wires registry.py's
-                   66 momentum+tickertrace tools plus vesper_tools.py's 13 read-only
+                   67 momentum+tickertrace tools plus vesper_tools.py's 13 read-only
                    Vesper tools (account/halt/drawdown/paper/alerts/pending-
                    approvals/audit-chain/playbook-calibration/trade-memory-recall/
                    position-monitor-preview) onto one FastMCP("trading-agent").
@@ -473,8 +473,8 @@ trading_mcp/       Owner-only MCP server (separate process from mcp_server/serve
                    and refuses to start with a missing OR placeholder token
                    (core/secret_hygiene.py, rule 2).
                    order_tools.py IS registered as of 2026-09-04 (M8-24): three
-                   order tools behind require_scopes("trade"), 82 tools total
-                   (79 read + 3 order). voice_tools.py and drafting.py remain
+                   order tools behind require_scopes("trade"), 83 tools total
+                   (80 read + 3 order). voice_tools.py and drafting.py remain
                    written, tested and NOT registered. No non-order tool here may call
                    guard.preview()/guard.place(), resume(), or
                    ApprovalRegistry.submit_decision() — see rule 3's note above,
@@ -598,7 +598,7 @@ verify with live access before building the registry that would close it.
 
 | | |
 |---|---|
-| `trading-agent.service` | **running**, lingering on. 82 tools — 79 read + 3 order. |
+| `trading-agent.service` | **running**, lingering on. 83 tools — 80 read + 3 order. |
 | Reachable at | `https://agent.mphinance.com/mcp` — Traefik, LE cert to 2026-12-01 |
 | Binds | `10.0.0.1:8500` (docker bridge — rule 1) |
 | Auth | bearer + OAuth 2.1, converged in one `MultiAuth` |

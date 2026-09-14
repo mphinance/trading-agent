@@ -1,21 +1,21 @@
 # MCP tool inventory
 
 Verified against `trading_mcp/server.py` by importing it on **2026-09-13**
-(counts below updated 2026-09-14 for `get_iv_rank` + `reprice_option`).
-**82 tools registered.**
+(counts below updated 2026-09-14 for `get_iv_rank` + `reprice_option` + `classify_iv_rank`).
+**83 tools registered.**
 
 | group | count | credential | ships publicly |
 |---|---|---|---|
-| **Free** | **36** | none | ✅ |
+| **Free** | **37** | none | ✅ |
 | **TickerTrace `etf_*`** | **17** | none | ✅ |
 | **TMpro** | **13** | `TD_API_KEY` | ✅ (degraded without a key) |
 | **Vesper (read)** | **13** | owner-only | ❌ private |
 | **Order path** | **3** | owner-only **+ `trade` OAuth scope** | ❌ private |
 
-The first 66 are general-purpose market tooling and would work for anybody. The
+The first 67 are general-purpose market tooling and would work for anybody. The
 last 16 only mean anything if you hold the account.
 
-> **An unauthenticated or bearer-token `tools/list` returns 79, not 82.** The
+> **An unauthenticated or bearer-token `tools/list` returns 80, not 83.** The
 > three order tools carry `require_scopes("trade")`, and FastMCP *filters* by
 > scope rather than returning a 403 — so calling one with the static bearer
 > answers `Unknown tool`. That looks like a broken deploy and isn't. See
@@ -26,11 +26,11 @@ Two servers register from the same registry and should not be confused:
 | server | process | tools | can it place an order? |
 |---|---|---|---|
 | `mcp_server/server.py` | stdio "momentum" | 56 | **No.** Holds no broker credentials and has no order path. That property is load-bearing. |
-| `trading_mcp/server.py` | owner-only, deployed | **82** | Yes, through three scope-gated tools. |
+| `trading_mcp/server.py` | owner-only, deployed | **83** | Yes, through three scope-gated tools. |
 
 ---
 
-## Free — 35 tools, no account, no key
+## Free — 37 tools, no account, no key
 
 yfinance, TradingView, SEC EDGAR and local computation. An MCP server runs on
 the caller's machine, so these cost nothing to serve.
@@ -71,6 +71,7 @@ the caller's machine, so these cost nothing to serve.
 | `sweep_setups` | Opportunity board across multiple tickers |
 | `calculate_position_size` | Fixed-fractional, ATR or Kelly sizing |
 | `reprice_option` | Guesstimate a contract's price at a different spot (e.g. premarket) and/or IV, via Black-Scholes |
+| `classify_iv_rank` | Fast wheel-vs-buy verdict for a 0-100 IV rank you already have (pure lookup, no credential) — ICE_COLD/CHEAP favor buying long options, ABOVE_AVERAGE/RICH/SCORCHING favor selling premium |
 
 ### Market state
 | tool | what it does |

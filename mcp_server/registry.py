@@ -56,6 +56,7 @@ def register_tier1_tools(mcp: Any) -> list[str]:
         get_politician_trades as _get_politician_trades,
         get_earnings_flow as _get_earnings_flow,
         get_iv_rank as _get_iv_rank,
+        classify_iv_rank as _classify_iv_rank,
     )
     from mcp_server.fundamentals import get_fundamentals as _get_fundamentals
     from mcp_server.edgar_tools import (
@@ -126,6 +127,14 @@ def register_tier1_tools(mcp: Any) -> list[str]:
     async def get_iv_rank(symbol: str) -> dict[str, Any]:
         """Self-relative IV rank (0-100): is this ticker's option premium rich or cheap vs its own 52-week range."""
         return _out(await _get_iv_rank(symbol=symbol))
+
+    @mcp.tool()
+    def classify_iv_rank(iv_rank: float) -> dict[str, Any]:
+        """Fast wheel-vs-buy read for a 0-100 IV rank number: ICE_COLD/CHEAP favor
+        buying long calls/puts, ABOVE_AVERAGE/RICH/SCORCHING favor selling premium
+        (wheel, CSPs, covered calls). Pure lookup -- pass any IV rank you already
+        have (e.g. from get_iv_rank once it's live, or quoted from elsewhere)."""
+        return _classify_iv_rank(iv_rank)
 
     @mcp.tool()
     async def get_alpha_signals(
@@ -201,7 +210,7 @@ def register_tier1_tools(mcp: Any) -> list[str]:
     registered = [
         "get_market_pulse", "get_market_stats", "get_put_call_ratios", "get_sector_flow",
         "get_unusual_activity", "get_signals", "get_gex_overview", "get_earnings_calendar",
-        "get_earnings_flow", "get_politician_trades", "get_iv_rank", "get_alpha_signals", "get_fundamentals",
+        "get_earnings_flow", "get_politician_trades", "get_iv_rank", "classify_iv_rank", "get_alpha_signals", "get_fundamentals",
         "get_sec_filings", "get_sec_financials", "get_shares_outstanding", "get_stakes_held",
         "fetch_ticker_news", "extract_article_text", "calculate_position_size",
     ]
