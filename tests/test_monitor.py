@@ -537,6 +537,58 @@ async def test_run_monitoring_cycle_updates_status_timing():
 
 
 @pytest.mark.asyncio
+async def test_equity_and_option_on_same_underlying_do_not_collide_in_cache():
+    """Regression for a live bug found 2026-09-14: a real account held an
+    RKLB equity lot (entry $64.14) AND an RKLB $85 call (current $0.68) at
+    the same time. `tracked_positions` used to key on bare `symbol`, so the
+    second position polled each cycle overwrote only `current_price` on the
+    first one's cached object -- pairing the equity's entry price with the
+    option's current price and firing a phantom -98.9% STOP_LOSS on a
+    position that was actually only -2%. `tracking_key` (position_id-based)
+    fixes this; assert both positions evaluate independently and correctly.
+    """
+    monitor = PositionMonitor()
+    equity = MonitoredPosition(
+        symbol="RKLB", quantity=2, entry_price=64.14, current_price=62.76,
+        asset_type="EQUITY", position_id="88H2E0OAQNSNBSQ5CVFM42E6S9",
+    )
+    option = MonitoredPosition(
+        symbol="RKLB", quantity=1, entry_price=1.24, current_price=0.66,
+        asset_type="OPTION", strike=85.0, option_type="CALL",
+        expiry="2026-10-16", position_id="FLHKEQ7S6TH97ONFGCD6NNA5J8",
+    )
+    assert equity.tracking_key != option.tracking_key
+
+    # Real numbers: equity is -2.15% (no trigger), option is -46.8% (a
+    # LEGITIMATE stop-loss, correctly attributed to the option alone).
+    # VESPER_TRADING is unset (autouse _clean_guard_env), so the real
+    # trigger is correctly blocked by the kill switch rather than reaching
+    # a broker -- same as test_execute_exit_cascade_live_blocked_by_kill_switch.
+    mock_wb = MagicMock()
+    with patch.object(monitor, "poll_webull_positions", AsyncMock(return_value=[equity, option])):
+        with patch.object(monitor, "poll_paper_positions", MagicMock(return_value=[])):
+            with patch("core.wb.Webull", return_value=mock_wb):
+                results = await monitor.run_monitoring_cycle(live=True)
+
+    assert len(results) == 1
+    assert results[0].status == "BLOCKED_BY_GUARDRAIL"
+    mock_wb.trade.order_v2.place_order.assert_not_called()
+
+    # Both positions still tracked (a BLOCKED result leaves the position
+    # open), each under its OWN key with its OWN correct entry/current price
+    # -- the collision this regression guards against would have merged them.
+    assert len(monitor.tracked_positions) == 2
+    tracked_equity = monitor.tracked_positions[equity.tracking_key]
+    tracked_option = monitor.tracked_positions[option.tracking_key]
+    assert tracked_equity.entry_price == 64.14
+    assert tracked_equity.current_price == 62.76
+    assert round(tracked_equity.unrealized_pnl_pct, 4) == round((62.76 - 64.14) / 64.14, 4)
+    assert tracked_option.entry_price == 1.24
+    assert tracked_option.current_price == 0.66
+    assert round(tracked_option.unrealized_pnl_pct, 4) == round((0.66 - 1.24) / 1.24, 4)
+
+
+@pytest.mark.asyncio
 async def test_run_monitoring_cycle_records_error_in_status_and_still_reraises():
     """A cycle that raises must still update cycle count/timing (finally),
     record the error string, and propagate the exception -- run_monitor_loop

@@ -37,6 +37,12 @@ class MonitoredPosition:
     peak_gain_pct: float = 0.0
     breakeven_locked: bool = False
     contract_symbol: Optional[str] = None
+    # Stable identity for this specific position/fill -- Webull's own
+    # position_id for a live position, the paper ledger's fill id for a
+    # paper one. Needed because `symbol` alone is NOT unique: the same
+    # underlying can carry an equity lot and one or more option legs open
+    # at once (see tracking_key below).
+    position_id: Optional[str] = None
     # Underlying-keyed swing-option stop (see evaluate_position step 5).
     # None on both means "no swing stop drafted for this position" -- it
     # keeps only the flat contract-pct stop above. Populated from the paper
@@ -53,6 +59,28 @@ class MonitoredPosition:
         if self.entry_price <= 0:
             return 0.0
         return (self.current_price - self.entry_price) / self.entry_price
+
+    @property
+    def tracking_key(self) -> tuple:
+        """Unique cache key for this position -- NEVER `symbol` alone.
+
+        Bug this exists to prevent (found live, 2026-09-14): a bare-symbol
+        key merged an RKLB equity lot and an RKLB $85 call into one cache
+        slot -- the second one polled each cycle overwrote only
+        `current_price` on the first one's object, pairing the equity's
+        entry price with the option's current price and firing a phantom
+        -98.9% STOP_LOSS on a position that was actually only -2%. Prefer
+        `position_id` (Webull's own id / the paper ledger's fill id) since
+        it's unique by construction; fall back to a composite of every
+        identifying field when it's unavailable, which is still far harder
+        to collide than `symbol` alone.
+        """
+        if self.position_id:
+            return (self.symbol, self.position_id)
+        return (
+            self.symbol, self.asset_type, self.strike, self.expiry,
+            self.option_type, self.contract_symbol,
+        )
 
     @property
     def is_0dte(self) -> bool:
@@ -88,7 +116,7 @@ class PositionMonitor:
         self.trailing_lock_pct = trailing_lock_pct
         self.time_stop_hour_et = time_stop_hour_et
         self.time_stop_minute_et = time_stop_minute_et
-        self.tracked_positions: Dict[str, MonitoredPosition] = {}
+        self.tracked_positions: Dict[tuple, MonitoredPosition] = {}
         # Cycle-timing for status() -- kept local to this instance rather than
         # in core/metrics.py, same separation-of-concerns watcher.py's own
         # status() (ticks/last_tick/last_error, local to Watcher) models: this
@@ -262,6 +290,12 @@ class PositionMonitor:
                             current_price=last,
                             asset_type="OPTION" if is_opt else "EQUITY",
                             contract_symbol=sym if is_opt else None,
+                            # Webull's own position_id -- distinguishes an
+                            # equity lot from an option leg on the SAME
+                            # underlying (see MonitoredPosition.tracking_key).
+                            # `_position()` in core/wb.py already carries this
+                            # through; it's `""` only if Webull ever omits it.
+                            position_id=p.get("position_id") or None,
                             # underlying_stop_type/basis stay None (their
                             # dataclass default) for every Webull-sourced
                             # position. Webull's own position API returns no
@@ -300,6 +334,9 @@ class PositionMonitor:
                         asset_type=asset_type,
                         strike=f.get("strike"),
                         option_type=f.get("option_type"),
+                        # The paper ledger's own fill id -- same role as
+                        # Webull's position_id above (see tracking_key).
+                        position_id=f.get("id"),
                         underlying_stop_type=f.get("underlying_stop_type"),
                         underlying_stop_basis=f.get("underlying_stop_basis"),
                         earnings_exit_date=f.get("earnings_exit_date"),
@@ -512,11 +549,13 @@ class PositionMonitor:
                     underlying_tech[u] = None
 
         for pos in positions:
-            # Update cache
-            if pos.symbol not in self.tracked_positions:
-                self.tracked_positions[pos.symbol] = pos
+            # Update cache -- keyed by tracking_key, NEVER bare symbol (see
+            # that property's docstring for the live bug this replaced).
+            key = pos.tracking_key
+            if key not in self.tracked_positions:
+                self.tracked_positions[key] = pos
             else:
-                existing = self.tracked_positions[pos.symbol]
+                existing = self.tracked_positions[key]
                 existing.current_price = pos.current_price
                 pos = existing
 
@@ -533,8 +572,8 @@ class PositionMonitor:
                 # exit actually happened — a BLOCKED/FAILED result means the
                 # position is still open, and re-adding it fresh next cycle
                 # would silently reset an already-armed breakeven stop.
-                if res.status in ("SUBMITTED", "DRY_RUN_SIMULATED") and pos.symbol in self.tracked_positions:
-                    del self.tracked_positions[pos.symbol]
+                if res.status in ("SUBMITTED", "DRY_RUN_SIMULATED") and key in self.tracked_positions:
+                    del self.tracked_positions[key]
 
         return results
 
