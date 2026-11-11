@@ -9,9 +9,9 @@ technicals, an options volatility engine with an A-F grade, SEC EDGAR
 primary-source filings, dealer-gamma structure, and institutional ETF flow
 across 71 funds. Point Claude Desktop, Claude Code or any MCP host at it and
 it works immediately. The owner-only server, `trading_mcp/`, is a separate
-process with **80** — the same quant tooling plus 13 read-only views on a live
+process with **83** — the same quant tooling plus 13 read-only views on a live
 account and 3 tools that can place an order.
-→ [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) explains all 80 and the safety
+→ [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) explains all 83 and the safety
 model; [`docs/TOOLS.md`](docs/TOOLS.md) is the inventory.
 Its standalone, lighter sibling is [momentum-mcp](https://github.com/mphinance/momentum-mcp) —
 same free/no-broker design philosophy in its own repo, useful if you want the
@@ -67,8 +67,8 @@ any Claude Code session opened here — see [Skills](#skills).
 
 **On [TraderDaddy Pro](https://www.traderdaddy.pro).** The two halves depend on
 it differently, and the distinction matters if you're deciding whether to
-subscribe. **The tools mostly don't**: 12 of the 64 quant tools need
-`TD_API_KEY` — the flow, gamma and positioning ones — and the other 52 run on
+subscribe. **The tools mostly don't**: 13 of the 67 quant tools need
+`TD_API_KEY` — the flow, gamma and positioning ones — and the other 54 run on
 yfinance, TradingView, SEC EDGAR, TickerTrace or local computation. **The agent
 mostly does**: four of the scanner's seven discovery sources are TDPro
 (unusual activity, its screener, pre-market gappers, bounce signals), as are
@@ -97,8 +97,8 @@ see [Credentials](#credentials).
 
 | document | for whom |
 | --- | --- |
-| [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) | **Someone who's been sent the tool list.** What the 80 tools group into, what the Vesper half means, the five gates that bound an order, and why a tool can originate one but never approve one. No repo access assumed — this is the one to share. |
-| [`docs/TOOLS.md`](docs/TOOLS.md) | The full 80-tool inventory, grouped by which credential each group needs. |
+| [`docs/MCP_OVERVIEW.md`](docs/MCP_OVERVIEW.md) | **Someone who's been sent the tool list.** What the 83 tools group into, what the Vesper half means, the five gates that bound an order, and why a tool can originate one but never approve one. No repo access assumed — this is the one to share. |
+| [`docs/TOOLS.md`](docs/TOOLS.md) | The full 83-tool inventory, grouped by which credential each group needs. |
 | [`docs/HANDOFF.md`](docs/HANDOFF.md) | **Someone taking over the repo.** First hour, where it runs, which env file is actually live, where state lives, the traps, and an honest list of what isn't finished. |
 | [`CLAUDE.md`](CLAUDE.md) | **The design contract.** Seven critical rules — the order path, the kill switch, the LLM narrate/reject-only boundary, push-vs-poll for the monitor, dealer-gamma alert semantics — and why each exists. Authoritative; keep it current. |
 | [`docs/CONNECTOR_AUTH.md`](docs/CONNECTOR_AUTH.md) | Where the token lives, why the bearer and OAuth credentials differ in what they can do, and how to reconnect the claude.ai connector when it 401s forever. |
@@ -172,7 +172,7 @@ specific domain, so treat SSE mode as something to adapt, not use as-is.
 
 ### The owner-only server (`trading_mcp/`)
 
-A separate process, and the one that's actually deployed. 80 tools, 65
+A separate process, and the one that's actually deployed. 83 tools, 65
 `skill://` resources and 2 prompts, reachable over HTTPS rather than spawned as
 a subprocess:
 
@@ -187,7 +187,7 @@ secret sitting in a file cannot place an order — only a token minted through
 the human-present `/authorize` gate can.
 
 One consequence looks like a broken deploy and isn't: a bearer `tools/list`
-returns **77** tools, not 80, and calling an order tool with it answers
+returns **80** tools, not 83, and calling an order tool with it answers
 `Unknown tool` rather than 403, because MCP filters by scope. Don't "fix" that
 by giving the bearer `trade`.
 
@@ -342,12 +342,12 @@ notify.py           Alert delivery: ntfy and/or Telegram
 stream.py           MQTT quote push + gRPC trade-event push, wakes the monitor on a fill
 mcp_server/         Quant tooling exposed over MCP (FastMCP, stdio) — screeners, backtests,
                     options analytics. 56 tools, no broker credentials, no order path.
-trading_mcp/        Owner-only MCP server, SEPARATE process — 80 tools, 65 skill
+trading_mcp/        Owner-only MCP server, SEPARATE process — 83 tools, 65 skill
                     resources, 2 prompts. Deployed behind Traefik. See docs/TOOLS.md.
 tests/              pytest, hermetic — Webull and Agent SDKs stubbed in conftest
 deploy/             Three systemd user units + two env contracts + Traefik config
 docs/               MCP_OVERVIEW.md (external explainer), HANDOFF.md (onboarding),
-                    TOOLS.md (80-tool inventory), CONNECTOR_AUTH.md, GOTCHAS.md,
+                    TOOLS.md (83-tool inventory), CONNECTOR_AUTH.md, GOTCHAS.md,
                     API.md, vendored Webull OpenAPI reference
 ROADMAP.md          Single planning doc: status, known gaps, ideas backlog
 ```

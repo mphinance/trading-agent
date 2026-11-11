@@ -25,7 +25,7 @@ There are three things in this repo and they are easy to conflate.
 |---|---|---|
 | **Vesper** | A LangGraph agent. Scans, analyses, drafts an order, risk-gates it deterministically, asks a human to approve over Telegram/Discord, executes, monitors for an exit. | Yes, via one module. |
 | **`mcp_server/`** | Portable quant tooling over MCP, stdio. 56 tools. No broker credentials, no order path. | **No**, and that property is load-bearing. |
-| **`trading_mcp/`** | Owner-only MCP server, a separate process. 80 tools — the 64 from the registry, 13 read-only views on live account/agent state, and 3 order tools. Deployed and internet-reachable. | Yes, through those 3 tools. |
+| **`trading_mcp/`** | Owner-only MCP server, a separate process. 83 tools — the 67 from the registry, 13 read-only views on live account/agent state, and 3 order tools. Deployed and internet-reachable. | Yes, through those 3 tools. |
 
 The agent and the MCP server are two ways into the same system. The agent runs
 a pipeline on a schedule; the MCP server lets you *talk* to it from claude.ai
@@ -100,7 +100,7 @@ The box is reachable as `ssh coolify`. The repo lives at `~/trading-agent`.
 
 | unit | state | notes |
 |---|---|---|
-| `trading-agent.service` | **running**, lingering on | The 80-tool MCP server |
+| `trading-agent.service` | **running**, lingering on | The 83-tool MCP server |
 | `vesper-loop.service` | enabled but **stopped** | The agent loop does not run there yet |
 | `vesper-listen.service` | enabled but **stopped** | |
 
@@ -178,7 +178,7 @@ narrow it back.
 The static bearer carries `["read", "safe-write"]` and deliberately **not**
 `trade`, so the long-lived secret on disk cannot place an order. Only a token
 minted through the human-present `/authorize` gate can. The symptom: a bearer
-`tools/list` returns **77** tools, not 80, and calling an order tool with it
+`tools/list` returns **80** tools, not 83, and calling an order tool with it
 answers `Unknown tool` rather than 403, because FastMCP filters by scope.
 
 That reads exactly like a broken deploy. It isn't. Do not "fix" it by adding
@@ -292,7 +292,7 @@ Be honest about these with anyone who asks:
 | document | what it's for |
 |---|---|
 | [`../CLAUDE.md`](../CLAUDE.md) | **Start here.** The seven design rules and why each exists. Authoritative. |
-| [`TOOLS.md`](TOOLS.md) | The 80-tool inventory, grouped by credential. |
+| [`TOOLS.md`](TOOLS.md) | The 83-tool inventory, grouped by credential. |
 | [`MCP_OVERVIEW.md`](MCP_OVERVIEW.md) | The external-facing explainer. Share this, not this file. |
 | [`CONNECTOR_AUTH.md`](CONNECTOR_AUTH.md) | Where the token lives, why bearer ≠ OAuth here, how to reconnect the claude.ai connector when it 401s forever. |
 | [`GOTCHAS.md`](GOTCHAS.md) | The estate-wide trap list. |

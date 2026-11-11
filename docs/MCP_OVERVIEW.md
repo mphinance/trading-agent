@@ -1,4 +1,4 @@
-# The `trading-agent` MCP server — what it is, and what the 80 tools do
+# The `trading-agent` MCP server — what it is, and what the 83 tools do
 
 *Written for someone who has seen the tool list and wants to know what sits
 behind it. Current as of 2026-09-13. No repo access assumed.*
@@ -16,23 +16,23 @@ way into that system — you talk to Claude, Claude calls the server, and the
 server answers questions about the market and about the account. As of
 2026-09-04 it can also originate an order. It cannot approve one.
 
-Reachable at `https://agent.mphinance.com/mcp`. **80 tools.**
+Reachable at `https://agent.mphinance.com/mcp`. **83 tools.**
 
 ---
 
-## What the 80 tools break down into
+## What the 83 tools break down into
 
 | group | count | what it reads | needs a credential? |
 |---|---|---|---|
-| Momentum / quant | 47 | yfinance, TradingView, SEC EDGAR, TraderDaddy Pro, local computation | 12 of them need a TraderDaddy Pro key; the other 35 need nothing |
+| Momentum / quant | 50 | yfinance, TradingView, SEC EDGAR, TraderDaddy Pro, local computation | 13 of them need a TraderDaddy Pro key; the other 37 need nothing |
 | TickerTrace `etf_*` | 17 | institutional ETF holdings, conviction signals, cross-fund divergence | no |
 | Vesper state (read) | 13 | the live account and the agent's own state | owner-only |
 | Order path | 3 | the broker | owner-only, **and** a separate OAuth scope |
 
-The first 64 are general-purpose market tooling — they'd work for anyone. The
+The first 67 are general-purpose market tooling — they'd work for anyone. The
 last 16 only mean anything if you are the account holder.
 
-### Momentum / quant — 47 tools
+### Momentum / quant — 50 tools
 
 **Screening (6)** — `run_stock_screen` (TradingView scanner, 22 presets),
 `run_custom_screen`, `screen_vcp` (Volatility Contraction Pattern),
@@ -43,12 +43,13 @@ RSI, MACD, ADX, ATR, Bollinger), `get_tv_analysis` (TradingView's 26-indicator
 consensus), `get_momentum_pulse`, `get_historical_data`, `generate_chart`,
 `generate_alpha_card`.
 
-**Options analytics (5)** — `analyze_options_setup` runs a VoPR™ engine:
+**Options analytics (8)** — `analyze_options_setup` runs a VoPR™ engine:
 composite realized vol from four estimators, variance-risk-premium ratio,
 Delta/Theta, and an A–F grade. `find_best_to_sell` (7–45 DTE) and
 `find_best_to_buy` (21–60 DTE) auto-search the chain.
 `model_price_distribution` and `calculate_position_size` (fixed-fractional,
 ATR, or Kelly) do the sizing maths.
+`reprice_option` (Black-Scholes price at a different spot or IV, for premarket what-ifs) and `classify_iv_rank` (wheel-versus-buy verdict for an IV rank you already have) are pure computation. `get_iv_rank` is registered but not wired to a working data path yet and fails soft; see [TOOLS.md](TOOLS.md).
 
 **Market state & regime (10)** — `detect_market_top`, `detect_ftd`
 (follow-through days), `detect_macro_regime`, `detect_bubble_risk`,
@@ -165,7 +166,7 @@ they can do:
   operator secret, with a human present, can carry `trade`.
 
 A consequence that looks like a bug and isn't: listing tools with the bearer
-returns **77**, not 80, and calling an order tool with it answers
+returns **80**, not 83, and calling an order tool with it answers
 `Unknown tool`. MCP filters by scope rather than returning a 403.
 
 ---
