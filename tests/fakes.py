@@ -14,6 +14,8 @@ class FakePlatform:
         self._which = dict(which_map or {})
         self._results = list(run_results or [])
         self.run_calls: list[list[str]] = []
+        self.run_envs: list = []
+        self.run_timeouts: list[float] = []
         self.files: dict[Path, str] = {Path(k): v for k, v in (files or {}).items()}
         self.dirs: dict[Path, list[str]] = {Path(k): list(v) for k, v in (dirs or {}).items()}
         self.calls: list[str] = []
@@ -65,6 +67,8 @@ class FakePlatform:
             env: Mapping[str, str] | None = None, stdin: str | None = None) -> RunResult:
         self.calls.append("run")
         self.run_calls.append(list(argv))
+        self.run_envs.append(None if env is None else dict(env))
+        self.run_timeouts.append(timeout)
         if self._results:
             return self._results.pop(0)
         return RunResult(0, "", "", False)
