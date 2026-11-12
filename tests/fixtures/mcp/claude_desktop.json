@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tradier": {
+      "command": "npx",
+      "args": ["-y", "tradier-mcp"],
+      "env": {"TRADIER_TOKEN": "sk-LEAK"}
+    }
+  }
+}

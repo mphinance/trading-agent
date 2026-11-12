@@ -1,0 +1,25 @@
+{
+  "numStartups": 12,
+  "oauthAccount": {"emailAddress": "someone@example.invalid", "accessToken": "sk-LEAK-account"},
+  "mcpServers": {
+    "alpaca": {
+      "type": "stdio",
+      "command": "/usr/local/bin/uvx",
+      "args": ["alpaca-mcp-server", "--key=sk-LEAK-arg"],
+      "env": {"ALPACA_API_KEY": "sk-LEAK", "ALPACA_SECRET_KEY": "sk-LEAK"}
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://user:sk-LEAK@mcp.example.invalid:8443/v1/mcp?token=sk-LEAK",
+      "headers": {"Authorization": "Bearer sk-LEAK"}
+    }
+  },
+  "projects": {
+    "/work/secret-project-path": {
+      "history": ["paste sk-LEAK-history"],
+      "mcpServers": {
+        "projlocal": {"command": "node", "args": ["srv.js"], "env": {"PROJ_TOKEN": "sk-LEAK"}}
+      }
+    }
+  }
+}
