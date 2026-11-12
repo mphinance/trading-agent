@@ -35,6 +35,14 @@ class HermesUnavailable(RuntimeError):
     """``hermes --version`` did not work. Value-free."""
 
 
+class HermesNotBootstrapped(HermesUnavailable):
+    """Hermes is installed but its data root has no dependency environment yet (T0: "run
+    ``hermes pm repair``"). The first ``profile install`` bootstraps it, so this is not a failure."""
+
+
+_NOT_BOOTSTRAPPED_MARKERS = ("pm repair", "no dependency environment")
+
+
 def validate_profile_name(name: str) -> None:
     """Raises a value-free ValueError (the name is not echoed) unless NAME is safe and not reserved."""
     if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
@@ -86,7 +94,12 @@ class HermesCli:
     def version(self) -> str:
         res = self.run(["--version"], timeout=CALL_TIMEOUT)
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
-        if res.returncode != 0 or res.timed_out or not lines:
+        if res.timed_out:
+            raise HermesUnavailable("hermes --version failed")
+        text = f"{res.stdout}\n{res.stderr}".lower()
+        if any(m in text for m in _NOT_BOOTSTRAPPED_MARKERS):
+            raise HermesNotBootstrapped("hermes found, data root not initialized yet")
+        if res.returncode != 0 or not lines:
             raise HermesUnavailable("hermes --version failed")
         return lines[0]
 
