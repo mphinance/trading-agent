@@ -29,9 +29,19 @@ class McpEntry:
 
 
 def _basename(command: object) -> str | None:
-    if not isinstance(command, str) or not command.strip():
+    """Executable token only: first token (quoted token if it opens with a quote),
+    then its basename. Arguments, flags and anything after the first token are dropped."""
+    if not isinstance(command, str):
         return None
-    return command.strip().replace("\\", "/").rsplit("/", 1)[-1] or None
+    c = command.strip()
+    if not c:
+        return None
+    if c[0] in "\"'":
+        end = c.find(c[0], 1)
+        token = c[1:end] if end != -1 else c[1:].split()[0] if c[1:].split() else ""
+    else:
+        token = c.split()[0]
+    return token.strip().replace("\\", "/").rsplit("/", 1)[-1] or None
 
 
 def _host(url: object) -> str | None:
@@ -133,13 +143,24 @@ def _scan(platform: Platform, src: _Source) -> list[Finding]:
     if not src.verified:
         return [_status(src, "config location not verified", "absent")]
     path = src.path(platform)
-    if not platform.path_exists(path):
+    probe_failed = False
+    try:
+        exists = platform.path_exists(path)
+    except OSError:
+        probe_failed, exists = True, False
+    if probe_failed:
+        return [_status(src, "config location could not be checked", "unreadable")]
+    if not exists:
         return [_status(src, "no config file", "absent")]
     if src.fmt != "json":
         return [_status(src, "TOML config not supported yet", "unreadable")]
+    read_failed = False
+    text = ""
     try:
         text = platform.read_text(path)
-    except OSError:
+    except (OSError, ValueError):  # ValueError covers UnicodeDecodeError (holds raw bytes)
+        read_failed = True
+    if read_failed:
         return [_status(src, "config file could not be read", "unreadable")]
     try:
         entries = parse_mcp_config(text)

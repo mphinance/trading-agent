@@ -146,3 +146,68 @@ def test_never_writes(tmp_path):
     assert p.run_calls == []
     assert p.files == before
     assert not any(tmp_path.iterdir())  # nothing created on disk
+
+
+@pytest.mark.parametrize("cmd,expected", [
+    ("npx --api-key sk-LEAK", "npx"),
+    ("node --token=sk-LEAK", "node"),
+    ("/opt/x y/bin/node --token=sk-a/b", "x"),
+    ('"/opt/x y/bin/node" --token=sk-a/b', "node"),
+    ("'/opt/x y/bin/node' --token=sk-a/b", "node"),
+    ("   ", None),
+    ('""', None),
+])
+def test_command_is_executable_token_only(tmp_path, cmd, expected):
+    import json
+    text = json.dumps({"mcpServers": {"s": {"command": cmd}}})
+    (e,) = parse_mcp_config(text)
+    assert e.command == expected
+    assert "sk-" not in repr(e)
+    findings = detect_mcp_entries(plat(tmp_path, code=text))
+    assert all("sk-" not in repr(f) for f in findings)
+
+
+def test_undecodable_file_is_unreadable_not_an_error(tmp_path):
+    from trading_agent.platform import LinuxPlatform
+
+    class Real(LinuxPlatform):
+        def home(self):
+            return tmp_path
+
+        def config_home(self):
+            return tmp_path / ".config"
+
+    (tmp_path / ".claude.json").write_bytes(b'{"k": "sk-LEAK"}\xff\xfe\x80')
+    findings = detect_mcp_entries(Real())
+    f = next(x for x in findings if x.id == "mcp:claude-code")
+    assert f.state == "unreadable"
+    assert "sk-LEAK" not in repr(findings)
+
+
+def test_unicode_error_from_fake_read_is_unreadable(tmp_path):
+    class Bad(FakePlatform):
+        def read_text(self, path):
+            self.calls.append("read_text")
+            raise UnicodeDecodeError("utf-8", b"sk-LEAK\xff", 7, 8, "bad")
+
+    p = Bad(tmp_path, files={tmp_path / ".claude.json": "{}"})
+    findings = detect_mcp_entries(p)
+    f = next(x for x in findings if x.id == "mcp:claude-code")
+    assert f.state == "unreadable" and "sk-LEAK" not in repr(findings)
+
+
+def test_path_exists_error_isolated_to_one_source(tmp_path):
+    class Flaky(FakePlatform):
+        def path_exists(self, path):
+            self.calls.append("path_exists")
+            if path.name == ".claude.json":
+                raise PermissionError("sk-LEAK")
+            return super().path_exists(path)
+
+    p = Flaky(tmp_path, files={
+        tmp_path / ".config" / "Claude" / "claude_desktop_config.json": fx("claude_desktop.json")})
+    findings = detect_mcp_entries(p)
+    f = next(x for x in findings if x.id == "mcp:claude-code")
+    assert f.state == "unreadable"
+    assert any(x.id == "mcp:claude-desktop:tradier" and x.state == "present" for x in findings)
+    assert "sk-LEAK" not in repr(findings)
