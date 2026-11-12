@@ -113,9 +113,13 @@ AI_CHECK_CRASHED = "AI check could not run."
 
 REUSE_PROMPT = ("I found {name} in your environment. I have not used it. Copy it into the new profile's "
                 "private .env file so {who} can use it? I will never show it.")
-SAME_PROMPT = "{name} already has a value for another part of this setup. Use the same {name} for {who}?"
-ONE_VALUE_NOTE = ("A profile keeps one value per name, so I will not give {name} a different one. "
-                  "It is listed under finish later.")
+SHARE_PROMPT = ("{who} will be able to read the {name} you gave {holder}, because a profile keeps one value "
+                "per name. Use the same value for it?")
+SHARE_YES = "Yes, give {who} the same value"
+SHARE_NO = "No, leave {who} out of this setup"
+LEFT_OUT = "{who} is left out of this setup: you did not give it the same {name}."
+REVIEW_LEFT_OUT = "- {label} is left out: you did not give it the same {name}."
+LATER_LEFT_OUT = "Set up {label} (it is left out: it needed the same {name} as another part)."
 LOGIN_SHELL_ONLY = ("I can see {name} is set in your login shell, but I cannot copy it from here. "
                     "You can paste it instead; nothing you type is shown.")
 REFERENCE_ONLY = "I will not copy this one ({name}). Make a new key for this agent."
@@ -189,7 +193,7 @@ REVIEW_AI = {
 }
 REVIEW_BROKER = "- Broker MCP: {name}, installed the way its page says. It {dest}."
 REVIEW_KEYS = "- Put these into the profile's private .env file: {names}."
-REVIEW_KEYS_FOR = "  {name} goes to {who}."
+REVIEW_KEYS_FOR = "  {name}: {who}."
 REVIEW_NO_KEY = " (no key yet)"
 REVIEW_SKILLS = "- Record {n} skill librar{y}: {names} (names only; nothing is downloaded yet)."
 REVIEW_NOCHANGE = "- Change nothing in any other app or Hermes profile."

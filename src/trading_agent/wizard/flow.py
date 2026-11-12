@@ -39,7 +39,8 @@ from trading_agent.wizard.catalog import (  # noqa: F401 - re-exported: the publ
 )
 from trading_agent.wizard.io import BACK_INPUT, IO, Option
 from trading_agent.wizard.state import State, WizardState
-from trading_agent.wizard.values import BackSignal, Consumer, ValueMixin
+from trading_agent.wizard.values import BackSignal, Consumer, ValueMixin, cap
+from urllib.parse import urlsplit
 
 _FIRST_SET = frozenset(S.FIRST_SCREEN_SLUGS)
 _KEY_ENV_RE = re.compile(r"[A-Z][A-Z0-9]*(_[A-Z0-9]+)+")   # at least one underscore: a pasted key is not a name
@@ -466,7 +467,11 @@ class _Wizard(ValueMixin):
         return [lib for lib in listed_only(self.d.libraries) if lib.id in ids]
 
     def _ai_consumer(self) -> Consumer:
-        who = _ai_provider_label(self.dec("ai.kind"), self.dec("ai.ref"))
+        kind, ref = self.dec("ai.kind"), self.dec("ai.ref")
+        who = _ai_provider_label(kind, ref)
+        if kind == "custom" and ref not in (S.VENICE_BASE_URL, S.OPENAI_BASE_URL):
+            host = (urlsplit(ref).hostname or "an address not stated")[:80]   # ASCII printable: validated on input
+            return Consumer("ai", f"the AI service at {host}", f"AI service at {host}", ("ai-key",))
         return Consumer("ai", f"the {who} AI connection", who, ("ai-key",))
 
     def _consumers(self) -> list[tuple[Consumer, list[NameSpec]]]:
@@ -483,7 +488,7 @@ class _Wizard(ValueMixin):
             if lib.needs_keys:
                 out.append((Consumer(f"lib:{lib.id}", f"the {lib.name} library", lib.name, ("data-key",)),
                             [NameSpec(n, True) for n in lib.needs_keys]))
-        return out
+        return [(c, specs) for c, specs in out if c.key not in self.refused]
 
     def _expected_pairs(self) -> set[tuple[str, str]]:
         return {(c.key, s.name) for c, specs in self._consumers() for s in specs}
@@ -501,6 +506,17 @@ class _Wizard(ValueMixin):
         for c, specs in self._consumers():
             for s in specs:
                 self._obtain(c, s)
+        self.resolve_sharing()
+
+    def _plan_ai(self) -> AiChoice:
+        """What the plan configures: nothing for an AI left out because it was refused a shared value."""
+        return AiChoice("none") if "ai" in self.refused else self._ai_choice()
+
+    def _plan_route(self) -> dict | None:
+        return None if self._broker_key() in self.refused else self._route()
+
+    def _plan_libs(self) -> list[Library]:
+        return [lib for lib in self._selected_libs() if f"lib:{lib.id}" not in self.refused]
 
     def _plan_values(self) -> dict[str, str]:
         self._prune(self._expected_pairs())
@@ -513,6 +529,7 @@ class _Wizard(ValueMixin):
         return [n for n in AI_CLIS if self._present(f"cli:{n}") is not None]
 
     def _set_ai(self, kind: str, *, ref: str = "", key_env: str = "") -> None:
+        self.refused.discard("ai")
         if (kind, ref, key_env) != (self.dec("ai.kind"), self.dec("ai.ref"), self.dec("ai.key_env")):
             self._revoke_consumer("ai")     # a different provider or address never inherits an earlier answer
         self.decide("ai.kind", kind)
@@ -746,6 +763,8 @@ class _Wizard(ValueMixin):
         return self._pick_from(rows, flag_region=bool(region))
 
     def _set_broker(self, slug: str, route_id: str) -> None:
+        self.refused.discard(self._broker_key())
+        self.refused.discard(f"broker:{slug}/{route_id}")
         if (slug, route_id) != (self.dec("broker.slug"), self.dec("broker.route")):
             self.forget("broker.fp")
         self.decide("broker.slug", slug)
@@ -814,6 +833,7 @@ class _Wizard(ValueMixin):
             return State.BROKER_PICK
         if a == "redo":
             self._revoke_consumer(c.key)
+            self.refused.discard(c.key)
         try:
             for s in specs:
                 self._obtain(c, s)
@@ -852,6 +872,7 @@ class _Wizard(ValueMixin):
                 return State.DATA_KEYS
             if a.startswith("lib:") and a[4:] in {lib.id for lib in libs}:
                 picked ^= {a[4:]}
+                self.refused.discard(a)
                 self.decide("skills", ",".join(sorted(picked)))
             else:
                 self.say(S.INVALID_CHOICE)
@@ -880,6 +901,7 @@ class _Wizard(ValueMixin):
     def _data_key(self, c: Consumer, s: NameSpec, *, add: bool) -> None:
         """Add and Skip each re-decide: switching drops what the other choice left behind."""
         if add:
+            self.refused.discard(c.key)
             if self.dec(self._dk(c.key, s.name)) == "skip":
                 self.forget(self._dk(c.key, s.name))
             self._obtain(c, s)
@@ -888,26 +910,30 @@ class _Wizard(ValueMixin):
 
     # ---- REVIEW
 
-    def _review_text(self) -> str:
-        choice = self._ai_choice()
+    def _review_ai_line(self) -> str:
+        choice = self._plan_ai()
         who = _ai_provider_label(choice.kind, choice.ref)
-        ai_name = self._ai_value_name()
-        nokey = S.REVIEW_NO_KEY if ai_name and not (
-            any(k == "ai" and n == ai_name for k, n in self._grants)
-            or self.dec(self._dk("ai", ai_name)) == "keep-existing") else ""
-        lines = [S.REVIEW_HEAD, S.REVIEW_PROFILE.format(name=self.dec("profile_name"))]
+        ai_name = self._ai_value_name() if choice.kind != "none" else None
+        has_key = any(k == "ai" and n == ai_name for k, n in self._grants) \
+            or self.dec(self._dk("ai", ai_name or "")) == "keep-existing"
+        nokey = S.REVIEW_NO_KEY if ai_name and not has_key else ""
         brand = _CLI_NAMES.get(choice.ref, ("", "your CLI"))[1]
-        lines.append(S.REVIEW_AI.get(choice.kind, S.REVIEW_AI["none"]).format(
-            brand=brand, ref=choice.ref, who=who, nokey=nokey))
-        route = self._route()
+        return S.REVIEW_AI.get(choice.kind, S.REVIEW_AI["none"]).format(brand=brand, ref=choice.ref, who=who, nokey=nokey)
+
+    def _readers(self, name: str) -> list[str]:
+        return [c.label for c, specs in self._consumers() if any(s.name == name for s in specs)]
+
+    def _review_text(self) -> str:
+        lines = [S.REVIEW_HEAD, S.REVIEW_PROFILE.format(name=self.dec("profile_name")), self._review_ai_line()]
+        route = self._plan_route()
         if route is not None:
             lines.append(S.REVIEW_BROKER.format(name=self._broker_name(), dest=route_destination(route)))
         values = self._plan_values()
         if values:
             lines.append(S.REVIEW_KEYS.format(names=", ".join(values)))
-            lines += [S.REVIEW_KEYS_FOR.format(name=s.name, who=c.label)
-                      for c, specs in self._consumers() for s in specs if (c.key, s.name) in self._grants]
-        skills = [lib.id for lib in self._selected_libs()]
+            lines += [S.REVIEW_KEYS_FOR.format(name=n, who=" and ".join(self._readers(n))) for n in values]
+        lines += [S.REVIEW_LEFT_OUT.format(label=cap(label), name=name) for label, name in self.left_out.values()]
+        skills = [lib.id for lib in self._plan_libs()]
         if skills:
             lines.append(S.REVIEW_SKILLS.format(n=len(skills), y="y" if len(skills) == 1 else "ies",
                                                 names=", ".join(skills)))
@@ -927,10 +953,11 @@ class _Wizard(ValueMixin):
     # ---- WRITE
 
     def _build_plan(self) -> WritePlan:
-        route = self._route()
+        self.resolve_sharing()   # again, immediately before the write
+        route = self._plan_route()
         broker = BrokerChoice(slug=self.dec("broker.slug"), route_id=self.dec("broker.route"), entry=route) if route else None
-        return WritePlan(profile_name=self.dec("profile_name"), ai=self._ai_choice(), broker=broker,
-                         skills=[lib.id for lib in self._selected_libs()], env_values=self._plan_values())
+        return WritePlan(profile_name=self.dec("profile_name"), ai=self._plan_ai(), broker=broker,
+                         skills=[lib.id for lib in self._plan_libs()], env_values=self._plan_values())
 
     def _st_write(self) -> State:
         plan = self._build_plan()
@@ -984,7 +1011,7 @@ class _Wizard(ValueMixin):
                 lines.append(f"AI check: {S.NEEDS_INTERNET}.")
             else:
                 lines.append(S.AI_CHECK_PASSED if self.dec("ai.verify") == "passed" else S.AI_CHECK_NOT_TESTED)
-        if self._route() is not None:
+        if self._plan_route() is not None:
             lines.append(f"Broker connection: {S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED}"
                          " (testing is not built yet).")
         return lines
@@ -997,14 +1024,14 @@ class _Wizard(ValueMixin):
 
     def _left_to_do(self) -> list[str]:
         out: list[str] = []
-        kind = self.dec("ai.kind", "none")
+        kind = self._plan_ai().kind
         if kind in ("none", "cli"):
             out.append(S.LATER_AI)
         elif not self.d.online:
             out.append(S.LATER_AI_TEST.format(status=S.NEEDS_INTERNET))
         elif self.dec("ai.verify") != "passed":
             out.append(S.LATER_AI_TEST.format(status=S.NOT_TESTED))
-        route = self._route()
+        route = self._plan_route()
         if route is None:
             out.append(S.LATER_BROKER)
         else:
@@ -1012,16 +1039,18 @@ class _Wizard(ValueMixin):
                 out.append(S.LATER_OAUTH.format(name=self._broker_name()))
             out.append(S.LATER_BROKER_TEST.format(
                 name=self._broker_name(), status=S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED))
+        written = set(self.receipt.env_names_written) if self.receipt else set()
         out += [S.LATER_NAME.format(name=s.name, who=c.who) for c, specs in self._consumers() for s in specs
-                if self.dec(self._dk(c.key, s.name)) == "skip"]
+                if self.dec(self._dk(c.key, s.name)) == "skip" and s.name not in written]
+        out += [S.LATER_LEFT_OUT.format(label=cap(label), name=name) for label, name in self.left_out.values()]
         return out
 
     def _st_done(self) -> None:
         name = self.dec("profile_name")
-        choice = self._ai_choice()
+        choice = self._plan_ai()
         text = S.DONE_TITLE + "\n" + S.DONE_BODY.format(
-            ai=_ai_provider_label(choice.kind, choice.ref), broker=self._broker_name() or "none",
-            n=len(self._selected_libs()))
+            ai=_ai_provider_label(choice.kind, choice.ref),
+            broker=(self._broker_name() or "none") if self._plan_route() else "none", n=len(self._plan_libs()))
         later = self._left_to_do()
         if later:
             text += "\n" + S.FINISH_LATER_TITLE + "\n" + "\n".join(f"- {x}" for x in later)

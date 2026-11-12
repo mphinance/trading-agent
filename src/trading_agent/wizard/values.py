@@ -8,7 +8,6 @@ Nothing that grants a copy is ever persisted: a restart asks again. Only non-sec
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from trading_agent.findings import Finding
 from trading_agent.secrets import check_secret
@@ -34,11 +33,15 @@ class BackSignal(Exception):
 
 
 class ValueMixin:
-    """Mixed into the wizard. Needs: io, d (deps), p (platform), say, decide, forget, dec, findings, profile_dir."""
+    """Mixed into the wizard. Needs: io, d (deps), p (platform), ws (WizardState), say, decide, forget, dec,
+    findings(), profile_dir(), _consumers() (the consumers that are still in the plan)."""
 
     def _init_values(self) -> None:
         self._values: dict[str, str] = {}                    # NAME -> value: memory only
         self._grants: dict[tuple[str, str], str] = {}        # (consumer key, NAME) -> reuse|paste|plain|same
+        self._labels: dict[str, str] = {}                    # consumer key -> label, for "the value you gave X"
+        self.refused: set[str] = set()                       # consumers left out of the plan (process only)
+        self.left_out: dict[str, tuple[str, str]] = {}       # consumer key -> (label, NAME), for REVIEW and DONE
 
     # ---- bookkeeping
 
@@ -51,6 +54,7 @@ class ValueMixin:
 
     def _grant(self, c: Consumer, name: str, mode: str) -> None:
         self._grants[(c.key, name)] = mode
+        self._labels[c.key] = c.label
         self.forget(self._dk(c.key, name))
 
     def _mark(self, c: Consumer, name: str, mode: str) -> None:
@@ -113,16 +117,48 @@ class ValueMixin:
             return True
         return False
 
+    def _holders(self, name: str, *, besides: str = "") -> list[str]:
+        """Consumers holding an explicit grant for NAME, in the order they were given one."""
+        return [k for (k, n) in self._grants if n == name and k != besides]
+
+    def _ask_share(self, c: Consumer, name: str) -> bool:
+        """A profile .env has one value per NAME, so C would be able to READ the value another consumer was given.
+        That needs C's own explicit grant. True if granted; a refusal removes C from the plan entirely."""
+        holder = self._labels[self._holders(name, besides=c.key)[0]]
+        a = self.io.choose(S.SHARE_PROMPT.format(who=cap(c.label), name=name, holder=holder),
+                           [Option("same", S.SHARE_YES.format(who=c.label)),
+                            Option("refuse", S.SHARE_NO.format(who=c.label))])
+        if a == "same":
+            self._grant(c, name, "same")
+            return True
+        self.refuse(c, name)
+        return False
+
+    def refuse(self, c: Consumer, name: str) -> None:
+        """Take C out of the plan: no config for it, no ${NAME} reference, no value held for it."""
+        self._revoke_consumer(c.key)
+        self.refused.add(c.key)
+        self.left_out[c.key] = (c.label, name)
+        self.say(S.LEFT_OUT.format(who=cap(c.label), name=name))
+
     def _shared(self, c: Consumer, name: str) -> bool:
         """NAME already has a value for another consumer: ask, never use it silently."""
-        if name not in self._values or not any(n == name and k != c.key for k, n in self._grants):
+        if name not in self._values or not self._holders(name, besides=c.key):
             return False
-        if self.io.confirm(S.SAME_PROMPT.format(name=name, who=c.label)):
-            self._grant(c, name, "same")
-        else:
-            self.say(S.ONE_VALUE_NOTE.format(name=name))
-            self._mark(c, name, "skip")
+        self._ask_share(c, name)
         return True
+
+    def resolve_sharing(self) -> None:
+        """Run before REVIEW and again before WRITE: every consumer that references a NAME whose value exists
+        needs its own grant, whichever order the values were given in."""
+        for name in list(self._values):
+            for c, specs in self._consumers():
+                if c.key in self.refused or not any(s.name == name for s in specs):
+                    continue
+                if (c.key, name) in self._grants or self.dec(self._dk(c.key, name)) == "keep-existing":
+                    continue
+                if self._holders(name, besides=c.key):
+                    self._ask_share(c, name)
 
     def _paste(self, c: Consumer, name: str) -> bool:
         """Ask for a secret with no echo. True if a value was stored; empty input skips."""
@@ -190,6 +226,8 @@ class ValueMixin:
         exists, else paste or skip), card (reuse card only; 'declined' goes back to the menu), paste (straight to paste).
         Returns 'done' or 'declined'."""
         name = spec.name
+        if c.key in self.refused:
+            return "done"
         if self._decided(c, name) or self._shared(c, name) or self._collision_kept(c, name):
             return "done"
         if not spec.secret:
@@ -209,3 +247,7 @@ class ValueMixin:
                 return "done"
         self._paste(c, name)
         return "done"
+
+
+def cap(text: str) -> str:
+    return text[:1].upper() + text[1:]

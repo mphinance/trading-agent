@@ -222,3 +222,64 @@ def test_e2e_a_stale_receipt_never_makes_a_false_you_are_set_up(world):
     with pytest.raises(ScriptExhausted):
         run_wizard(io2, deps_for(world, findings=OLLAMA))
     assert "You are set up" not in "\n".join(io2.said)
+
+
+# ---- A-C1: a consumer without a grant never reads a shared NAME, checked in the files that get written
+
+ORKEY = "OPENROUTER_API_KEY"
+LOCAL_SHARE = {"route_id": "local", "kind": "local-command", "maintainer": "community",
+               "install": {"method": "uvx", "command_text": "uvx some-community-mcp"},
+               "auth": {"type": "api-key", "env_vars": [{"name": ORKEY, "role": "key-id", "secret": True}]}}
+REMOTE_SHARE = {"route_id": "hosted", "kind": "remote-url", "maintainer": "community", "url": "https://third.example.org/mcp",
+                "auth": {"type": "api-key", "env_vars": [], "headers": ["X-Key"], "header_env": {"X-Key": ORKEY}}}
+
+
+@pytest.mark.parametrize("route", [LOCAL_SHARE, REMOTE_SHARE], ids=["local", "remote"])
+def test_e2e_refusing_to_share_installs_no_broker_and_writes_no_reference(world, route):
+    world.platform._e[ORKEY] = K1
+    deps = deps_for(world, findings=[env_finding(ORKEY)], catalog=[entry("kraken", "Third Party", [route])])
+    io = ScriptedIO([*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", "refuse", "continue", "done", "do"])
+    assert run_wizard(io, deps) is not None
+    cfg_text = (world.pdir() / "config.yaml").read_text()
+    cfg = yaml.safe_load(cfg_text)
+    assert "mcp_servers" not in cfg or "kraken" not in cfg["mcp_servers"]
+    assert f"${{{ORKEY}}}" not in cfg_text and "third.example.org" not in cfg_text and "some-community-mcp" not in cfg_text
+    assert cfg["model"]["provider"] == "openrouter"
+    assert dotenv_read(world.pdir() / ".env") == {ORKEY: K1}          # only the AI consumer has the value
+    done = "\n".join(io.said)
+    assert "left out" in done and "Third Party" in done
+
+
+def test_e2e_granting_the_same_value_writes_both_references(world):
+    world.platform._e[ORKEY] = K1
+    deps = deps_for(world, findings=[env_finding(ORKEY)], catalog=[entry("kraken", "Third Party", [LOCAL_SHARE])])
+    io = ScriptedIO([*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", "same", "continue", "done", "do"])
+    assert run_wizard(io, deps) is not None
+    cfg = yaml.safe_load((world.pdir() / "config.yaml").read_text())
+    assert cfg["mcp_servers"]["kraken"]["env"] == {ORKEY: f"${{{ORKEY}}}"} and cfg["model"]["provider"] == "openrouter"
+    review = next(p for k, p, _ in io.prompts if "exactly what I will do" in p)
+    assert f"{ORKEY}: the OpenRouter AI connection and the Third Party connection" in review
+
+
+def test_e2e_reverse_refusal_leaves_the_ai_unconfigured_and_the_broker_installed(world):
+    deps = deps_for(world, catalog=[entry("kraken", "Third Party", [LOCAL_SHARE])])
+    io = ScriptedIO([*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "continue",
+                     "done", "refuse", "do"])
+    assert run_wizard(io, deps) is not None
+    cfg = yaml.safe_load((world.pdir() / "config.yaml").read_text())
+    assert "provider" not in cfg["model"] and cfg["mcp_servers"]["kraken"]["env"] == {ORKEY: f"${{{ORKEY}}}"}
+    assert dotenv_read(world.pdir() / ".env") == {ORKEY: K2}
+    review = next(p for k, p, _ in io.prompts if "exactly what I will do" in p)
+    done = "\n".join(io.said)
+    assert "(no key yet)" not in review and "you skipped it" not in done and "left out" in done
+    assert_secret_only_in_profile_env(world, [K2])
+
+
+def test_e2e_reverse_grant_gives_the_ai_the_value_and_says_so(world):
+    deps = deps_for(world, catalog=[entry("kraken", "Third Party", [LOCAL_SHARE])])
+    io = ScriptedIO([*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "continue",
+                     "done", "same", "do"])
+    assert run_wizard(io, deps) is not None
+    cfg = yaml.safe_load((world.pdir() / "config.yaml").read_text())
+    assert cfg["model"]["provider"] == "openrouter" and "kraken" in cfg["mcp_servers"]
+    assert "you skipped it" not in "\n".join(io.said)

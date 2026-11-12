@@ -31,45 +31,77 @@ SHARED_CATALOG = [entry("kraken", "Community Broker", [COMMUNITY_ROUTE])]
 
 # ------------------------------------------------------------------ C1: consent is per consumer
 
-def test_consent_for_the_ai_step_does_not_reach_a_broker_that_lists_the_same_name(mk):
-    w = mk(environ={ORKEY: K1}, findings=[OR_FINDING], catalog=SHARED_CATALOG)
-    answers = [*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", False, "continue", "done", "do"]
+def run_shared(mk, answers, *, catalog=None, libraries=None, environ=None, findings=None):
+    w = mk(environ=environ if environ is not None else {ORKEY: K1}, findings=findings if findings is not None else [OR_FINDING],
+           catalog=catalog or SHARED_CATALOG, libraries=libraries)
     receipt, io = w.run(answers)
-    confirms = [p for k, p, _ in io.prompts if k == "confirm"]
-    assert "OpenRouter AI connection" in confirms[0] and ORKEY in confirms[0] and ".env" in confirms[0]
-    assert "Use the same OPENROUTER_API_KEY for the Community Broker connection?" in confirms[1]   # asked, not silent
     review = next(p for k, p, _ in io.prompts if "Here is exactly what I will do" in p)
-    assert f"{ORKEY} goes to the OpenRouter AI connection" in review
-    assert f"{ORKEY} goes to the Community Broker connection" not in review
-    assert "Left to finish later" in "\n".join(io.said) and "Community Broker" in "\n".join(io.said)
+    return w, io, w.writes[0].plan, review
+
+
+AI_THEN_BROKER = [*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue"]
+
+
+def test_refusing_to_share_a_name_removes_the_broker_from_the_plan_entirely(mk):
+    w, io, plan, review = run_shared(mk, [*AI_THEN_BROKER, "refuse", "continue", "done", "do"])
+    share = next(p for k, p, o in io.prompts if k == "choose" and "will be able to read" in p)
+    assert "The Community Broker connection will be able to read the OPENROUTER_API_KEY you gave the OpenRouter AI connection" in share
+    assert plan.broker is None                                            # not installed: no entry, no reference
+    assert plan.ai == AiChoice("openrouter") and dict(w.writes[0].values) == {ORKEY: K1}
+    assert "left out" in review.lower() and "Community Broker" in review
     assert_no_leak(io.everything() + w.state_text(), K1)
 
 
-def test_the_same_name_may_be_shared_when_the_user_says_yes_per_consumer(mk):
-    w = mk(environ={ORKEY: K1}, findings=[OR_FINDING], catalog=SHARED_CATALOG)
-    answers = [*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", True, "continue", "done", "do"]
-    receipt, io = w.run(answers)
-    assert w.writes[0].values == {ORKEY: K1}
-    review = next(p for k, p, _ in io.prompts if "Here is exactly what I will do" in p)
-    assert "the Community Broker connection" in review and "the OpenRouter AI connection" in review
+def test_granting_the_same_value_lists_every_reader_in_review(mk):
+    w, io, plan, review = run_shared(mk, [*AI_THEN_BROKER, "same", "continue", "done", "do"])
+    assert plan.broker is not None and dict(w.writes[0].values) == {ORKEY: K1}
+    assert f"{ORKEY}: the OpenRouter AI connection and the Community Broker connection" in review
+    assert "(no key yet)" not in review
 
 
-def test_a_broker_never_inherits_a_pasted_ai_value_silently(mk):
-    w = mk(catalog=SHARED_CATALOG)
-    answers = [*TOP, "paste-openrouter", K2, "continue", "pick:kraken", "continue", True, "continue", "done", "do"]
-    receipt, io = w.run(answers)
-    assert any("Use the same" in p for k, p, _ in io.prompts if k == "confirm")
-    assert w.writes[0].values == {ORKEY: K2}
+def test_reverse_ai_skipped_then_broker_pastes_the_same_name_asks_the_ai_consumer(mk):
+    answers = [*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "continue", "done",
+               "same", "do"]
+    w, io, plan, review = run_shared(mk, answers, findings=[], environ={})
+    assert any("OpenRouter AI connection will be able to read the OPENROUTER_API_KEY you gave the Community Broker" in p
+               for k, p, _ in io.prompts if k == "choose")
+    assert plan.ai == AiChoice("openrouter") and dict(w.writes[0].values) == {ORKEY: K2}
+    assert "(no key yet)" not in review and f"{ORKEY}: the OpenRouter AI connection and the Community Broker" in review
+    done = "\n".join(io.said)
+    assert "you skipped it" not in done                                    # the false finish-later line is gone
 
 
-def test_a_library_never_inherits_an_ai_value_silently(mk):
+def test_reverse_refusal_leaves_the_ai_unconfigured_and_says_so(mk):
+    answers = [*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "continue", "done",
+               "refuse", "do"]
+    w, io, plan, review = run_shared(mk, answers, findings=[], environ={})
+    assert plan.ai == AiChoice("none") and plan.broker is not None and dict(w.writes[0].values) == {ORKEY: K2}
+    assert "(no key yet)" not in review and "left out" in review.lower() and "OpenRouter" in review
+    done = "\n".join(io.said)
+    assert "you skipped it" not in done and "left out" in done.lower()
+
+
+def test_a_library_key_needs_its_own_grant_in_both_directions(mk):
     libs = [lib("needs-or", needs=(ORKEY,))]
-    w = mk(environ={ORKEY: K1}, findings=[OR_FINDING, finding("env2:" + ORKEY, "data-key", "a data key", [ORKEY])],
-           libraries=libs)
-    answers = [*TOP, f"use:env:{ORKEY}", True, "continue", "none", "lib:needs-or", "done", "add", False, "do"]
+    data = finding("env2:" + ORKEY, "data-key", "a data key", [ORKEY])
+    answers = [*TOP, f"use:env:{ORKEY}", True, "continue", "none", "lib:needs-or", "done", "add", "refuse", "do"]
+    w = mk(environ={ORKEY: K1}, findings=[OR_FINDING, data], libraries=libs)
     receipt, io = w.run(answers)
-    confirms = [p for k, p, _ in io.prompts if k == "confirm"]
-    assert "Use the same OPENROUTER_API_KEY for the Library needs-or library?" in confirms[1]
+    assert "Library needs-or" in next(p for k, p, o in io.prompts if k == "choose" and "will be able to read" in p)
+    assert w.writes[0].plan.skills == [] and w.writes[0].plan.ai == AiChoice("openrouter")
+    w2 = mk(environ={ORKEY: K1}, findings=[OR_FINDING, data], libraries=libs)
+    w2.state_path().unlink()
+    receipt, io2 = w2.run([*answers[:-2], "same", "do"])
+    assert w2.writes[0].plan.skills == ["needs-or"]
+
+
+def test_custom_ai_consumer_is_named_by_its_host_with_no_grammar_slip(mk):
+    answers = [*TOP, "custom", "https://llm.example.org/v1", ORKEY, K1, "continue", "pick:kraken", "continue", "refuse",
+               "continue", "done", "do"]
+    w, io, plan, review = run_shared(mk, answers, findings=[], environ={})
+    text = io.everything()
+    assert "the AI service at llm.example.org" in text and "the an " not in text
+    assert plan.broker is None
 
 
 def test_reuse_prompt_names_the_consumer_in_plain_words(mk):
