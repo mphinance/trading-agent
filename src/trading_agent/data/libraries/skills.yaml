@@ -28,7 +28,7 @@ libraries:
   - id: broker-skill-docs
     kind: skills
     name: Broker agent skill docs (awesome-broker-mcp)
-    source_url: awesome-broker-mcp/docs/skills/  # public URL not stated in SKILLS_AND_TOOLS.md
+    source_url: https://github.com/mphinance/awesome-broker-mcp  # the docs live under docs/skills/
     license: CC0
     counts:
       broker_docs: 44
@@ -37,5 +37,3 @@ libraries:
       CC0 for the catalog text. Each broker's skill repo has its own license, recorded
       per file; show it before installing one.
     listed: true
-    unverified:
-      - public URL of awesome-broker-mcp (not stated in SKILLS_AND_TOOLS.md)

@@ -15,7 +15,7 @@ libraries:
       The EDGAR client says it was ported from a friend's repo with unknown license.
     listed: true
     unverified:
-      - README says 73 tools; decorator grep gives 57 plus 17 = 74, which is not a real tool
+      - README says 73 tools; decorator grep gives 57 plus 17 = 74; which of the 74 is not a real tool is UNVERIFIED
       - TickerTrace tools need no key per docs, not called
       - EDGAR client origin license
       - exact output of the free-tier upsell text

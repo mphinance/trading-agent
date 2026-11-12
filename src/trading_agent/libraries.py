@@ -6,6 +6,7 @@ Errors name the library id and field, never file content.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib import resources
@@ -16,6 +17,7 @@ import yaml
 
 _FILES = ("skills.yaml", "tools.yaml")
 _KINDS = ("skills", "tool")
+_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 _REQUIRED = ("id", "kind", "name", "source_url", "license", "counts", "needs_keys", "attribution", "listed")
 _OPTIONAL = ("unresolved", "unverified")
@@ -54,8 +56,9 @@ def _build(raw: object, where: str) -> Library:
     if not isinstance(raw, dict):
         raise LibraryError(f"{where}: entry must be a mapping")
     lib_id = raw.get("id")
-    if not isinstance(lib_id, str) or not lib_id:
-        raise LibraryError(f"{where}: field 'id': must be a non-empty string")
+    if not isinstance(lib_id, str) or not _ID.fullmatch(lib_id):
+        shown = repr(lib_id)[:40] if isinstance(lib_id, str) else type(lib_id).__name__
+        raise LibraryError(f"{where}: field 'id': invalid ({shown})")
     for k in raw:
         if not isinstance(k, str) or k not in _REQUIRED + _OPTIONAL:
             raise _fail(lib_id, str(k) if isinstance(k, str) else "<non-string>", "unknown field")
@@ -74,9 +77,9 @@ def _build(raw: object, where: str) -> Library:
         raise _fail(lib_id, "listed", "must be a boolean")
     counts = raw["counts"]
     if not isinstance(counts, dict) or not all(
-        isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) for k, v in counts.items()
+        isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) and v >= 0 for k, v in counts.items()
     ):
-        raise _fail(lib_id, "counts", "must be a mapping of names to integers")
+        raise _fail(lib_id, "counts", "must be a mapping of names to integers >= 0")
     keys = raw["needs_keys"]
     if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
         raise _fail(lib_id, "needs_keys", "must be a list of strings")
@@ -90,6 +93,10 @@ def _build(raw: object, where: str) -> Library:
         raise _fail(lib_id, "license", "a listed library needs a license")
     if listed and not url.strip():
         raise _fail(lib_id, "source_url", "a listed library needs a source_url")
+    if listed:
+        parts = urlsplit(url.strip())
+        if parts.scheme != "https" or not parts.netloc:
+            raise _fail(lib_id, "source_url", "a listed library needs an https URL")
     return Library(lib_id, kind, name, url, lic, dict(counts), tuple(keys), attribution, listed,  # type: ignore[arg-type]
                    unresolved, tuple(unv))
 

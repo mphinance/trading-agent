@@ -72,7 +72,7 @@ def test_entries_match_design_doc(libs):
     assert (a.license, a.kind, a.counts["trading_skills"], a.counts["shippable"]) == ("MIT", "skills", 64, 56)
     assert (b.license, b.kind, b.counts["broker_docs"]) == ("CC0", "skills", 44)
     assert (m.license, m.kind, m.counts["quant_tools"], m.counts["tickertrace_tools"]) == ("Apache-2.0", "tool", 56, 17)
-    assert any("73" in u and "74" in u for u in m.unverified)
+    assert any("73" in u and "74" in u and "UNVERIFIED" in u for u in m.unverified)
 
 
 def test_keys_are_names_only_and_yaml_has_no_value_shapes():
@@ -146,6 +146,30 @@ def test_listed_needs_license_and_source(tmp_path, field):
     with pytest.raises(LibraryError, match=field):
         load_libraries(write(tmp_path, [entry(**{field: "  "})]))
     load_libraries(write(tmp_path, [entry(**{field: "", "listed": False})]))
+
+
+@pytest.mark.parametrize("bad", ["not a url", "http://example.com/x", "https://", "ftp://example.com", "example.com/x"])
+def test_listed_needs_https_url(tmp_path, bad):
+    with pytest.raises(LibraryError, match=r"x-lib.*source_url"):
+        load_libraries(write(tmp_path, [entry(source_url=bad)]))
+    assert load_libraries(write(tmp_path, [entry(source_url=bad, listed=False)]))[0].source_url == bad
+
+
+@pytest.mark.parametrize("bad", ["Bad Id/../x", "UPPER", "-lead", "", "a_b", "X" * 200])
+def test_bad_ids(tmp_path, bad):
+    with pytest.raises(LibraryError) as ei:
+        load_libraries(write(tmp_path, [entry(id=bad)]))
+    msg = str(ei.value)
+    assert "'id'" in msg and len(msg) < 200
+    assert "X" * 41 not in msg
+    assert "\n" not in msg
+
+
+@pytest.mark.parametrize("bad", [-1, True])
+def test_counts_non_negative_ints(tmp_path, bad):
+    with pytest.raises(LibraryError, match=r"x-lib.*counts"):
+        load_libraries(write(tmp_path, [entry(counts={"n": bad})]))
+    assert load_libraries(write(tmp_path, [entry(counts={"n": 0})]))[0].counts == {"n": 0}
 
 
 def test_unknown_kind(tmp_path):

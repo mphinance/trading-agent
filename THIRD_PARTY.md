@@ -17,7 +17,7 @@ This project ships pointer entries only. Nothing below is vendored, copied or en
 
 ## broker-skill-docs
 
-- Source: `docs/skills/` of the awesome-broker-mcp catalog. A public URL is not stated in the design notes (UNVERIFIED).
+- Source: https://github.com/mphinance/awesome-broker-mcp (the docs live under `docs/skills/`)
 - License: CC0 for the catalog text. Each broker's own skill repo has its own license, recorded per entry in the catalog; some have none at repo root. The wizard shows that license before installing one.
 - Contains: 44 per-broker skill docs.
 - Keys: whatever each broker's own server documents. Nothing from us.
@@ -27,7 +27,7 @@ This project ships pointer entries only. Nothing below is vendored, copied or en
 
 - Source: https://github.com/mphinance/momentum-mcp (its git remote)
 - License: Apache-2.0 (LICENSE file). Its README once said MIT; the file is Apache-2.0.
-- Contains: 56 quant tools plus 17 TickerTrace ETF flow tools. UNVERIFIED: the README says 73 tools while a decorator count gives 74.
+- Contains: 56 quant tools plus 17 TickerTrace ETF flow tools. The README says 73 tools while a decorator count gives 74; which of the 74 is not a real tool is UNVERIFIED.
 - Optional. Keys a pick may need (names only): `TD_API_KEY`, `SEC_USER_AGENT`, `OPENROUTER_API_KEY`.
 - Attribution: keep the LICENSE and notices if redistributed. As a pointer we copy nothing. The EDGAR client says it was "Ported from a friend's discount-bloomberg repo"; origin license UNVERIFIED.
 - Note for users: free-tier results may carry vendor promotional text (UNVERIFIED exact output).
