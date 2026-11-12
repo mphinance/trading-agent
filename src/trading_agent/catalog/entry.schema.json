@@ -257,6 +257,17 @@
               "key_scope_advice": {
                 "type": "string",
                 "description": "e.g. create a trading-disabled or no-withdrawal key where the broker offers one. One line, curated."
+              },
+              "header_env": {
+                "type": "object",
+                "description": "Header name to the env var NAME that holds its value in the profile .env. A header absent here uses its own name.",
+                "propertyNames": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$|^[A-Z][A-Z0-9_]*$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[A-Z_][A-Z0-9_]*$"
+                }
               }
             }
           },

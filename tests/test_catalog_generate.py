@@ -336,3 +336,36 @@ def test_real_catalog_counts():
     assert len(entries) == 94
     assert sum("official" in e["status"] for e in entries) == 64
     assert sum(e["status"] == ["none"] for e in entries) == 12
+
+
+# ---- the SHIPPED overlay against the schema, with no environment variable (round 1 broke this and a skipped
+# ---- real-catalog test hid it)
+
+def _shipped_overlay():
+    return json.loads(SEED_OVERLAY.read_text())
+
+
+def test_every_shipped_overlay_entry_validates_against_the_schema(cat):
+    from trading_agent.catalog.schema import validate_entry
+    base = by_slug(build_generated_layer(cat, TODAY))["alpaca"]
+    for slug, ov in _shipped_overlay().items():
+        entry = merge_overlay([{**base, "slug": slug}], {slug: ov})[0]
+        validate_entry(entry)          # raises CatalogError naming the slug and path
+
+
+def test_header_env_keys_are_declared_headers_and_values_are_env_names():
+    for slug, ov in _shipped_overlay().items():
+        for route in ov.get("routes", []):
+            auth = route.get("auth", {})
+            for header, var in (auth.get("header_env") or {}).items():
+                assert header in (auth.get("headers") or []), f"{slug}: header_env key {header} is not a header"
+                assert re.fullmatch(r"[A-Z_][A-Z0-9_]*", var), f"{slug}: {var} is not an env var name"
+
+
+def test_schema_rejects_a_malformed_header_env(cat):
+    from trading_agent.catalog.schema import validate_entry
+    base = by_slug(build_generated_layer(cat, TODAY))["alpaca"]
+    ov = _shipped_overlay()["tradier"]
+    ov["routes"][0]["auth"]["header_env"] = {"API_KEY": "lower-case"}
+    with pytest.raises(CatalogError, match="header_env"):
+        validate_entry(merge_overlay([{**base, "slug": "tradier"}], {"tradier": ov})[0])
