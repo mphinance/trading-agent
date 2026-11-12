@@ -46,7 +46,8 @@ def shell_vars(platform: Platform, names: Sequence[str]) -> frozenset[str]:
 
     One shell spawn, one 5 s timeout. Names are validated, then written literally
     into the script, so only names can be printed, never values. A timeout,
-    nonzero exit or OSError yields an empty set (a broken shell reads as absent).
+    or OSError yields an empty set (a broken shell reads as absent). A nonzero exit
+    does not discard names already printed: stdout is filtered to requested names.
     """
     wanted = list(dict.fromkeys(names))
     for name in wanted:
@@ -55,9 +56,11 @@ def shell_vars(platform: Platform, names: Sequence[str]) -> frozenset[str]:
     if not wanted:
         return frozenset()
     shell = platform.environ().get("SHELL") or "/bin/sh"
-    script = "; ".join(f'[ -n "${{{n}}}" ] && echo {n}' for n in wanted)
-    result = platform.run([shell, "-lc", script], timeout=5)
-    if result.timed_out or result.returncode != 0:
+    # Each probe is an if, and the script ends with `true`, so the exit status is 0
+    # no matter which name is last. Names are validated above and written literally.
+    script = "; ".join(f'if [ -n "${{{n}}}" ]; then echo {n}; fi' for n in wanted)
+    result = platform.run([shell, "-lc", script + "; true"], timeout=5)
+    if result.timed_out:
         return frozenset()
     seen = {line.strip() for line in result.stdout.splitlines()}
     return frozenset(seen & set(wanted))
