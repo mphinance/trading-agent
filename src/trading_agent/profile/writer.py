@@ -10,6 +10,7 @@ Reports and ``WriteError.report`` pass through ``scrub`` and ``redact_patterns``
 """
 from __future__ import annotations
 
+import copy
 import os
 import re
 import secrets as _stdlib_secrets
@@ -41,6 +42,11 @@ _SHELL_TOKENS = frozenset({"|", "||", "&", "&&", ";", ">", ">>", "<", "<<"})
 _PROFILE_PATH_RE = re.compile(r"^\s*Profile path:\s*(.+?)\s*$", re.MULTILINE)
 _REPORT_LIMIT = 600
 
+# A named ``providers:`` entry is the shape Hermes' runtime resolver reads for a custom endpoint
+# (runtime_provider_custom._select_named_custom_provider; ``model.key_env`` is read only for registry
+# providers). VERIFIED on Hermes v0.23.1 with a bogus key and no model call: ``resolve_runtime_provider``
+# returned the entry's base_url and the key named by ``key_env`` (placeholder when the variable is unset).
+CUSTOM_PROVIDER_NAME = "custom_endpoint"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
 LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1"
 
@@ -120,9 +126,9 @@ def build_mcp_entry(route: Mapping[str, Any], env_names: set[str] | frozenset[st
     local-command: ``command`` / ``args`` from the page's command text, and an ``env:`` map that names
     every secret env var (and every non-secret one the user supplied a value for) as ``NAME: "${NAME}"``,
     because stdio children inherit ONLY listed variables (T0 answer 4).
-    remote-url: ``url`` plus ``headers`` whose values are ``${NAME}``. A header's env var is
-    ``auth.header_env[header]`` or the header name itself; a header with no supplied value is
-    omitted (an unset ``${NAME}`` in a remote header makes Hermes fail closed at connect).
+    remote-url: ``url`` plus ``headers`` whose values are ``${NAME}`` for EVERY listed header. A header's
+    env var is ``auth.header_env[header]`` or the header name itself. A header is never omitted: an
+    unset ``${NAME}`` in a remote header makes Hermes fail closed at connect, naming the variable.
     """
     kind = route.get("kind")
     auth = route.get("auth") or {}
@@ -155,8 +161,7 @@ def build_mcp_entry(route: Mapping[str, Any], env_names: set[str] | frozenset[st
                 raise ValueError("invalid header name in route")
             var = header_env.get(header, header)
             _check_env_name(var)
-            if var in env_names or header in header_env:
-                headers[header] = "${" + var + "}"
+            headers[header] = "${" + var + "}"  # always a reference; an unset one fails closed in Hermes
         if headers:
             entry["headers"] = headers
         return entry
@@ -176,10 +181,14 @@ def _provider_settings(ai: AiChoice | None) -> list[tuple[str, str]]:
     if kind == "openrouter":
         return [("model.provider", "openrouter")]
     if kind == "custom":
-        out = [("model.provider", "custom"), ("model.base_url", ai.ref)]
+        base = f"providers.{CUSTOM_PROVIDER_NAME}"
+        out = [("model.provider", CUSTOM_PROVIDER_NAME), (f"{base}.name", CUSTOM_PROVIDER_NAME),
+               (f"{base}.base_url", ai.ref)]
         if ai.key_env:
-            out.append(("model.key_env", ai.key_env))
+            out.append((f"{base}.key_env", ai.key_env))
         return out
+    # Local servers need no key: bare ``custom`` + a loopback ``model.base_url`` resolves with the
+    # no-key placeholder (VERIFIED the same way on v0.23.1 for both ports).
     if kind == "ollama":
         return [("model.provider", "custom"), ("model.base_url", OLLAMA_BASE_URL)]
     if kind == "lm-studio":
@@ -225,18 +234,31 @@ def _validate_plan(plan: WritePlan) -> dict | None:
 # ------------------------------------------------------------------ reports
 
 def _report(text: str, plan_values: list[str]) -> str:
-    return redact_patterns(scrub(text, plan_values))
+    # Platform.run decodes with universal newlines, so a value containing CR comes back with LF:
+    # scrub the newline-translated form of every value as well as the original.
+    forms = set(plan_values)
+    for v in plan_values:
+        forms.add(v.replace("\r\n", "\n").replace("\r", "\n"))
+    return redact_patterns(scrub(text, forms))
 
 
-def _tail(text: str) -> str:
+def _tail(text: str, plan_values: list[str]) -> str:
+    """Scrub and redact the RAW text first, only then normalize whitespace and truncate, then run
+    the result through scrub/redact once more. Normalizing or cutting first would change a secret's
+    form (so scrub misses it) or leave a prefix of it."""
+    text = _report(text, plan_values)
     text = " ".join(text.split())
-    return text[:_REPORT_LIMIT] + ("..." if len(text) > _REPORT_LIMIT else "")
+    text = text[:_REPORT_LIMIT] + ("..." if len(text) > _REPORT_LIMIT else "")
+    return _report(text, plan_values)
 
 
-def _hermes_failure(what: str, res: RunResult) -> _StepError:
+def _hermes_failure(what: str, res: RunResult, plan_values: list[str]) -> _StepError:
     if res.timed_out:
         return _StepError(f"{what}: hermes timed out")
-    detail = _tail((res.stderr or "") + " " + (res.stdout or ""))
+    # each stream separately and raw: a secret never spans the stderr/stdout boundary
+    detail = " ".join(part for part in (_report(res.stderr or "", plan_values),
+                                        _report(res.stdout or "", plan_values)) if part)
+    detail = _tail(detail, plan_values)
     return _StepError(f"{what}: hermes exited {res.returncode}" + (f": {detail}" if detail.strip() else ""))
 
 
@@ -264,6 +286,27 @@ def _atomic_write_text(path: Path, text: str, mode: int) -> None:
         except OSError:
             pass
         raise
+
+
+MARKER_NAME = ".trading-agent-run"
+
+
+def _write_marker(pdir: Path, run_id: str) -> None:
+    """Ownership proof: a random run id inside the profile dir, 0600. Rollback requires it."""
+    marker = pdir / MARKER_NAME
+    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(run_id + "\n")
+
+
+def _marker_matches(pdir: Path, run_id: str) -> bool:
+    marker = pdir / MARKER_NAME
+    try:
+        if not run_id or marker.is_symlink() or not marker.is_file():
+            return False
+        return marker.read_text(encoding="utf-8").strip() == run_id
+    except OSError:
+        return False
 
 
 def _add_mcp_server(pdir: Path, name: str, entry: dict) -> None:
@@ -310,6 +353,7 @@ def write_profile(plan: WritePlan, *, hermes: HermesCli, source_dir: Path,
         ai_choice={"kind": plan.ai.kind, "ref": plan.ai.ref} if plan.ai else None,
         broker={"slug": plan.broker.slug, "route_id": plan.broker.route_id} if plan.broker else None,
         skills=list(plan.skills),
+        run_id=_stdlib_secrets.token_hex(16),
     )
     values = [v for v in plan.env_values.values()]
     failure: str | None = None
@@ -317,24 +361,26 @@ def write_profile(plan: WritePlan, *, hermes: HermesCli, source_dir: Path,
     try:
         _run_steps(plan, mcp_entry, receipt, hermes, pdir, Path(source_dir), store_factory)
     except _StepError as e:
-        failure = str(e)
+        failure = str(e)  # built from already scrubbed text
     except ForbiddenHermesArgs:
         failure = "internal error: a forbidden hermes argument was requested"
     except Exception as e:  # noqa: BLE001 - every failure after install must roll back
-        failure = f"{type(e).__name__}: {e}"
+        failure = f"{type(e).__name__}: {_tail(str(e), values)}"
     except BaseException as e:  # KeyboardInterrupt etc: roll back, then let it propagate
         interrupt = e
     if failure is None and interrupt is None:
         return receipt
 
-    problems = _rollback_collect(receipt, hermes, store_factory, pdir)
+    ran = copy.deepcopy(receipt)  # what ran, for the caller; the live receipt is cleared by rollback
+    acted, problems = _rollback_collect(receipt, hermes, store_factory, pdir)
     if interrupt is not None:
         raise interrupt
-    step = receipt.steps_done[-1] if receipt.steps_done else "start"
+    step = ran.steps_done[-1] if ran.steps_done else "start"
     text = f"setup failed after step '{step}': {failure}"
-    if "install" in receipt.steps_done:
-        text += "; rolled back" if not problems else f"; rollback incomplete ({'; '.join(problems)})"
-    raise WriteError(_report(text, values), receipt) from None
+    if "install" in ran.steps_done:
+        text += "; rolled back" if acted and not problems else (
+            f"; rollback incomplete ({'; '.join(problems)})" if problems else "; nothing rolled back (ownership not proven)")
+    raise WriteError(_report(text, values), ran) from None
 
 
 def _run_steps(plan: WritePlan, mcp_entry: dict | None, receipt: Receipt, hermes: HermesCli, pdir: Path,
@@ -345,16 +391,20 @@ def _run_steps(plan: WritePlan, mcp_entry: dict | None, receipt: Receipt, hermes
     # 2. install, then VERIFY (exit 0 alone proves nothing: "Install cancelled." exits 0)
     res = hermes.profile_install(source_dir, name)
     out = res.stdout or ""
+    values = list(plan.env_values.values())
     if res.returncode != 0 or res.timed_out:
-        if "already exists" not in out and pdir.is_dir():
-            receipt.created_paths.append(str(pdir))  # a half-made dir we verified absent a moment ago
+        if "already exists" not in out and pdir.is_dir() and not pdir.is_symlink():
+            # a half-made dir we verified absent a moment ago: claim it so rollback can remove it
+            _write_marker(pdir, receipt.run_id)
+            receipt.created_paths.append(str(pdir))
             receipt.steps_done.append("install")
-        raise _hermes_failure("install", res)
+        raise _hermes_failure("install", res, values)
     m = _PROFILE_PATH_RE.search(out)
     if m and os.path.realpath(m.group(1)) != os.path.realpath(pdir):
         raise _StepError("install: hermes reported a different profile path than expected; left untouched")
     if not pdir.is_dir() or pdir.is_symlink():
         raise _StepError("install: hermes exited 0 but the profile directory does not exist")
+    _write_marker(pdir, receipt.run_id)
     receipt.created_paths.append(str(pdir))
     receipt.steps_done.append("install")
     receipt.save(platform)
@@ -364,7 +414,7 @@ def _run_steps(plan: WritePlan, mcp_entry: dict | None, receipt: Receipt, hermes
     for key, value in settings:
         res = hermes.config_set(name, key, value)
         if res.returncode != 0 or res.timed_out:
-            raise _hermes_failure(f"config set {key}", res)
+            raise _hermes_failure(f"config set {key}", res, values)
     receipt.created_paths.append(str(pdir / "config.yaml"))
     receipt.steps_done.append("config")
     receipt.save(platform)
@@ -395,18 +445,23 @@ def _run_steps(plan: WritePlan, mcp_entry: dict | None, receipt: Receipt, hermes
 # ------------------------------------------------------------------ rollback
 
 def _rollback_collect(receipt: Receipt, hermes: HermesCli, store_factory: Callable[[Path], SecretStore],
-                      pdir: Path) -> list[str]:
-    """Undo what RECEIPT says this run created. Returns short, value-free problem notes."""
+                      pdir: Path) -> tuple[bool, list[str]]:
+    """Undo what RECEIPT says this run created. Returns (acted, short value-free problem notes).
+
+    Ownership is proven by the marker file in the profile dir matching the receipt's run id; without
+    it (a recreated profile, a tampered receipt, a pre-existing profile) nothing is touched."""
     problems: list[str] = []
     platform = hermes.platform
     if "install" not in receipt.steps_done:
-        return problems  # we never created anything: touch nothing
+        return False, problems  # we never created anything: touch nothing
 
     root = Path(os.path.realpath(pdir.parent))
-    owns_dir = (not pdir.is_symlink() and pdir.is_dir() and str(pdir) in receipt.created_paths
-                and Path(os.path.realpath(pdir)) == root / pdir.name and root.name == "profiles")
+    owned = (pdir.is_dir() and not pdir.is_symlink() and root.name == "profiles"
+             and Path(os.path.realpath(pdir)) == root / pdir.name and _marker_matches(pdir, receipt.run_id))
+    if not owned:
+        return False, problems
 
-    if pdir.is_dir() and not pdir.is_symlink() and receipt.env_names_written:
+    if receipt.env_names_written:
         try:
             store = store_factory(pdir)
             for env_name in receipt.env_names_written:
@@ -417,43 +472,38 @@ def _rollback_collect(receipt: Receipt, hermes: HermesCli, store_factory: Callab
         except Exception as e:  # noqa: BLE001
             problems.append(f"could not open the secret store ({type(e).__name__})")
 
-    if owns_dir:
-        delete_note = None
+    delete_note = None
+    try:
+        res = hermes.profile_delete(receipt.profile_name)
+        if res.returncode != 0 or res.timed_out:
+            delete_note = "hermes profile delete failed"
+    except Exception as e:  # noqa: BLE001
+        delete_note = f"hermes profile delete raised {type(e).__name__}"
+    if pdir.exists():
+        # Fallback, only for the exact directory this run proved it owns, never a symlink.
         try:
-            res = hermes.profile_delete(receipt.profile_name)
-            if res.returncode != 0 or res.timed_out:
-                delete_note = "hermes profile delete failed"
-        except Exception as e:  # noqa: BLE001
-            delete_note = f"hermes profile delete raised {type(e).__name__}"
-        if pdir.exists():
-            # Fallback, only for the exact directory this run created, never a symlink.
-            try:
-                if not pdir.is_symlink() and Path(os.path.realpath(pdir)) == root / pdir.name:
-                    shutil.rmtree(pdir)
-            except OSError as e:
-                problems.append(f"could not remove profile directory ({type(e).__name__})")
-        if pdir.exists() and delete_note:
-            problems.append(delete_note)
-    elif pdir.is_dir() and not pdir.is_symlink():
-        # Receipt does not list the profile dir itself: remove only plain files it lists inside it.
-        for p in receipt.created_paths:
-            path = Path(p)
-            if path == pdir or path.is_symlink() or not path.is_file() or not _inside(path, pdir):
-                continue
-            try:
-                path.unlink()
-            except OSError as e:
-                problems.append(f"could not remove a listed file ({type(e).__name__})")
+            if not pdir.is_symlink() and Path(os.path.realpath(pdir)) == root / pdir.name:
+                shutil.rmtree(pdir)
+        except OSError as e:
+            problems.append(f"could not remove profile directory ({type(e).__name__})")
+    if pdir.exists() and delete_note:
+        problems.append(delete_note)
 
-    receipt.remove_file(platform)
-    return problems
+    if not problems:
+        receipt.remove_file(platform)  # only if the saved receipt carries this run id
+        receipt.steps_done.clear()
+        receipt.created_paths.clear()
+        receipt.env_names_written.clear()
+    return True, problems
 
 
-def rollback(receipt: Receipt, *, hermes: HermesCli, store_factory: Callable[[Path], SecretStore]) -> None:
-    """Remove what this receipt created. Safe to call twice. Never touches another profile,
+def rollback(receipt: Receipt, *, hermes: HermesCli, store_factory: Callable[[Path], SecretStore]) -> bool:
+    """Remove what this receipt created. Returns True if it acted, False if it did nothing because
+    ownership of the profile could not be proven. Safe to call twice. Never touches another profile,
     the default profile, a symlink target, or anything outside the profile directory."""
     validate_profile_name(receipt.profile_name)
     pdir = hermes.profile_dir(receipt.profile_name)
-    problems = _rollback_collect(receipt, hermes, store_factory, pdir)
+    acted, problems = _rollback_collect(receipt, hermes, store_factory, pdir)
     if problems:
         raise WriteError(_report("rollback incomplete: " + "; ".join(problems), []), receipt)
+    return acted

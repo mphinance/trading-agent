@@ -96,8 +96,8 @@ class Env:
     def pdir(self, name="trader") -> Path:
         return self.hermes_home / "profiles" / name
 
-    def receipt_path(self) -> Path:
-        return self.config_home / "trading-agent" / "receipt.json"
+    def receipt_path(self, name="trader") -> Path:
+        return self.config_home / "trading-agent" / "receipts" / f"{name}.json"
 
     def snapshot(self) -> dict[str, bytes | None]:
         out: dict[str, bytes | None] = {}
@@ -304,9 +304,21 @@ def test_mcp_entry_remote_headers_use_references(env):
     assert dotenv_read(env.pdir() / ".env")["TRADIER_API_KEY"] == SECRET
 
 
-def test_remote_header_without_a_source_is_omitted():
-    entry = build_mcp_entry(REMOTE_ROUTE, {"TRADIER_API_KEY"})
-    assert entry["headers"] == {"API_KEY": "${TRADIER_API_KEY}"}
+def test_remote_headers_are_always_references_even_without_values():
+    entry = build_mcp_entry(REMOTE_ROUTE, set())
+    assert entry["headers"] == {"API_KEY": "${TRADIER_API_KEY}", "PAPER_TRADING": "${PAPER_TRADING}"}
+
+
+def test_tradier_shape_without_any_values_keeps_both_headers(env):
+    run_write(env, plan(broker=remote_broker(), env_values={}))
+    entry = read_cfg(env)["mcp_servers"]["tradier"]
+    assert entry["headers"] == {"API_KEY": "${TRADIER_API_KEY}", "PAPER_TRADING": "${PAPER_TRADING}"}
+    assert not (env.pdir() / ".env").exists()
+
+
+def test_remote_header_defaults_var_to_header_name():
+    route = {"kind": "remote-url", "url": "https://h.example/mcp", "auth": {"headers": ["X_TOKEN"]}}
+    assert build_mcp_entry(route, set())["headers"] == {"X_TOKEN": "${X_TOKEN}"}
 
 
 def test_build_mcp_entry_rejects_bad_routes():
@@ -429,7 +441,7 @@ def test_receipt_saved_after_each_step_and_holds_no_value(env):
     assert final["ai_choice"] == {"kind": "openrouter", "ref": ""}
     assert SECRET not in env.receipt_path().read_text()
     assert r.steps_done == final["steps_done"]
-    assert Receipt.load(env.platform).profile_name == "trader"
+    assert Receipt.load(env.platform, "trader").profile_name == "trader"
 
 
 def test_receipt_survives_a_crash_between_steps(env):
@@ -460,10 +472,11 @@ def test_writes_only_into_new_profile(env):
     pdir = str(env.pdir())
     rpath = str(env.receipt_path())
     receipt_dir = str(env.receipt_path().parent)
+    receipt_root = str(env.receipt_path().parent.parent)
     changed = {k for k in set(pre) | set(post) if pre.get(k, "ABSENT") != post.get(k, "ABSENT")}
     assert changed
     for k in changed:
-        assert k == pdir or k.startswith(pdir + os.sep) or k == rpath or k == receipt_dir, k
+        assert k == pdir or k.startswith(pdir + os.sep) or k == rpath or k == receipt_dir or k == receipt_root, k
     assert (env.hermes_home / "config.yaml").read_text() == "global: 1\n"
     assert (other / "f").read_text() == "x"
 
@@ -474,23 +487,36 @@ def calls_config_set(env):
     return [c for c in env.calls() if c[:1] == ["-p"] and c[2:4] == ["config", "set"]]
 
 
-@pytest.mark.parametrize("ai,expected", [
-    (AiChoice("none", ""), {}),
-    (AiChoice("openrouter", ""), {"provider": "openrouter"}),
+LOCAL = lambda url: ({"provider": "custom", "base_url": url}, None)  # noqa: E731
+
+
+@pytest.mark.parametrize("ai,model,providers,keys", [
+    (AiChoice("none", ""), {}, None, []),
+    (AiChoice("openrouter", ""), {"provider": "openrouter"}, None, ["model.provider"]),
     (AiChoice("custom", "https://api.venice.ai/api/v1", "VENICE_API_KEY"),
-     {"provider": "custom", "base_url": "https://api.venice.ai/api/v1", "key_env": "VENICE_API_KEY"}),
+     {"provider": "custom_endpoint"},
+     {"custom_endpoint": {"name": "custom_endpoint", "base_url": "https://api.venice.ai/api/v1",
+                          "key_env": "VENICE_API_KEY"}},
+     ["model.provider", "providers.custom_endpoint.name", "providers.custom_endpoint.base_url",
+      "providers.custom_endpoint.key_env"]),
     (AiChoice("custom", "https://api.openai.com/v1", ""),
-     {"provider": "custom", "base_url": "https://api.openai.com/v1"}),
-    (AiChoice("ollama", ""), {"provider": "custom", "base_url": "http://127.0.0.1:11434/v1"}),
-    (AiChoice("lm-studio", ""), {"provider": "custom", "base_url": "http://127.0.0.1:1234/v1"}),
+     {"provider": "custom_endpoint"},
+     {"custom_endpoint": {"name": "custom_endpoint", "base_url": "https://api.openai.com/v1"}},
+     ["model.provider", "providers.custom_endpoint.name", "providers.custom_endpoint.base_url"]),
+    (AiChoice("ollama", ""), {"provider": "custom", "base_url": "http://127.0.0.1:11434/v1"}, None,
+     ["model.provider", "model.base_url"]),
+    (AiChoice("lm-studio", ""), {"provider": "custom", "base_url": "http://127.0.0.1:1234/v1"}, None,
+     ["model.provider", "model.base_url"]),
 ])
-def test_provider_config_keys(env, ai, expected):
+def test_provider_config_keys(env, ai, model, providers, keys):
     run_write(env, plan(ai=ai))
     cfg = read_cfg(env)
-    assert cfg["model"] == expected or (expected == {} and cfg.get("model") in ({}, None))
-    keys = [c[4] for c in calls_config_set(env)]
-    assert keys[0] == "auth.adopt_external_logins"
-    assert [k for k in keys[1:]] == [f"model.{k}" for k in expected]
+    assert (cfg.get("model") or {}) == model
+    assert cfg.get("providers") == providers
+    assert "key_env" not in (cfg.get("model") or {})
+    got = [c[4] for c in calls_config_set(env)]
+    assert got[0] == "auth.adopt_external_logins"
+    assert got[1:] == keys
     assert cfg["auth"]["adopt_external_logins"] is False
 
 
@@ -571,28 +597,22 @@ def test_rollback_twice_harmless_and_never_deletes_outside(env):
     assert (sibling / "keep").read_text() == "sibling"
 
 
-def test_rollback_of_listed_files_skips_symlinks_and_outside(env, tmp_path):
-    r = run_write(env, plan())
-    outside = env.root / "o.txt"
-    outside.write_text("o")
-    (env.pdir() / "l").symlink_to(outside)
-    partial = Receipt(profile_name="trader", created_paths=[str(env.pdir() / "l"), str(outside),
-                                                            str(env.pdir() / "SOUL.md")],
-                      env_names_written=[], steps_done=["install"])
-    rollback(partial, hermes=env.hermes, store_factory=env.store_factory)
-    assert outside.read_text() == "o"
-    assert (env.pdir() / "l").is_symlink()          # symlink entries are never followed or removed
-    assert not (env.pdir() / "SOUL.md").exists()    # a plain file inside the profile dir was removed
-    assert env.pdir().is_dir()                      # profile dir itself not listed: left alone
-
-
 def test_rollback_removes_only_written_env_names(env):
     r = run_write(env, plan(env_values={"A_KEY": "1", "B_KEY": "2"}))
-    (env.pdir() / ".env").write_text((env.pdir() / ".env").read_text() + "FOREIGN=keep\n")
-    partial = Receipt("trader", [], ["A_KEY"], ["install", "secrets"])
-    rollback(partial, hermes=env.hermes, store_factory=env.store_factory)
-    got = dotenv_read(env.pdir() / ".env")
-    assert "A_KEY" not in got and got["B_KEY"] == "2" and got["FOREIGN"] == "keep"
+    removed = []
+
+    class Spy:
+        def __init__(self, inner): self._i = inner
+        def set(self, n, v): self._i.set(n, v)
+        def exists(self, n): return self._i.exists(n)
+        def remove(self, n):
+            removed.append(n)
+            self._i.remove(n)
+
+    partial = Receipt("trader", [], ["A_KEY"], ["install", "secrets"], run_id=r.run_id)
+    rollback(partial, hermes=env.hermes, store_factory=lambda d: Spy(env.store_factory(d)))
+    assert removed == ["A_KEY"]
+    assert not env.pdir().exists()
 
 
 def test_rollback_without_install_step_touches_nothing(env):
@@ -615,29 +635,158 @@ def test_rollback_refuses_unsafe_name(env):
         rollback(Receipt("../x", [], [], ["install"]), hermes=env.hermes, store_factory=env.store_factory)
 
 
-def test_rollback_keeps_other_runs_receipt(env):
-    run_write(env, plan(name="alpha"))
-    stale = Receipt("beta", [], [], [])
-    rollback(stale, hermes=env.hermes, store_factory=env.store_factory)
-    assert json.loads(env.receipt_path().read_text())["profile_name"] == "alpha"
+def test_two_runs_for_different_names_keep_both_receipts(env):
+    ra = run_write(env, plan(name="alpha"))
+    rb = run_write(env, plan(name="beta"))
+    assert Receipt.list_receipts(env.platform) == ["alpha", "beta"]
+    assert env.receipt_path("alpha").exists() and env.receipt_path("beta").exists()
+    assert stat.S_IMODE(env.receipt_path("alpha").stat().st_mode) == 0o600
+    assert stat.S_IMODE(env.receipt_path("alpha").parent.stat().st_mode) == 0o700
+    rollback(ra, hermes=env.hermes, store_factory=env.store_factory)
+    assert Receipt.list_receipts(env.platform) == ["beta"]
+    assert env.pdir("beta").is_dir() and not env.pdir("alpha").exists()
+
+
+def test_retry_under_new_name_after_exists_keeps_earlier_receipt(env):
+    run_write(env, plan(name="first"))
+    with pytest.raises(ProfileExists):
+        run_write(env, plan(name="first"))
+    run_write(env, plan(name="second"))
+    assert Receipt.list_receipts(env.platform) == ["first", "second"]
 
 
 def test_receipt_roundtrip_and_validation(env):
     r = Receipt("trader", ["/a"], ["K"], ["install"], ai_choice={"kind": "none", "ref": ""},
-                broker={"slug": "x", "route_id": "y"}, skills=["s"])
+                broker={"slug": "x", "route_id": "y"}, skills=["s"], run_id="abc")
     r.save(env.platform)
-    assert Receipt.load(env.platform) == r
+    assert Receipt.load(env.platform, "trader") == r
     env.receipt_path().write_text("{not json")
     with pytest.raises(receipt_mod.ReceiptError):
-        Receipt.load(env.platform)
+        Receipt.load(env.platform, "trader")
     env.receipt_path().write_text(json.dumps({"profile_name": 1}))
     with pytest.raises(receipt_mod.ReceiptError):
-        Receipt.load(env.platform)
+        Receipt.load(env.platform, "trader")
     env.receipt_path().unlink()
-    assert Receipt.load(env.platform) is None
+    assert Receipt.load(env.platform, "trader") is None
+    with pytest.raises(ValueError):
+        Receipt.load(env.platform, "../evil")
 
 
 def test_receipt_save_is_atomic_no_tmp_left(env):
     Receipt("trader", [], [], []).save(env.platform)
-    leftovers = [p.name for p in env.receipt_path().parent.iterdir()]
-    assert leftovers == ["receipt.json"]
+    assert [p.name for p in env.receipt_path().parent.iterdir()] == ["trader.json"]
+
+
+# ---------------------------------------------------------------- C1: scrub before normalizing
+
+LEAKY = {
+    "newline": "AAAA1111\nBBBB2222\nCCCC3333",
+    "tab": "AAAA1111\tBBBB2222",
+    "double-space": "AAAA1111  BBBB2222   CCCC",
+    "cr": "AAAA1111\rBBBB2222\r\nCCCC3333",
+    "long": "Qx9" + "abcdefghij" * 71,                      # 713 chars, past the 600 limit
+    "straddle": "Zz7" + "klmnopqrst" * 20,                  # begins before the cut, ends after it
+}
+
+
+def _echo_variants(value):
+    return [value, repr(value), json.dumps(value)]
+
+
+@pytest.mark.parametrize("kind", list(LEAKY))
+@pytest.mark.parametrize("stream", ["stderr", "stdout", "both"])
+def test_report_never_contains_any_part_of_a_secret(env, kind, stream):
+    value = LEAKY[kind]
+    filler = "x " * 280 if kind == "straddle" else ""       # pushes the value across the 600 char boundary
+    text = filler + " ".join(_echo_variants(value)) + " tail"
+    kw = {}
+    if stream in ("stderr", "both"):
+        kw["fail_stderr"] = text
+    if stream in ("stdout", "both"):
+        kw["fail_stdout"] = text
+    env.set_control(fail_match="config set model.provider", **kw)
+    with pytest.raises(WriteError) as ei:
+        run_write(env, plan(ai=AiChoice("openrouter", ""), env_values={"OPENROUTER_API_KEY": value}))
+    rep = ei.value.report
+    flat = " ".join(rep.split())
+    for variant in (value, " ".join(value.split())):
+        for i in range(0, max(1, len(variant) - 7)):
+            assert variant[i:i + 8] not in rep and variant[i:i + 8] not in flat, (kind, stream, i)
+    assert HIDDEN in rep
+    assert not env.pdir().exists()
+
+
+def test_exception_text_with_secret_is_scrubbed_too(env):
+    value = "Ab1\n" + "k" * 700
+    with pytest.raises(WriteError) as ei:
+        write_profile(plan(env_values={"A_KEY": value}), hermes=env.hermes, source_dir=env.dist,
+                      store_factory=lambda d: BoomStore(value))
+    for i in range(0, len(value) - 7, 7):
+        assert value[i:i + 8] not in ei.value.report
+
+
+# ---------------------------------------------------------------- I1: ownership marker
+
+def test_marker_written_0600_with_run_id_and_in_receipt(env):
+    r = run_write(env, plan())
+    marker = env.pdir() / ".trading-agent-run"
+    assert r.run_id and len(r.run_id) == 32
+    assert marker.read_text().strip() == r.run_id
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    assert json.loads(env.receipt_path().read_text())["run_id"] == r.run_id
+
+
+def test_old_receipt_cannot_delete_a_recreated_profile(env):
+    old = run_write(env, plan())
+    rollback(old, hermes=env.hermes, store_factory=env.store_factory)
+    assert not env.pdir().exists()
+    new = run_write(env, plan())
+    (env.pdir() / "user-work.txt").write_text("precious")
+    assert old.run_id != new.run_id
+    stale = Receipt("trader", [str(env.pdir())], [], ["install", "secrets"], run_id=old.run_id)
+    assert rollback(stale, hermes=env.hermes, store_factory=env.store_factory) is False
+    assert (env.pdir() / "user-work.txt").read_text() == "precious"
+    assert env.receipt_path().exists()
+    assert json.loads(env.receipt_path().read_text())["run_id"] == new.run_id
+    assert not any(c[:2] == ["profile", "delete"] for c in env.calls()[-3:])
+
+
+def test_old_receipt_object_second_rollback_is_inert_after_recreate(env):
+    old = run_write(env, plan(env_values={"A_KEY": "1"}))
+    rollback(old, hermes=env.hermes, store_factory=env.store_factory)
+    assert old.steps_done == [] and old.created_paths == [] and old.env_names_written == []
+    new = run_write(env, plan(env_values={"A_KEY": "2"}))
+    rollback(old, hermes=env.hermes, store_factory=env.store_factory)
+    assert env.pdir().is_dir() and dotenv_read(env.pdir() / ".env")["A_KEY"] == "2"
+    assert new.run_id and env.receipt_path().exists()
+
+
+def test_tampered_receipt_naming_another_profile_does_nothing(env):
+    run_write(env, plan(name="victim", env_values={"A_KEY": "1"}))
+    (env.pdir("victim") / "work.txt").write_text("keep")
+    run_write(env, plan(name="mine"))
+    mine = Receipt.load(env.platform, "mine")
+    forged = Receipt("victim", [str(env.pdir("victim"))], ["A_KEY"], ["install"], run_id=mine.run_id)
+    assert rollback(forged, hermes=env.hermes, store_factory=env.store_factory) is False
+    forged2 = Receipt("victim", [str(env.pdir("victim"))], ["A_KEY"], ["install"], run_id="")
+    assert rollback(forged2, hermes=env.hermes, store_factory=env.store_factory) is False
+    assert (env.pdir("victim") / "work.txt").read_text() == "keep"
+    assert dotenv_read(env.pdir("victim") / ".env")["A_KEY"] == "1"
+    assert env.receipt_path("victim").exists()
+
+
+def test_symlinked_marker_is_not_proof(env):
+    r = run_write(env, plan())
+    marker = env.pdir() / ".trading-agent-run"
+    real = env.root / "elsewhere.txt"
+    real.write_text(r.run_id + "\n")
+    marker.unlink()
+    marker.symlink_to(real)
+    assert rollback(r, hermes=env.hermes, store_factory=env.store_factory) is False
+    assert env.pdir().is_dir()
+
+
+def test_rollback_returns_true_when_it_acted(env):
+    r = run_write(env, plan())
+    assert rollback(r, hermes=env.hermes, store_factory=env.store_factory) is True
+    assert not env.receipt_path().exists()
