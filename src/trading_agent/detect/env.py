@@ -58,12 +58,14 @@ def _is_set(environ: Mapping[str, str], name: str) -> bool:
 def detect_env(platform: Platform, catalog: Sequence[CredentialSpec]) -> list[Finding]:
     """One Finding per catalog name. Presence only; values never leave _is_set."""
     environ = platform.environ()
+    missing = [n for spec in catalog for n in spec.names if not _is_set(environ, n)]
+    in_shell = platform.login_shell_vars(missing) if missing else frozenset()
     findings: list[Finding] = []
     for spec in catalog:
         for name in spec.names:
             if _is_set(environ, name):
                 state, where = "present", "environment variable"
-            elif platform.login_shell_has_var(name):
+            elif name in in_shell:
                 state, where = "present", "login shell environment"
             else:
                 state, where = "absent", "environment variable"

@@ -19,7 +19,6 @@ dev = ["pytest>=8"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trading_agent"]
-include = ["src/trading_agent/**/*.py", "src/trading_agent/data/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

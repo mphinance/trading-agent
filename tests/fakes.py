@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from trading_agent.platform import RunResult, shell_has_var
+from trading_agent.platform import RunResult, shell_has_var, shell_vars
 
 
 class FakePlatform:
@@ -30,6 +30,9 @@ class FakePlatform:
 
     def login_shell_has_var(self, name: str) -> bool:
         return shell_has_var(self, name)
+
+    def login_shell_vars(self, names: Sequence[str]) -> frozenset[str]:
+        return shell_vars(self, names)
 
     def run(self, argv: Sequence[str], *, timeout: float,
             env: Mapping[str, str] | None = None, stdin: str | None = None) -> RunResult:
