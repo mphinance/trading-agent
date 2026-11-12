@@ -131,3 +131,21 @@ def test_only_the_exact_t0_message_counts_as_not_bootstrapped(tmp_path, text):
     with pytest.raises(HermesUnavailable) as e:
         cli(tmp_path, RunResult(1, "", text, False)).version()
     assert not isinstance(e.value, HermesNotBootstrapped)
+
+
+# ---- round 3: parsable versions anywhere, decoys, ambiguity
+
+def test_a_bare_v_version_in_the_output_beats_the_bootstrap_signature(tmp_path):
+    line = cli(tmp_path, RunResult(1, "v0.1.0\n" + T0 + "\n", "", False)).version()   # below the pin: not "ok, continue"
+    assert parse_hermes_version(line) == ((0, 1, 0), False)
+
+
+@pytest.mark.parametrize("stdout,stderr,expected", [
+    ("a newer hermes 9.9.9 is available\nHermes Agent v0.20.0\n", "", ((0, 20, 0), False)),
+    ("v0.20.0\n", "hermes 9.9.9 recommended\n", ((0, 20, 0), False)),                   # stdout before stderr
+    ("Hermes Agent v0.20.0\nHermes Agent v0.23.1\n", "", None),                           # two banners disagree
+    ("Hermes Agent v0.20.0\nhermes 0.20.0 (git)\n", "", ((0, 20, 0), False)),             # same number twice
+])
+def test_decoys_and_ambiguity(tmp_path, stdout, stderr, expected):
+    line = cli(tmp_path, RunResult(0, stdout, stderr, False)).version()
+    assert parse_hermes_version(line) == expected

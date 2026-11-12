@@ -50,6 +50,35 @@ _NAMED_VERSION = re.compile(r"(?i)\bhermes(?:\s+agent)?\s+v?(\d+)\.(\d+)\.(\d+)(
 _V_VERSION = re.compile(r"(?<![\w.])v(\d+)\.(\d+)\.(\d+)([0-9A-Za-z.+_-]*)")
 
 
+_ANCHORED = re.compile(r"(?i)^\s*hermes(?:\s+agent)?\s+v?(\d+)\.(\d+)\.(\d+)")
+UNREADABLE_VERSION = "(the version output was ambiguous)"
+
+
+def _candidates(text: str) -> list[tuple[str, tuple[int, int, int]]]:
+    """(line, version) pairs from the best form present in TEXT: a line that BEGINS with Hermes (Agent), else a
+    mid-sentence mention next to the word hermes, else a bare ``v1.2.3``."""
+    for pattern in (_ANCHORED, _NAMED_VERSION, _V_VERSION):
+        found = []
+        for ln in text.splitlines():
+            m = pattern.search(ln)
+            if m:
+                found.append((ln.strip(), (int(m.group(1)), int(m.group(2)), int(m.group(3)))))
+        if found:
+            return found
+    return []
+
+
+def pick_version_line(stdout: str, stderr: str) -> str | None:
+    """The line that carries the version: stdout before stderr, a banner before a mention, and if the best
+    candidates disagree on the number the output is ambiguous (UNREADABLE_VERSION, so the caller asks).
+    None if no version can be read at all."""
+    for text in (stdout, stderr):
+        found = _candidates(text)
+        if found:
+            return found[0][0] if len({v for _, v in found}) == 1 else UNREADABLE_VERSION
+    return None
+
+
 def parse_hermes_version(text: str) -> tuple[tuple[int, int, int], bool] | None:
     """((major, minor, patch), is_prerelease) from a ``hermes --version`` line, or None if unreadable.
 
@@ -115,21 +144,20 @@ class HermesCli:
     # ---- queries
 
     def version(self) -> str:
-        """The line of ``hermes --version`` that names the version: a token next to the word hermes on ANY line
-        first, then a bare ``v1.2.3``, else the first line."""
+        """The line of ``hermes --version`` that carries the version (see ``pick_version_line``), else the first line."""
         res = self.run(["--version"], timeout=CALL_TIMEOUT)
         if res.timed_out:
             raise HermesUnavailable("hermes --version failed")
-        text = f"{res.stdout}\n{res.stderr}"
+        text = f"{res.stdout}\n{res.stderr}".lower()
+        picked = pick_version_line(res.stdout, res.stderr)
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
-        named = next((ln for ln in text.splitlines() if _NAMED_VERSION.search(ln)), None)
-        if res.returncode != 0 and _T0_SIGNATURE.search(text.lower()) and "corrupt" not in text.lower():
-            if named is None:
+        if res.returncode != 0 and _T0_SIGNATURE.search(text) and "corrupt" not in text:
+            if picked is None:
                 raise HermesNotBootstrapped("hermes found, data root not initialized yet")
-            return named.strip()    # a version was printed too: let the caller enforce the pin
+            return picked    # a version was printed too (any form): let the caller enforce the pin
         if res.returncode != 0 or not lines:
             raise HermesUnavailable("hermes --version failed")
-        return named.strip() if named else next((ln for ln in lines if _V_VERSION.search(ln)), lines[0])
+        return picked if picked is not None else lines[0]
 
     def profile_exists(self, name: str) -> bool:
         """True if the profile directory exists OR ``hermes profile list`` names it.
