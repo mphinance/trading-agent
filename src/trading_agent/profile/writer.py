@@ -259,13 +259,14 @@ def _clean(raw: str, plan_values: list[str]) -> str:
     longer than the cap, only the last CAP + CONTEXT chars are pattern-redacted, then the first CONTEXT
     chars and the leading partial token (up to the first whitespace) are dropped, so every surviving
     token kept the context redact_patterns needs (``Bearer ``, a URL scheme, ``?api_key=``). A cut
-    window with no whitespace at all is unstructured: fail closed and show nothing of it."""
+    window with no whitespace at all, or with nothing but whitespace after its first whitespace (one
+    long line ending in a newline), is unstructured: fail closed and say so instead of showing nothing."""
     text = _scrub_known(raw, plan_values)
     if len(text) <= _RAW_CAP + _CONTEXT:
         return redact_patterns(text)
     text = redact_patterns(text[-(_RAW_CAP + _CONTEXT):])[_CONTEXT:]
     m = re.search(r"\s", text)
-    if m is None:
+    if m is None or not text[m.end():].strip():
         return _UNSTRUCTURED
     return text[m.end():]
 

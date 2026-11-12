@@ -886,3 +886,34 @@ def test_spaceless_blob_fails_closed(env, shape):
         run_write(env, plan())
     assert "output omitted" in ei.value.report
     assert "Ab1Ab1" not in ei.value.report and "token" not in ei.value.report.replace("config set", "")
+
+
+# ---------------------------------------------------------------- round 4: the notice survives a trailing newline
+
+NL_SECRET = "sk-NlTrailAbCdEfGhIjKlMnOp"
+ONE_LINE_BLOBS = {
+    # a 20 KB compact JSON line with a key near its end, and a 200 KB spaceless run with one inside
+    "json": '{"items":[' + '{"id":17,"name":"widget"},' * 800 + '{"api_key":"' + NL_SECRET + '"}]}',
+    "dots": "a." * 100_000 + NL_SECRET + "." + "a." * 200,
+}
+
+
+@pytest.mark.parametrize("blob", list(ONE_LINE_BLOBS))
+@pytest.mark.parametrize("ending", ["\n", "\r\n", "\n\n"])
+def test_clean_one_long_line_ending_in_a_newline_is_unstructured(blob, ending):
+    from trading_agent.profile import writer as w
+    out = w._clean(ONE_LINE_BLOBS[blob] + ending, [])
+    assert out == w._UNSTRUCTURED
+    assert not any(win in out for win in _windows([NL_SECRET]))
+
+
+@pytest.mark.parametrize("blob", list(ONE_LINE_BLOBS))
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_report_keeps_the_unstructured_notice_when_output_ends_with_a_newline(env, blob, ending):
+    env.set_control(fail_match="config set auth", fail_stderr=ONE_LINE_BLOBS[blob] + ending)
+    with pytest.raises(WriteError) as ei:
+        run_write(env, plan())
+    rep = ei.value.report
+    assert "(output omitted: unstructured)" in rep
+    for win in _windows([NL_SECRET]):
+        assert win not in rep, win
