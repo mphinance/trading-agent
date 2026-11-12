@@ -145,3 +145,25 @@ def test_timeout_and_oserror_still_empty_even_with_stdout(tmp_path):
                         ).login_shell_vars(["A"]) == frozenset()
     assert FakePlatform(tmp_path, run_results=[RunResult(127, "", "boom", False)]
                         ).login_shell_vars(["A"]) == frozenset()
+
+
+def test_which_ignores_relative_and_empty_path_entries(tmp_path, monkeypatch):
+    import os
+    from trading_agent.platform import LinuxPlatform
+    planted = tmp_path / "cwd" / "hermes"
+    planted.parent.mkdir()
+    planted.write_text("#!/bin/sh\necho pwned\n")
+    planted.chmod(0o755)
+    good = tmp_path / "bin"
+    good.mkdir()
+    monkeypatch.chdir(planted.parent)
+    for path in (":/nonexistent", ".:/nonexistent", "/nonexistent::", "rel/dir:."):
+        monkeypatch.setenv("PATH", path)
+        assert LinuxPlatform().which("hermes") is None
+    ok = good / "hermes"
+    ok.write_text("#!/bin/sh\n")
+    ok.chmod(0o755)
+    monkeypatch.setenv("PATH", f".:{good}")
+    assert LinuxPlatform().which("hermes") == ok
+    monkeypatch.setenv("PATH", "")
+    assert LinuxPlatform().which("hermes") is None

@@ -1013,3 +1013,39 @@ def test_report_keeps_the_unstructured_notice_when_output_ends_with_a_newline(en
     assert "(output omitted: unstructured)" in rep
     for win in _windows([NL_SECRET]):
         assert win not in rep, win
+
+
+# ---------------------------------------------------------------- URL rules and receipt ownership
+
+@pytest.mark.parametrize("url", [
+    "http://example.com/v1", "http://192.168.1.5:9000/v1", "https://api.example.com/v1\u202e/evil",
+    "https://api.example.com/v1 x", "https://api.example.com/\u00e9", "https://" + "a" * 600 + ".com/v1",
+    "https://user:pw@api.example.com/v1", "ftp://x.test/v1", "https://x.test/v1?k=1", "https://x.test/v1\n"])
+def test_custom_base_url_rules_reject_without_echo(url):
+    from trading_agent.profile.writer import validate_ai_choice
+    with pytest.raises(ValueError) as e:
+        validate_ai_choice(AiChoice("custom", url))
+    assert url not in str(e.value)
+    with pytest.raises(ValueError):
+        build_mcp_entry({"kind": "remote-url", "url": url, "auth": {}}, frozenset())
+
+
+@pytest.mark.parametrize("url", ["https://api.example.com/v1", "http://127.0.0.1:9000/v1",
+                                 "http://localhost:8000/v1", "http://[::1]:8000/v1"])
+def test_custom_base_url_rules_accept(url):
+    from trading_agent.profile.writer import validate_ai_choice
+    validate_ai_choice(AiChoice("custom", url))
+    validate_ai_choice(AiChoice("ollama", ""))
+    validate_ai_choice(AiChoice("lm-studio", ""))
+
+
+def test_receipt_owns_profile_needs_dir_and_marker(env):
+    from trading_agent.profile.writer import receipt_owns_profile
+    r = run_write(env, plan(ai=AiChoice("none", "")))
+    assert receipt_owns_profile(r, env.hermes)
+    stale = Receipt(profile_name="trader", run_id="not-the-marker", steps_done=list(r.steps_done))
+    assert not receipt_owns_profile(stale, env.hermes)
+    shutil.rmtree(env.pdir())
+    assert not receipt_owns_profile(r, env.hermes)
+    env.pdir().mkdir(parents=True)          # recreated by someone else: no marker
+    assert not receipt_owns_profile(r, env.hermes)

@@ -81,7 +81,10 @@ class LinuxPlatform:
         return os.environ
 
     def which(self, name: str) -> Path | None:
-        found = shutil.which(name)
+        # An empty or relative PATH entry means "the current directory": a planted binary there must
+        # never be found, so only absolute entries are searched.
+        entries = [e for e in os.environ.get("PATH", "").split(os.pathsep) if e and os.path.isabs(e)]
+        found = shutil.which(name, path=os.pathsep.join(entries)) if entries else None
         return Path(found) if found else None
 
     def read_text(self, path: Path) -> str:

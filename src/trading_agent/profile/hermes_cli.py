@@ -40,7 +40,24 @@ class HermesNotBootstrapped(HermesUnavailable):
     ``hermes pm repair``"). The first ``profile install`` bootstraps it, so this is not a failure."""
 
 
-_NOT_BOOTSTRAPPED_MARKERS = ("pm repair", "no dependency environment")
+# The exact first-run text of a brand new HERMES_HOME (docs/spike/T0-results.md answer 2). It counts only with a
+# nonzero exit and never together with "corrupt" (a broken venv also mentions ``pm repair``).
+_T0_SIGNATURE = "no dependency environment is committed"
+
+_NAMED_VERSION = re.compile(r"(?i)\bhermes(?:\s+agent)?\s+v?(\d+)\.(\d+)\.(\d+)([0-9A-Za-z.+_-]*)")
+_V_VERSION = re.compile(r"(?<![\w.])v(\d+)\.(\d+)\.(\d+)([0-9A-Za-z.+_-]*)")
+
+
+def parse_hermes_version(text: str) -> tuple[tuple[int, int, int], bool] | None:
+    """((major, minor, patch), is_prerelease) from a ``hermes --version`` line, or None if unreadable.
+
+    Reads the number next to the word hermes (or a ``v`` prefix), never the first x.y.z in the line.
+    ``0.23.0+canary`` is a release; ``0.23.0rc1`` and ``0.23.0-rc1`` are pre-releases."""
+    m = _NAMED_VERSION.search(text) or _V_VERSION.search(text)
+    if m is None:
+        return None
+    suffix = m.group(4)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))), bool(suffix) and not suffix.startswith("+")
 
 
 def validate_profile_name(name: str) -> None:
@@ -92,16 +109,17 @@ class HermesCli:
     # ---- queries
 
     def version(self) -> str:
+        """The line of ``hermes --version`` that names the version (else the first line)."""
         res = self.run(["--version"], timeout=CALL_TIMEOUT)
-        lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if res.timed_out:
             raise HermesUnavailable("hermes --version failed")
         text = f"{res.stdout}\n{res.stderr}".lower()
-        if any(m in text for m in _NOT_BOOTSTRAPPED_MARKERS):
+        if res.returncode != 0 and _T0_SIGNATURE in text and "corrupt" not in text:
             raise HermesNotBootstrapped("hermes found, data root not initialized yet")
+        lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if res.returncode != 0 or not lines:
             raise HermesUnavailable("hermes --version failed")
-        return lines[0]
+        return next((ln for ln in lines if parse_hermes_version(ln) is not None), lines[0])
 
     def profile_exists(self, name: str) -> bool:
         """True if the profile directory exists OR ``hermes profile list`` names it.

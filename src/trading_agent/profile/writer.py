@@ -32,7 +32,7 @@ from trading_agent.platform import RunResult
 from trading_agent.secrets import SecretStore, check_secret, redact_patterns, scrub
 
 __all__ = ["AiChoice", "BrokerChoice", "WritePlan", "ProfileExists", "WriteError", "ForbiddenHermesArgs",
-           "build_mcp_entry", "write_profile", "rollback"]
+           "build_mcp_entry", "write_profile", "rollback", "validate_ai_choice", "receipt_owns_profile"]
 
 _NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
 _SERVER_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
@@ -103,8 +103,16 @@ def _check_env_name(name: str) -> None:
         raise ValueError("invalid environment variable name (expected [A-Z_][A-Z0-9_]*)")
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+URL_MAX = 512
+
+
 def _check_http_url(url: Any, *, what: str) -> str:
-    if not isinstance(url, str) or not url or re.search(r"\s", url):
+    """https, or http to loopback only. ASCII printable only (no whitespace, control or bidi characters),
+    at most 512 characters, no credentials, query or fragment. Messages never echo the URL."""
+    if not isinstance(url, str) or not url or len(url) > URL_MAX:
+        raise ValueError(f"{what}: invalid URL")
+    if any(c.isspace() or not c.isprintable() or ord(c) > 126 for c in url):
         raise ValueError(f"{what}: invalid URL")
     try:
         parts = urlsplit(url)
@@ -113,6 +121,8 @@ def _check_http_url(url: Any, *, what: str) -> str:
         raise ValueError(f"{what}: invalid URL") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError(f"{what}: URL must be http or https")
+    if parts.scheme == "http" and parts.hostname not in _LOOPBACK_HOSTS:
+        raise ValueError(f"{what}: plain http is only allowed to this computer (127.0.0.1, ::1, localhost)")
     if parts.username is not None or parts.password is not None:
         raise ValueError(f"{what}: URL must not carry credentials")
     if parts.query or parts.fragment:
@@ -196,7 +206,8 @@ def _provider_settings(ai: AiChoice | None) -> list[tuple[str, str]]:
     raise ValueError("unknown AI choice kind")
 
 
-def _validate_ai(ai: AiChoice | None) -> None:
+def validate_ai_choice(ai: AiChoice | None) -> None:
+    """Raises a value-free ValueError unless AI is something the writer can write."""
     if ai is None:
         return
     if ai.kind not in ("cli", "none", "openrouter", "custom", "ollama", "lm-studio"):
@@ -217,7 +228,7 @@ def _validate_ai(ai: AiChoice | None) -> None:
 def _validate_plan(plan: WritePlan) -> dict | None:
     """Everything that can be refused up front, before a single hermes process runs."""
     validate_profile_name(plan.profile_name)
-    _validate_ai(plan.ai)
+    validate_ai_choice(plan.ai)
     entry = None
     if plan.broker is not None:
         if not _SERVER_RE.fullmatch(plan.broker.slug or ""):
@@ -337,6 +348,16 @@ def _marker_matches(pdir: Path, run_id: str) -> bool:
             return False
         return marker.read_text(encoding="utf-8").strip() == run_id
     except OSError:
+        return False
+
+
+def receipt_owns_profile(receipt: Receipt, hermes: HermesCli) -> bool:
+    """True only if the profile directory exists (not a symlink) and carries this receipt's run id marker.
+    A stale receipt (the profile was deleted or recreated since) is not proof of anything."""
+    try:
+        pdir = hermes.profile_dir(receipt.profile_name)
+        return pdir.is_dir() and not pdir.is_symlink() and _marker_matches(pdir, receipt.run_id)
+    except (ValueError, OSError):
         return False
 
 
