@@ -190,7 +190,7 @@ def test_cli_env_and_timeouts(tmp_path):
 
 
 def test_cli_env_without_hermes_home_sets_none(tmp_path):
-    fp = FakePlatform(tmp_path, environ={"PATH": "/usr/bin"})
+    fp = FakePlatform(tmp_path, environ={"PATH": "/usr/bin"}, which_map={"hermes": "/opt/hermes"})
     HermesCli(fp).run(["profile", "list"], timeout=30)
     assert "HERMES_HOME" not in fp.run_envs[0]
 

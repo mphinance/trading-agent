@@ -940,6 +940,11 @@ class _Wizard(ValueMixin):
                                          store_factory=self.d.store_factory)
         except ProfileExists:
             return self._write_exists(plan.profile_name)
+        except HermesUnavailable:
+            self.go(State.REVIEW)
+            self.say(S.WRITE_FAILED_PLAIN.format(detail="I could not find Hermes on this computer. "
+                                                         "Install it (see the PRECHECK step), then try again."))
+            return self._write_failed()
         except WriteError as e:
             self.go(State.REVIEW)
             self.say(S.WRITE_FAILED.format(report=self.safe(e.report)))

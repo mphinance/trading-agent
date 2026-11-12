@@ -62,3 +62,53 @@ def test_parse_hermes_version(text, expected):
 def test_exit_zero_with_the_signature_text_is_just_unreadable_output_not_bootstrap(tmp_path):
     line = cli(tmp_path, RunResult(0, T0 + "\n", "", False)).version()
     assert parse_hermes_version(line) is None
+
+
+def test_run_never_falls_back_to_a_bare_hermes_when_the_lookup_finds_none(tmp_path, monkeypatch):
+    import os
+    import stat
+    from trading_agent.platform import LinuxPlatform
+    marker = tmp_path / "PLANTED-RAN"
+    planted = tmp_path / "cwd" / "hermes"
+    planted.parent.mkdir()
+    planted.write_text(f"#!/bin/sh\ntouch {marker}\necho 'Hermes Agent v0.23.1'\n")
+    planted.chmod(planted.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.chdir(planted.parent)
+    monkeypatch.setenv("PATH", ":/usr/bin:/bin")
+    cli = HermesCli(LinuxPlatform())
+    for call in (cli.version, lambda: cli.profile_exists("trader"), lambda: cli.profile_install(tmp_path, "trader"),
+                 lambda: cli.config_set("trader", "a.b", "c")):
+        with pytest.raises(HermesUnavailable):
+            call()
+    assert not marker.exists() and not os.path.exists(marker)
+
+
+def test_resume_at_review_then_write_never_runs_a_planted_hermes(tmp_path, monkeypatch):
+    """PRECHECK is skipped when resuming at REVIEW, so the choke point in run() is what protects WRITE."""
+    import stat
+    from fakes import ScriptedIO
+    from trading_agent.platform import LinuxPlatform
+    from trading_agent.wizard.flow import Deps, Detectors, run_wizard
+    from trading_agent.wizard.state import State, WizardState
+    marker = tmp_path / "PLANTED-RAN"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    (cwd / "hermes").write_text(f"#!/bin/sh\ntouch {marker}\n")
+    (cwd / "hermes").chmod(0o755)
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("PATH", ":/usr/bin:/bin")
+
+    class P(LinuxPlatform):
+        def config_home(self):
+            return tmp_path / "cfg"
+
+        def home(self):
+            return tmp_path / "home"
+    plat = P()
+    WizardState(State.REVIEW, {"profile_name": "trader", "ai.kind": "none", "skills.done": "1"}).save(plat)
+    deps = Deps(platform=plat, hermes=HermesCli(plat), detectors=Detectors(lambda: [], lambda e: [], lambda: [], lambda: []),
+                catalog=[], libraries=[], store_factory=lambda d: None, source_dir=tmp_path)
+    io = ScriptedIO(["do", "stop"])
+    assert run_wizard(io, deps) is None
+    assert not marker.exists()
+    assert "Setup did not finish" in "\n".join(io.said)

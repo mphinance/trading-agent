@@ -93,7 +93,11 @@ class HermesCli:
         args = [str(a) for a in args]
         check_args(args)
         exe = self.platform.which(self._binary)
-        argv = [str(exe) if exe else self._binary, *args]
+        if exe is None:
+            # Never fall back to the bare name: a subprocess would resolve it through PATH, including the
+            # empty or relative entries that Platform.which refuses (a planted ./hermes would run).
+            raise HermesUnavailable("hermes was not found on PATH")
+        argv = [str(exe), *args]
         environ = self.platform.environ()
         env = {k: environ[k] for k in _ENV_ALLOW if k in environ}
         return self.platform.run(argv, timeout=timeout, env=env)
