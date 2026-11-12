@@ -148,11 +148,26 @@ def test_listed_needs_license_and_source(tmp_path, field):
     load_libraries(write(tmp_path, [entry(**{field: "", "listed": False})]))
 
 
-@pytest.mark.parametrize("bad", ["not a url", "http://example.com/x", "https://", "ftp://example.com", "example.com/x"])
+@pytest.mark.parametrize("bad", ["not a url", "http://example.com/x", "https://", "ftp://example.com", "example.com/x",
+                                 "https://[::1", "https://host:badport", "https://host:99999/x", "https://host/a b",
+                                 "https://host/a\nb", " https://example.com/x", "https://example.com/x ",
+                                 "https://user:pw@host/x", "https://" + "h" * 300 + "/x"])
 def test_listed_needs_https_url(tmp_path, bad):
     with pytest.raises(LibraryError, match=r"x-lib.*source_url"):
         load_libraries(write(tmp_path, [entry(source_url=bad)]))
     assert load_libraries(write(tmp_path, [entry(source_url=bad, listed=False)]))[0].source_url == bad
+
+
+def test_good_url_shapes_still_load(tmp_path):
+    for ok in ("HTTPS://Example.com", "https://github.com/mphinance/alpha-skills", "https://host:8443/x"):
+        assert load_libraries(write(tmp_path, [entry(source_url=ok)]))[0].source_url == ok
+
+
+def test_bad_url_error_is_content_free(tmp_path):
+    with pytest.raises(LibraryError) as ei:
+        load_libraries(write(tmp_path, [entry(source_url="https://[::1")]))
+    assert ei.value.__cause__ is None and ei.value.__context__ is None
+    assert "::1" not in str(ei.value)
 
 
 @pytest.mark.parametrize("bad", ["Bad Id/../x", "UPPER", "-lead", "", "a_b", "X" * 200])

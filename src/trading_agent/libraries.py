@@ -6,12 +6,12 @@ Errors name the library id and field, never file content.
 from __future__ import annotations
 
 import re
-from urllib.parse import urlsplit
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -50,6 +50,20 @@ def _str(lib_id: str, fname: str, v: object) -> str:
     if not isinstance(v, str):
         raise _fail(lib_id, fname, "must be a string")
     return v
+
+
+def _https_url_ok(url: str) -> bool:
+    """True for a plain https URL: no whitespace or control chars, no userinfo, valid port, sane host."""
+    if any(c.isspace() or not c.isprintable() for c in url):
+        return False
+    try:
+        parts = urlsplit(url)
+        _ = parts.port
+        host = parts.hostname
+    except ValueError:
+        return False
+    return (parts.scheme == "https" and bool(parts.netloc) and bool(host) and len(host) <= 253
+            and parts.username is None and parts.password is None)
 
 
 def _build(raw: object, where: str) -> Library:
@@ -93,10 +107,8 @@ def _build(raw: object, where: str) -> Library:
         raise _fail(lib_id, "license", "a listed library needs a license")
     if listed and not url.strip():
         raise _fail(lib_id, "source_url", "a listed library needs a source_url")
-    if listed:
-        parts = urlsplit(url.strip())
-        if parts.scheme != "https" or not parts.netloc:
-            raise _fail(lib_id, "source_url", "a listed library needs an https URL")
+    if listed and not _https_url_ok(url):
+        raise _fail(lib_id, "source_url", "a listed library needs a plain https URL")
     return Library(lib_id, kind, name, url, lic, dict(counts), tuple(keys), attribution, listed,  # type: ignore[arg-type]
                    unresolved, tuple(unv))
 
