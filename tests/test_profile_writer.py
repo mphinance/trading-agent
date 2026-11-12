@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -836,36 +837,131 @@ def test_report_from_200kb_of_spaceless_stderr_is_fast_and_truncated(env, shape)
     assert not env.pdir().exists()
 
 
-# ---------------------------------------------------------------- round 3: cap context, tail display
+# ---------------------------------------------------------------- round 3/4: cap context, tail display
+# Round 4: the cut is tested on _clean's own output (before the 600 char display hides most of it),
+# and end to end with only newlines after the shape so whitespace normalization puts it on display.
 
+# (context before, secret value, plain text after). Each value is long enough that redact_patterns
+# hides it when its context is present (hex and base64 runs need 32+ chars), and no fragment of it
+# shorter than 32 chars matches any pattern on its own: a fragment cut away from its context leaks.
 CUT_SHAPES = {
-    "sk-key": "sk-AbCdEfGhIjKlMnOpQrStUvWx",
-    "hex": "0123456789abcdef01234567",
-    "b64": "QWxhZGRpbjpvcGVuIHNlc2FtZTEy",
-    "bearer": "Bearer ZxCvBnMqWeRtYuIoPaSdF",
-    "userinfo": "https://alice:S3cr3tPassw0rdXYZ@host.example/p",
-    "param": "?api_key=ZZtop99secretVAL",
+    "sk-key": ("", "sk-AbCdEfGhIjKlMnOpQrStUvWxYz", ""),
+    "hex": ("", "0123456789abcdef0123456789abcdef01234567", ""),
+    "b64": ("", "QWxhZGRpbjpvcGVuIHNlc2FtZTEyMzQ1Njc4OTBh", ""),
+    "bearer": ("Authorization: Bearer ", "ZxCvBnMqWeRtYuIoPaSdFg", ""),
+    "userinfo": ("https://", "alice:S3cr3tPassw0rdXYZ", "@host.example/p"),
+    "param": ("https://api.example/v1?api_key=", "ZZtop99secretVALue", "&page=2"),
+    # longer than CONTEXT and dotted like a JWT (no 32 char base64 run): only ``Bearer`` redacts it, so
+    # a tail that runs past the dropped context is caught only by dropping the leading partial token
+    "long-bearer": ("Authorization: Bearer ", "eyJhbGciOiJIUzI1NiJ9." + "AbCdEf1234." * 55, ""),
 }
+CUT_FINAL = "FINAL ERROR LINE"
+CUT_VARIANTS = ("spaces", "newlines", "spaceless")
+_SPACELESS_RUN = "a." * 50          # no whitespace for 100 chars right before the shape
 
 
-@pytest.mark.parametrize("shape", list(CUT_SHAPES))
-@pytest.mark.parametrize("offset", [1, 3, 7, 12])
-def test_secret_straddling_the_cap_cut_never_appears(env, shape, offset):
+def _cut_window():
     from trading_agent.profile import writer as w
-    secret = CUT_SHAPES[shape]
-    window = w._RAW_CAP + w._CONTEXT
-    final = " FINAL ERROR LINE"
-    after_len = window - (len(secret) - offset) - len(final)   # the window starts `offset` chars into the secret
-    blob = "noise " * 3000 + secret + ("word " * 5000)[:after_len] + final
-    assert len(blob) - blob.index(secret) - offset == window
+    return w._RAW_CAP + w._CONTEXT
+
+
+def _cut_blob(shape, total, offset, variant, after="filler"):
+    """`total` chars of text whose shape starts `offset` chars after the start of the redaction window
+    (len - CAP - CONTEXT). Before the shape: words separated by spaces or newlines, and for the
+    spaceless variant a 100 char run without whitespace. After it: words (`after="filler"`) or only
+    newlines (`after="newlines"`, which whitespace normalization collapses), then CUT_FINAL."""
+    item = "".join(CUT_SHAPES[shape])
+    start = total - _cut_window() + offset
+    sep = "\n" if variant == "newlines" else " "
+    run = _SPACELESS_RUN if variant == "spaceless" else ""
+    n = start - len(run)
+    if n < 2:
+        return None
+    filler = "noise" + sep
+    head = (filler * (n // len(filler) + 2))[:n - 1] + sep + run
+    rest = total - start - len(item)
+    body = rest - len(CUT_FINAL) - 2
+    if after == "newlines":
+        tail = "\n" * (rest - len(CUT_FINAL) - 1) + CUT_FINAL + "\n"
+    else:
+        tail = sep + (filler * (body // len(filler) + 2))[:body] + "\n" + CUT_FINAL
+    text = head + item + tail
+    assert len(text) == total and text.index(item) == start, (shape, total, offset, variant)
+    return text
+
+
+def _cut_offsets(item_len):
+    """Every offset where a shape of up to 64 chars straddles the window start (0) or the end of the
+    dropped context (CONTEXT, which is also where a plain last-CAP cut would fall), plus a coarse sweep
+    of -650..650 in steps of 11 (which is where the long shape gets cut deep inside)."""
+    from trading_agent.profile import writer as w
+    band = min(item_len, 64) + 8           # a long shape straddles inside the band and in the coarse sweep
+    near = set(range(-band, 9)) | set(range(w._CONTEXT - band, w._CONTEXT + 9))
+    return sorted(near | set(range(-650, 651, 11)))
+
+
+def _fragments(value, out):
+    grams = {out[i:i + 8] for i in range(len(out) - 7)}
+    return [win for win in _windows([value]) if win in grams]
+
+
+@pytest.mark.parametrize("variant", CUT_VARIANTS)
+@pytest.mark.parametrize("total", [17 * 1024, 25 * 1024])
+@pytest.mark.parametrize("shape", list(CUT_SHAPES))
+def test_clean_keeps_no_fragment_of_a_secret_cut_by_the_window(shape, total, variant):
+    """_clean's own output, before the 600 char display, at every offset around both cuts."""
+    from trading_agent.profile import writer as w
+    _before, value, _after = CUT_SHAPES[shape]
+    item_len = len("".join(CUT_SHAPES[shape]))
+    leaks, checked, shown = [], 0, 0
+    for offset in _cut_offsets(item_len):
+        text = _cut_blob(shape, total, offset, variant)
+        if text is None:
+            continue
+        checked += 1
+        out = w._clean(text, [])
+        found = _fragments(value, out)
+        if found:
+            leaks.append((offset, found[0]))
+        assert out.endswith(CUT_FINAL), (offset, out[-40:])
+        # positive control: when whitespace survives between the dropped context and the shape, the
+        # whole shape is kept, so it must be there and redacted (the test is not passing by dropping)
+        start = total - _cut_window() + offset
+        if re.search(r"\s", text[total - _cut_window() + w._CONTEXT:start]):
+            assert HIDDEN in out, (offset, out[:80])
+            shown += 1
+    assert not leaks, f"{len(leaks)} of {checked} offsets leak a fragment, first: {leaks[:3]}"
+    assert checked >= 150
+    if total == 25 * 1024:
+        assert shown > 0
+
+
+def _e2e_cases():
+    from trading_agent.profile import writer as w
+    for shape, (before, value, _after) in CUT_SHAPES.items():
+        in_value = len(before) + len(value) - 12          # cut leaves the last 12 value chars
+        in_context = max(len(before) - 2, 3)               # cut inside the context (or the value start)
+        for where, offset in (("window-in-value", -in_value), ("window-in-context", -in_context),
+                              ("cap-in-value", w._CONTEXT - in_value),
+                              ("cap-in-context", w._CONTEXT - in_context), ("kept", 700)):
+            yield pytest.param(shape, offset, where, id=f"{shape}-{where}")
+
+
+@pytest.mark.parametrize(("shape", "offset", "where"), list(_e2e_cases()))
+def test_report_keeps_no_fragment_of_a_secret_cut_by_the_window(env, shape, offset, where):
+    """End to end. Only newlines follow the shape, so whitespace normalization pulls whatever survives
+    of it into the visible last 600 chars right before the final line: a kept fragment would show."""
+    _before, value, _after = CUT_SHAPES[shape]
+    blob = _cut_blob(shape, 25 * 1024, offset, "spaces", after="newlines")
     env.set_control(fail_match="config set auth", fail_stderr=blob)
     with pytest.raises(WriteError) as ei:
         run_write(env, plan())
     rep = ei.value.report
     flat = " ".join(rep.split())
-    for win in _windows([secret]):
-        assert win not in rep and win not in flat, (shape, offset, win)
-    assert "FINAL ERROR LINE" in rep
+    assert not _fragments(value, rep) and not _fragments(value, flat), (where, rep[-200:])
+    assert CUT_FINAL in rep
+    if where == "kept":
+        assert HIDDEN in flat[-120:], rep[-200:]    # the shape is shown, redacted, next to the error
 
 
 def test_long_stderr_shows_the_error_at_the_end(env):
