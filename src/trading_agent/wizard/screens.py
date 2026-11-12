@@ -116,6 +116,7 @@ REUSE_PROMPT = ("I found {name} in your environment. I have not used it. Copy it
 SHARE_PROMPT = ("{who} will be able to read the {name} you gave {holder}, because a profile keeps one value "
                 "per name. Use the same value for it?")
 SHARE_YES = "Yes, give {who} the same value"
+SHARE_DIFFERENT = "Enter a different value for {who}"
 SHARE_NO = "No, leave {who} out of this setup"
 LEFT_OUT = "{who} is left out of this setup: you did not give it the same {name}."
 REVIEW_LEFT_OUT = "- {label} is left out: you did not give it the same {name}."
@@ -207,6 +208,8 @@ WRITE_WHAT_NOW = "What now?"
 VERIFY_HEAD = "Checking what I can:"
 DONE_TITLE = "You are set up."
 DONE_BODY = "AI: {ai}. Broker: {broker}. Skills: {n} picked."
+DONE_BROKER = "The {name} connection {dest}."
+DONE_KEYS = "Who can read each key or setting in the profile's private .env file:"
 DONE_UNDO = ("What was created is listed in the setup receipt: {receipt}\n"
              "To remove it all, run: hermes profile delete {name}")
 STATE_NOT_SAVED = "I could not save your progress here, so setup cannot resume if it is interrupted. Carrying on."

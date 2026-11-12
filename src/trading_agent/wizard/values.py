@@ -63,9 +63,22 @@ class ValueMixin:
         self.decide(self._dk(c.key, name), mode)
 
     def _revoke(self, c_key: str, name: str) -> None:
-        self._grants.pop((c_key, name), None)
-        if not any(n == name for _, n in self._grants):
+        """Drop a grant. A "same" grant depends on the value's origin: when the consumer that supplied the value
+        goes, the value and every grant resting on it go too (nobody keeps a value they were never asked about)."""
+        mode = self._grants.pop((c_key, name), None)
+        if mode is not None and mode != "same":
+            self._drop_name(name)
+        elif not any(n == name for _, n in self._grants):
             self._values.pop(name, None)
+
+    def _drop_name(self, name: str) -> None:
+        for k in [k for (k, n) in self._grants if n == name]:
+            del self._grants[(k, name)]
+        self._values.pop(name, None)
+
+    def unrefuse(self, c_key: str) -> None:
+        self.refused.discard(c_key)
+        self.left_out.pop(c_key, None)
 
     def _revoke_consumer(self, c_key: str) -> None:
         for (k, n) in [p for p in self._grants if p[0] == c_key]:
@@ -118,19 +131,24 @@ class ValueMixin:
         return False
 
     def _holders(self, name: str, *, besides: str = "") -> list[str]:
-        """Consumers holding an explicit grant for NAME, in the order they were given one."""
-        return [k for (k, n) in self._grants if n == name and k != besides]
+        """Consumers holding a grant for NAME, the one that supplied the value first."""
+        keys = [k for (k, n) in self._grants if n == name and k != besides]
+        return sorted(keys, key=lambda k: self._grants[(k, name)] == "same")
 
-    def _ask_share(self, c: Consumer, name: str) -> bool:
+    def _ask_share(self, c: Consumer, name: str, secret: bool = True) -> bool:
         """A profile .env has one value per NAME, so C would be able to READ the value another consumer was given.
-        That needs C's own explicit grant. True if granted; a refusal removes C from the plan entirely."""
+        That needs C's own explicit grant. True if C ends up with a value; a refusal removes C from the plan."""
         holder = self._labels[self._holders(name, besides=c.key)[0]]
-        a = self.io.choose(S.SHARE_PROMPT.format(who=cap(c.label), name=name, holder=holder),
-                           [Option("same", S.SHARE_YES.format(who=c.label)),
-                            Option("refuse", S.SHARE_NO.format(who=c.label))])
+        a = self.io.choose(S.SHARE_PROMPT.format(who=cap(c.label), name=name, holder=holder), [
+            Option("same", S.SHARE_YES.format(who=c.label)),
+            Option("different", S.SHARE_DIFFERENT.format(who=c.label)),
+            Option("refuse", S.SHARE_NO.format(who=c.label))])
         if a == "same":
             self._grant(c, name, "same")
             return True
+        if a == "different":
+            self._drop_name(name)       # one value per name: the others must be asked about the new one
+            return self._paste(c, name) if secret else (self._plain(c, name) or True)
         self.refuse(c, name)
         return False
 
@@ -141,24 +159,33 @@ class ValueMixin:
         self.left_out[c.key] = (c.label, name)
         self.say(S.LEFT_OUT.format(who=cap(c.label), name=name))
 
-    def _shared(self, c: Consumer, name: str) -> bool:
+    def _shared(self, c: Consumer, name: str, secret: bool = True) -> bool:
         """NAME already has a value for another consumer: ask, never use it silently."""
         if name not in self._values or not self._holders(name, besides=c.key):
             return False
-        self._ask_share(c, name)
+        self._ask_share(c, name, secret)
         return True
 
     def resolve_sharing(self) -> None:
         """Run before REVIEW and again before WRITE: every consumer that references a NAME whose value exists
-        needs its own grant, whichever order the values were given in."""
+        needs its own grant, whichever order the values were given in. Repeats while an answer changed a value."""
+        for _ in range(6):
+            if not self._resolve_pass():
+                return
+
+    def _resolve_pass(self) -> bool:
+        asked = False
         for name in list(self._values):
             for c, specs in self._consumers():
-                if c.key in self.refused or not any(s.name == name for s in specs):
+                spec = next((x for x in specs if x.name == name), None)
+                if spec is None or c.key in self.refused or name not in self._values:
                     continue
                 if (c.key, name) in self._grants or self.dec(self._dk(c.key, name)) == "keep-existing":
                     continue
                 if self._holders(name, besides=c.key):
-                    self._ask_share(c, name)
+                    asked = True
+                    self._ask_share(c, name, spec.secret)
+        return asked
 
     def _paste(self, c: Consumer, name: str) -> bool:
         """Ask for a secret with no echo. True if a value was stored; empty input skips."""
@@ -228,7 +255,7 @@ class ValueMixin:
         name = spec.name
         if c.key in self.refused:
             return "done"
-        if self._decided(c, name) or self._shared(c, name) or self._collision_kept(c, name):
+        if self._decided(c, name) or self._shared(c, name, spec.secret) or self._collision_kept(c, name):
             return "done"
         if not spec.secret:
             self._plain(c, name)

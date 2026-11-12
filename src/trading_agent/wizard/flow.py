@@ -108,6 +108,11 @@ class _Quit(Exception):
     """The user chose to stop here. State is already saved."""
 
 
+def _printable(text: str, limit: int = 80) -> str:
+    """Printable ASCII only, capped: nothing from Hermes' own output reaches the screen raw."""
+    return "".join(c if " " <= c <= "~" else "?" for c in str(text))[:limit]
+
+
 def _ai_provider_label(kind: str, ref: str) -> str:
     if kind == "custom":
         return {S.VENICE_BASE_URL: "Venice", S.OPENAI_BASE_URL: "OpenAI"}.get(ref, "an OpenAI-compatible service")
@@ -326,7 +331,7 @@ class _Wizard(ValueMixin):
         if problem is None:
             return "ok", []
         if problem == "old":
-            self.say(S.HERMES_OUT_OF_RANGE.format(requires=S.HERMES_REQUIRES, version=line))
+            self.say(S.HERMES_OUT_OF_RANGE.format(requires=S.HERMES_REQUIRES, version=_printable(line)))
             self.say(S.HERMES_UPDATE_HINT)
             return "problem", []
         self.say(S.HERMES_VERSION_UNREADABLE)
@@ -473,21 +478,30 @@ class _Wizard(ValueMixin):
             return Consumer("ai", f"the AI service at {host}", f"AI service at {host}", ("ai-key",))
         return Consumer("ai", f"the {who} AI connection", who, ("ai-key",))
 
+    def _broker_consumer(self) -> tuple[Consumer, list[NameSpec]] | None:
+        route = self._route()
+        if route is None:
+            return None
+        nm = self._broker_name()
+        return Consumer(self._broker_key(), f"the {nm} connection", nm, ("broker-key",)), route_names(route)
+
     def _consumers(self) -> list[tuple[Consumer, list[NameSpec]]]:
+        """The consumers still in the plan (a refused one is left out)."""
+        return [(c, specs) for c, specs in self._all_consumers() if c.key not in self.refused]
+
+    def _all_consumers(self) -> list[tuple[Consumer, list[NameSpec]]]:
         out: list[tuple[Consumer, list[NameSpec]]] = []
         ai = self._ai_value_name()
         if ai:
             out.append((self._ai_consumer(), [NameSpec(ai, True)]))
-        route = self._route()
-        if route:
-            nm = self._broker_name()
-            out.append((Consumer(self._broker_key(), f"the {nm} connection", nm, ("broker-key",)),
-                        route_names(route)))
+        broker = self._broker_consumer()
+        if broker:
+            out.append(broker)
         for lib in self._selected_libs():
             if lib.needs_keys:
                 out.append((Consumer(f"lib:{lib.id}", f"the {lib.name} library", lib.name, ("data-key",)),
                             [NameSpec(n, True) for n in lib.needs_keys]))
-        return [(c, specs) for c, specs in out if c.key not in self.refused]
+        return out
 
     def _expected_pairs(self) -> set[tuple[str, str]]:
         return {(c.key, s.name) for c, specs in self._consumers() for s in specs}
@@ -528,7 +542,7 @@ class _Wizard(ValueMixin):
         return [n for n in AI_CLIS if self._present(f"cli:{n}") is not None]
 
     def _set_ai(self, kind: str, *, ref: str = "", key_env: str = "") -> None:
-        self.refused.discard("ai")
+        self.unrefuse("ai")
         if (kind, ref, key_env) != (self.dec("ai.kind"), self.dec("ai.ref"), self.dec("ai.key_env")):
             self._revoke_consumer("ai")     # a different provider or address never inherits an earlier answer
         self.decide("ai.kind", kind)
@@ -668,7 +682,7 @@ class _Wizard(ValueMixin):
     # ---- AI_VERIFY
 
     def _st_ai_verify(self) -> State:
-        choice = self._ai_choice()
+        choice = self._plan_ai()
         real = self.d.verify_ai is not default_verify_ai
         if choice.kind in ("none", "cli"):
             prompt, opts = S.AI_NOTHING_TO_TEST, [Option("continue", "Continue"), Option("back", "Back")]
@@ -762,8 +776,8 @@ class _Wizard(ValueMixin):
         return self._pick_from(rows, flag_region=bool(region))
 
     def _set_broker(self, slug: str, route_id: str) -> None:
-        self.refused.discard(self._broker_key())
-        self.refused.discard(f"broker:{slug}/{route_id}")
+        self.unrefuse(self._broker_key())
+        self.unrefuse(f"broker:{slug}/{route_id}")
         if (slug, route_id) != (self.dec("broker.slug"), self.dec("broker.route")):
             self.forget("broker.fp")
         self.decide("broker.slug", slug)
@@ -827,16 +841,19 @@ class _Wizard(ValueMixin):
         if entry is None or route is None:
             return State.BROKER_PICK
         self._describe_route(entry, route)
-        c, specs = next((c, s) for c, s in self._consumers() if c.key == self._broker_key())
+        broker = self._broker_consumer()
+        if broker is None:
+            return State.BROKER_PICK
+        c, specs = broker
         opts = [Option("continue", "Continue")]
-        if any(self._decided(c, s.name) for s in specs):
+        if c.key in self.refused or any(self._decided(c, s.name) for s in specs):
             opts.append(Option("redo", "Enter these values again"))
         a = self.io.choose(f"Connect {self._broker_name()}.", [*opts, Option("back", "Back")])
         if a == "back":
             return State.BROKER_PICK
         if a == "redo":
             self._revoke_consumer(c.key)
-            self.refused.discard(c.key)
+            self.unrefuse(c.key)
         try:
             for s in specs:
                 self._obtain(c, s)
@@ -847,7 +864,10 @@ class _Wizard(ValueMixin):
     # ---- BROKER_VERIFY
 
     def _st_broker_verify(self) -> State:
-        """No verifier exists yet, so this only says so (no screen to click through) and moves on."""
+        """No verifier exists yet, so this only says so (no screen to click through) and moves on.
+        A broker that was left out has nothing to verify."""
+        if self._plan_route() is None:
+            return State.SKILLS
         status = S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED
         self.decide("broker.verify", "offline" if not self.d.online else "pending")
         self.say(S.BROKER_VERIFY_LATER.format(name=self._broker_name() or "the broker", status=status))
@@ -874,7 +894,7 @@ class _Wizard(ValueMixin):
                 return State.DATA_KEYS
             if a.startswith("lib:") and a[4:] in {lib.id for lib in libs}:
                 picked ^= {a[4:]}
-                self.refused.discard(a)
+                self.unrefuse(a)
                 self.decide("skills", ",".join(sorted(picked)))
             else:
                 self.say(S.INVALID_CHOICE)
@@ -903,7 +923,7 @@ class _Wizard(ValueMixin):
     def _data_key(self, c: Consumer, s: NameSpec, *, add: bool) -> None:
         """Add and Skip each re-decide: switching drops what the other choice left behind."""
         if add:
-            self.refused.discard(c.key)
+            self.unrefuse(c.key)
             if self.dec(self._dk(c.key, s.name)) == "skip":
                 self.forget(self._dk(c.key, s.name))
             self._obtain(c, s)
@@ -972,7 +992,7 @@ class _Wizard(ValueMixin):
         except HermesUnavailable:
             self.go(State.REVIEW)
             self.say(S.WRITE_FAILED_PLAIN.format(detail="I could not find Hermes on this computer. "
-                                                         "Install it (see the PRECHECK step), then try again."))
+                                                         "Install it (see the first checks), then try again."))
             return self._write_failed()
         except WriteError as e:
             self.go(State.REVIEW)
@@ -987,6 +1007,8 @@ class _Wizard(ValueMixin):
                 env.clear()
         self._values.clear()
         self._grants.clear()
+        for key, (_label, name) in self.left_out.items():   # names only: so a restart can still say what was left out
+            self.decide(f"left:{key}", name)
         return State.VERIFY
 
     def _write_exists(self, name: str) -> State:
@@ -1006,14 +1028,52 @@ class _Wizard(ValueMixin):
 
     # ---- VERIFY and DONE
 
+    # What was installed is what the RECEIPT says; the saved answers only supply display names.
+
+    def _done_ai(self) -> AiChoice:
+        ai = (self.receipt.ai_choice if self.receipt else None) or {"kind": "none", "ref": ""}
+        return AiChoice(ai.get("kind", "none"), ai.get("ref", ""))  # type: ignore[arg-type]
+
+    def _done_broker(self) -> tuple[dict, dict] | None:
+        b = self.receipt.broker if self.receipt else None
+        entry = next((e for e in self.d.catalog if b and e["slug"] == b.get("slug")), None)
+        route = next((r for r in installable_routes(entry) if r.get("route_id") == b.get("route_id")), None) if entry else None
+        return (entry, route) if entry and route else None
+
+    def _in_receipt(self, c: Consumer) -> bool:
+        r = self.receipt
+        if r is None:
+            return False
+        if c.key == "ai":
+            return self._done_ai().kind in ("openrouter", "custom")
+        if c.key.startswith("lib:"):
+            return c.key[4:] in r.skills
+        return bool(r.broker) and c.key == f"broker:{r.broker.get('slug')}/{r.broker.get('route_id')}"
+
+    def _done_consumers(self) -> list[tuple[Consumer, list[NameSpec]]]:
+        return [(c, specs) for c, specs in self._all_consumers() if self._in_receipt(c)]
+
+    def _label_for_key(self, key: str) -> str:
+        if key == "ai":
+            return self._ai_consumer().label
+        if key.startswith("lib:"):
+            lib = next((x for x in self.d.libraries if x.id == key[4:]), None)
+            return f"the {lib.name} library" if lib else "a library"
+        slug = key.removeprefix("broker:").split("/")[0]
+        entry = next((e for e in self.d.catalog if e["slug"] == slug), None)
+        return f"the {entry.get('name', slug)} connection" if entry else "a broker connection"
+
+    def _left_out_items(self) -> list[tuple[str, str]]:
+        return [(self._label_for_key(k[5:]), v) for k, v in self.ws.decisions.items() if k.startswith("left:")]
+
     def _verify_lines(self) -> list[str]:
         lines: list[str] = []
-        if self._plan_ai().kind not in ("none", "cli"):
+        if self._done_ai().kind not in ("none", "cli"):
             if not self.d.online:
                 lines.append(f"AI check: {S.NEEDS_INTERNET}.")
             else:
                 lines.append(S.AI_CHECK_PASSED if self.dec("ai.verify") == "passed" else S.AI_CHECK_NOT_TESTED)
-        if self._plan_route() is not None:
+        if self._done_broker() is not None:
             lines.append(f"Broker connection: {S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED}"
                          " (testing is not built yet).")
         return lines
@@ -1026,33 +1086,48 @@ class _Wizard(ValueMixin):
 
     def _left_to_do(self) -> list[str]:
         out: list[str] = []
-        kind = self._plan_ai().kind
+        kind = self._done_ai().kind
         if kind in ("none", "cli"):
             out.append(S.LATER_AI)
         elif not self.d.online:
             out.append(S.LATER_AI_TEST.format(status=S.NEEDS_INTERNET))
         elif self.dec("ai.verify") != "passed":
             out.append(S.LATER_AI_TEST.format(status=S.NOT_TESTED))
-        route = self._plan_route()
-        if route is None:
+        broker = self._done_broker()
+        if broker is None:
             out.append(S.LATER_BROKER)
         else:
+            entry, route = broker
             if not route_names(route):
-                out.append(S.LATER_OAUTH.format(name=self._broker_name()))
-            out.append(S.LATER_BROKER_TEST.format(
-                name=self._broker_name(), status=S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED))
+                out.append(S.LATER_OAUTH.format(name=entry.get("name", entry["slug"])))
+            out.append(S.LATER_BROKER_TEST.format(name=entry.get("name", entry["slug"]),
+                                                  status=S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED))
         written = set(self.receipt.env_names_written) if self.receipt else set()
-        out += [S.LATER_NAME.format(name=s.name, who=c.who) for c, specs in self._consumers() for s in specs
+        out += [S.LATER_NAME.format(name=s.name, who=c.who) for c, specs in self._done_consumers() for s in specs
                 if self.dec(self._dk(c.key, s.name)) == "skip" and s.name not in written]
-        out += [S.LATER_LEFT_OUT.format(label=label, name=name) for label, name in self.left_out.values()]
+        out += [S.LATER_LEFT_OUT.format(label=label, name=name) for label, name in self._left_out_items()]
         return out
+
+    def _done_key_lines(self) -> list[str]:
+        """Every consumer that can read each written NAME, in the same words as REVIEW."""
+        consumers = self._done_consumers()
+        names = self.receipt.env_names_written if self.receipt else []
+        return [S.REVIEW_KEYS_FOR.format(name=n, who=" and ".join(
+            c.label for c, specs in consumers if any(s.name == n for s in specs))) for n in names]
 
     def _st_done(self) -> None:
         name = self.dec("profile_name")
-        choice = self._plan_ai()
+        choice = self._done_ai()
+        broker = self._done_broker()
+        bname = (broker[0].get("name", broker[0]["slug"])) if broker else "none"
         text = S.DONE_TITLE + "\n" + S.DONE_BODY.format(
-            ai=_ai_provider_label(choice.kind, choice.ref),
-            broker=(self._broker_name() or "none") if self._plan_route() else "none", n=len(self._plan_libs()))
+            ai=_ai_provider_label(choice.kind, choice.ref), broker=bname,
+            n=len(self.receipt.skills) if self.receipt else 0)
+        if broker:
+            text += "\n" + S.DONE_BROKER.format(name=bname, dest=route_destination(broker[1]))
+        keys = self._done_key_lines()
+        if keys:
+            text += "\n" + S.DONE_KEYS + "\n" + "\n".join(keys)
         later = self._left_to_do()
         if later:
             text += "\n" + S.FINISH_LATER_TITLE + "\n" + "\n".join(f"- {x}" for x in later)

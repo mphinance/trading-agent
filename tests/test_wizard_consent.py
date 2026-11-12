@@ -513,3 +513,19 @@ def test_not_installable_copy_does_not_over_promise_or_show_a_repo_path(mk):
     with pytest.raises(ScriptExhausted):
         run_wizard(io2, w2.deps)
     assert "see the broker's own page" in "\n".join(io2.said) and "brokers/nourl.md" not in "\n".join(io2.said)
+
+
+def test_a_raw_version_line_never_reaches_the_screen_with_control_characters(mk):
+    w = mk(hermes_kw={"version": "Hermes Agent v0.20.0\x1b[31m\x07" + "x" * 300})
+    receipt, io = w.run(["start", "stop"])
+    out = "\n".join(io.said)
+    assert "\x1b" not in out and "\x07" not in out and "x" * 81 not in out and "hermes update" in out
+
+
+def test_an_ambiguous_version_output_asks_instead_of_picking_one(mk):
+    from trading_agent.profile.hermes_cli import UNREADABLE_VERSION
+    w = mk(hermes_kw={"version": UNREADABLE_VERSION})
+    io = ScriptedIO(["start"])
+    with pytest.raises(ScriptExhausted):
+        run_wizard(io, w.deps)
+    assert io.option_ids() == ["continue", "again", "stop", "back"]
