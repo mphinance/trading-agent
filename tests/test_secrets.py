@@ -217,3 +217,58 @@ def test_scrub_ignores_empty_secrets():
 
 def test_scrub_does_not_rescan_replacement():
     assert scrub("sk-1 hid", ["hid", "sk-1"]) == "[hidden] [hidden]"
+
+
+# ---- redact_patterns (pattern based redaction for reports) ----
+
+@pytest.mark.parametrize("text,gone", [
+    ("key sk-abcdef1234567890XYZ here", "sk-abcdef1234567890XYZ"),
+    ("key sk-or-v1-0123456789abcdef0123 here", "0123456789abcdef0123"),
+    ("sk-ant-api03-AbCdEf_GhIj-KlMnOp", "AbCdEf_GhIj-KlMnOp"),
+    ("Authorization: Bearer abc.def-ghi_jkl123456", "abc.def-ghi_jkl123456"),
+    ("bearer ZZZZZZZZZZZZ", "ZZZZZZZZZZZZ"),
+    ("hash 0123456789abcdef0123456789abcdef0123 end", "0123456789abcdef0123456789abcdef0123"),
+    ("b64 QWxhZGRpbjpvcGVuIHNlc2FtZTEyMzQ1Njc4OTA end", "QWxhZGRpbjpvcGVuIHNlc2FtZTEyMzQ1Njc4OTA"),
+    ("GET https://user:hunter2pw@host.example/path", "hunter2pw"),
+    ("GET https://tokenonly123@host.example/path", "tokenonly123"),
+    ("GET https://h.example/p?api_key=abc123&x=1", "abc123"),
+    ("GET https://h.example/p?x=1&access_token=zzz999", "zzz999"),
+    ("GET https://h.example/p?sig=Qm9ndXNWYWx1ZTEyMzQ1", "Qm9ndXNWYWx1ZTEyMzQ1"),
+    ("GET https://h.example/p?code=A1b2C3d4E5f6G7h8I9j0", "A1b2C3d4E5f6G7h8I9j0"),
+])
+def test_redact_patterns_removes(text, gone):
+    out = sec.redact_patterns(text)
+    assert gone not in out
+    assert sec.HIDDEN in out
+
+
+@pytest.mark.parametrize("text", [
+    "profile 'trader' already exists at /home/someone/.hermes/profiles/trader",
+    "Error: Cannot install a distribution as 'default'",
+    "hermes exited 1 on step config",
+    "see https://example.com/docs/page?lang=en&page=2",
+    "task sk-learn is fine",
+    "ALPACA_API_KEY",
+    "",
+])
+def test_redact_patterns_leaves_plain_text(text):
+    assert sec.redact_patterns(text) == text
+
+
+def test_redact_patterns_keeps_url_host_and_path():
+    out = sec.redact_patterns("https://user:pw12345@host.example/a/b?token=abcdefgh1")
+    assert out.startswith("https://") and "host.example/a/b" in out
+
+
+def test_redact_patterns_idempotent():
+    once = sec.redact_patterns("Bearer abcdefghijklmnop sk-abcdef1234567890")
+    assert sec.redact_patterns(once) == once
+
+
+def test_check_secret_names_only():
+    sec.check_secret("A_KEY", 'a"b #$ x\n')
+    with pytest.raises(ValueError) as e:
+        sec.check_secret("a_key", "v")
+    with pytest.raises(ValueError) as e:
+        sec.check_secret("A_KEY", "pre${HOME}post")
+    assert "pre" not in str(e.value) and "post" not in str(e.value)

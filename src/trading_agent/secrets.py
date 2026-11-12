@@ -212,3 +212,50 @@ def scrub(text: str, secrets: Iterable[str]) -> str:
         return text
     pattern = re.compile("|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True)))
     return pattern.sub(HIDDEN, text)
+
+
+def check_secret(name: str, value: str) -> None:
+    """Validate a NAME and VALUE pair the way EnvFileStore.set does, without writing.
+
+    Raises ValueError carrying the NAME only, never the value."""
+    _check_name(name)
+    _check_value(name, value)
+
+
+# ---- pattern based redaction -------------------------------------------------
+# scrub() removes secrets we KNOW. redact_patterns() is the second net for text that
+# may carry a secret we do not know (a tool echoing a key the user typed elsewhere).
+# Deliberately small and biased toward over-redacting in error reports.
+
+_SK_KEY = re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{7,}")
+_BEARER = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=\-]{8,}")
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@]+@")
+_URL_SENSITIVE_PARAM = re.compile(
+    r"(?i)([?&][A-Za-z0-9_.\-]*(?:token|key|secret|sig|signature|auth|passw|pwd|credential|access)"
+    r"[A-Za-z0-9_.\-]*=)[^&\s#\"']+")
+_URL_LONG_VALUE = re.compile(r"([?&][A-Za-z0-9_.\-]+=)([A-Za-z0-9_.~+/\-]{16,})(?=$|[&\s#\"'])")
+_HEX_RUN = re.compile(r"(?<![A-Za-z0-9])[A-Fa-f0-9]{32,}(?![A-Za-z0-9])")
+# '/' is not in this alphabet, so file paths never form one long run. A real base64 secret
+# containing '/' is cut into pieces; a piece of 32+ chars is still redacted.
+_B64_RUN = re.compile(r"(?<![A-Za-z0-9+_\-=])[A-Za-z0-9+_\-]{32,}={0,2}(?![A-Za-z0-9+_\-=])")
+
+
+def _b64_sub(m: re.Match) -> str:
+    run = m.group(0)
+    # needs a digit and a letter: long plain words and snake_case identifiers stay readable
+    if any(c.isdigit() for c in run) and any(c.isalpha() for c in run):
+        return HIDDEN
+    return run
+
+
+def redact_patterns(text: str) -> str:
+    """Mask things shaped like credentials: sk-style keys, ``Bearer <token>``, hex or
+    base64 runs of 32+ chars, URL userinfo, and token-looking URL query values."""
+    text = _URL_USERINFO.sub(lambda m: f"{m.group(1)}{HIDDEN}@", text)
+    text = _URL_SENSITIVE_PARAM.sub(lambda m: f"{m.group(1)}{HIDDEN}", text)
+    text = _URL_LONG_VALUE.sub(lambda m: f"{m.group(1)}{HIDDEN}", text)
+    text = _BEARER.sub(lambda m: f"{m.group(1)} {HIDDEN}", text)
+    text = _SK_KEY.sub(HIDDEN, text)
+    text = _HEX_RUN.sub(HIDDEN, text)
+    text = _B64_RUN.sub(_b64_sub, text)
+    return text
