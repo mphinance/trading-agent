@@ -1,0 +1,21 @@
+# Tool library (MCP server) pointer entries. Nothing vendored or copied.
+# Source of every value: SKILLS_AND_TOOLS.md sections 2b, 3 and 5. Env var NAMES only, never values.
+libraries:
+  - id: momentum-mcp
+    kind: tool
+    name: momentum-mcp (portable quant MCP server, optional)
+    source_url: https://github.com/mphinance/momentum-mcp  # its git remote, per the doc
+    license: Apache-2.0
+    counts:
+      quant_tools: 56
+      tickertrace_tools: 17
+    needs_keys: [TD_API_KEY, SEC_USER_AGENT, OPENROUTER_API_KEY]
+    attribution: >-
+      Apache-2.0: keep LICENSE and notices if redistributed; as a pointer nothing is copied.
+      The EDGAR client says it was ported from a friend's repo with unknown license.
+    listed: true
+    unverified:
+      - README says 73 tools; decorator grep gives 57 plus 17 = 74, which is not a real tool
+      - TickerTrace tools need no key per docs, not called
+      - EDGAR client origin license
+      - exact output of the free-tier upsell text

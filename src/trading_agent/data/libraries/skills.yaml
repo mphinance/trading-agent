@@ -1,0 +1,41 @@
+# Skill library pointer entries. Pointers only: nothing here is vendored or copied.
+# Source of every value: SKILLS_AND_TOOLS.md sections 2a, 3 and 5. Env var NAMES only, never values.
+libraries:
+  - id: alpha-skills
+    kind: skills
+    name: alpha-skills, trading subset
+    source_url: https://github.com/mphinance/alpha-skills  # per its README
+    license: MIT
+    counts:
+      total_skill_folders: 136
+      trading_skills: 64
+      shippable: 56  # after dropping personal and brokerage-specific skills
+    needs_keys: [FMP_API_KEY, FINVIZ_API_KEY, TD_API_KEY]  # UNVERIFIED which keyed skills fall back gracefully
+    attribution: >-
+      MIT, copyright Momentum Phinance LLC. Methodologies adapted from TraderMonty,
+      William O'Neil, and Mark Minervini (alpha-skills README). See THIRD_PARTY.md.
+    listed: false
+    unresolved: >-
+      alpha-skills lineage: unresolved. Many skills are probably derived from a public
+      open-source trading-skill pack ("TraderMonty"; skill names match that pack). The
+      upstream identity, its license, and which skills are copies versus rewrites are
+      UNVERIFIED. Resolve before listing (SKILLS_AND_TOOLS.md section 5, flag 1).
+    unverified:
+      - upstream identity and license of the finance-skill lineage
+      - whether both alpha-skills and trading-agent name the same rights holder
+      - which keyed skills work without keys
+      - provenance of sector-analyst and breadth-chart-analyst images
+  - id: broker-skill-docs
+    kind: skills
+    name: Broker agent skill docs (awesome-broker-mcp)
+    source_url: awesome-broker-mcp/docs/skills/  # public URL not stated in SKILLS_AND_TOOLS.md
+    license: CC0
+    counts:
+      broker_docs: 44
+    needs_keys: []  # per broker; whatever that broker's own server documents
+    attribution: >-
+      CC0 for the catalog text. Each broker's skill repo has its own license, recorded
+      per file; show it before installing one.
+    listed: true
+    unverified:
+      - public URL of awesome-broker-mcp (not stated in SKILLS_AND_TOOLS.md)
