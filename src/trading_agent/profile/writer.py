@@ -112,7 +112,7 @@ def _check_http_url(url: Any, *, what: str) -> str:
     at most 512 characters, no credentials, query or fragment. Messages never echo the URL."""
     if not isinstance(url, str) or not url or len(url) > URL_MAX:
         raise ValueError(f"{what}: invalid URL")
-    if any(c.isspace() or not c.isprintable() or ord(c) > 126 for c in url):
+    if "\\" in url or any(c.isspace() or not c.isprintable() or ord(c) > 126 for c in url):
         raise ValueError(f"{what}: invalid URL")
     try:
         parts = urlsplit(url)

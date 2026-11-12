@@ -1020,7 +1020,7 @@ def test_report_keeps_the_unstructured_notice_when_output_ends_with_a_newline(en
 @pytest.mark.parametrize("url", [
     "http://example.com/v1", "http://192.168.1.5:9000/v1", "https://api.example.com/v1\u202e/evil",
     "https://api.example.com/v1 x", "https://api.example.com/\u00e9", "https://" + "a" * 600 + ".com/v1",
-    "https://user:pw@api.example.com/v1", "ftp://x.test/v1", "https://x.test/v1?k=1", "https://x.test/v1\n"])
+    "https://user:pw@api.example.com/v1", "ftp://x.test/v1", "https://x.test/v1?k=1", "https://x.test/v1\n", "https://evil.com\\.api.openai.com/v1"])
 def test_custom_base_url_rules_reject_without_echo(url):
     from trading_agent.profile.writer import validate_ai_choice
     with pytest.raises(ValueError) as e:

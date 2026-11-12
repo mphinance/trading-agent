@@ -34,7 +34,7 @@ from trading_agent.profile.writer import (
 from trading_agent.secrets import SecretStore, redact_patterns, scrub
 from trading_agent.wizard import screens as S
 from trading_agent.wizard.catalog import (  # noqa: F401 - re-exported: the public catalog API lives here too
-    NameSpec, entry_tags, installable_routes, is_installable, order_catalog, plain, region_is_uncurated,
+    FIRST_SET, NameSpec, entry_tags, installable_routes, is_installable, order_catalog, plain, region_is_uncurated,
     route_destination, route_fingerprint, route_label, route_names, search_catalog, submit_words, trading_text,
 )
 from trading_agent.wizard.io import BACK_INPUT, IO, Option
@@ -42,7 +42,6 @@ from trading_agent.wizard.state import State, WizardState
 from trading_agent.wizard.values import BackSignal, Consumer, ValueMixin, cap
 from urllib.parse import urlsplit
 
-_FIRST_SET = frozenset(S.FIRST_SCREEN_SLUGS)
 _KEY_ENV_RE = re.compile(r"[A-Z][A-Z0-9]*(_[A-Z0-9]+)+")   # at least one underscore: a pasted key is not a name
 _AI_KINDS = ("none", "cli", "openrouter", "custom", "ollama", "lm-studio")
 
@@ -719,7 +718,7 @@ class _Wizard(ValueMixin):
 
     def _st_broker_pick(self) -> State:
         entries = order_catalog(self.d.catalog)
-        first = [e for e in entries if e["slug"] in _FIRST_SET]
+        first = [e for e in entries if e["slug"] in FIRST_SET]
         while True:
             opts = [Option("none", S.BROKER_NONE_LABEL, S.BROKER_NONE_DETAIL),
                     *(self._entry_option(e) for e in first),

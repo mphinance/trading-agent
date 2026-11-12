@@ -112,3 +112,22 @@ def test_resume_at_review_then_write_never_runs_a_planted_hermes(tmp_path, monke
     assert run_wizard(io, deps) is None
     assert not marker.exists()
     assert "Setup did not finish" in "\n".join(io.said)
+
+
+def test_multi_line_output_prefers_the_token_next_to_hermes(tmp_path):
+    line = cli(tmp_path, RunResult(0, "Built with toolchain v9.9.9\nHermes Agent v0.21.0\n", "", False)).version()
+    assert parse_hermes_version(line) == ((0, 21, 0), False)
+
+
+def test_a_printed_version_beats_the_bootstrap_signature(tmp_path):
+    out = T0 + "\nHermes Agent v0.10.0\n"
+    line = cli(tmp_path, RunResult(1, out, "", False)).version()      # not "ok, continue": the pin gets enforced
+    assert parse_hermes_version(line) == ((0, 10, 0), False)
+
+
+@pytest.mark.parametrize("text", ["no dependency environment is committed; run hermes pm repair",
+                                  "no dependency environment is committed for this install"])
+def test_only_the_exact_t0_message_counts_as_not_bootstrapped(tmp_path, text):
+    with pytest.raises(HermesUnavailable) as e:
+        cli(tmp_path, RunResult(1, "", text, False)).version()
+    assert not isinstance(e.value, HermesNotBootstrapped)

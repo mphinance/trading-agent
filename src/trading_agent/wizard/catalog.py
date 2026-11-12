@@ -7,13 +7,17 @@ import re
 from dataclasses import dataclass
 from typing import Sequence
 
+from trading_agent.profile.writer import build_mcp_entry
 from trading_agent.wizard import screens as S
 
-_FIRST_SET = frozenset(S.FIRST_SCREEN_SLUGS)
+FIRST_SET = frozenset(S.FIRST_SCREEN_SLUGS)
 _WRITABLE_KINDS = frozenset({"remote-url", "local-command"})  # the kinds writer.build_mcp_entry can write
 _NAME_OK = re.compile(r"[A-Z_][A-Z0-9_]*")
 _HEADER_OK = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*|[A-Z][A-Z0-9_]*")
 _ROUTE_ID_OK = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+_SLUG_OK = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")   # the writer's server-name rule (writer._SERVER_RE)
+COMMAND_MAX = 200
+URL_MAX = 512
 NAME_MAX = 64
 
 _KIND_WORDS = {"local-command": "runs a program on this computer", "remote-url": "connects to a hosted server"}
@@ -37,7 +41,7 @@ def order_catalog(entries: Sequence[dict]) -> list[dict]:
     """First-screen slugs (those present), in list order, then the rest A to Z. Ordering only: nothing is dropped."""
     by_slug = {e["slug"]: e for e in entries}
     first = [by_slug[s] for s in S.FIRST_SCREEN_SLUGS if s in by_slug]
-    rest = sorted((e for e in entries if e["slug"] not in _FIRST_SET),
+    rest = sorted((e for e in entries if e["slug"] not in FIRST_SET),
                   key=lambda e: (str(e.get("name", "")).casefold(), e["slug"]))
     return first + rest
 
@@ -103,8 +107,14 @@ def route_names(route: dict) -> list[NameSpec]:
     return out
 
 
+def _display_safe(text: object, limit: int) -> bool:
+    """Plain printable ASCII only (no newline, control, ANSI escape or bidi character), within LIMIT."""
+    return isinstance(text, str) and 0 < len(text) <= limit and all(" " <= c <= "~" for c in text)
+
+
 def route_problem(route: dict) -> str | None:
-    """Why this route cannot be installed (a short reason), or None. Names must be plain env var names."""
+    """Why this route cannot be installed (a short reason), or None. Names must be plain env var names, the
+    command or address must be safe to show and to write."""
     if route.get("kind") not in _WRITABLE_KINDS:
         return "route kind not supported yet"
     if not isinstance(route.get("route_id"), str) or not _ROUTE_ID_OK.fullmatch(route["route_id"]):
@@ -118,13 +128,21 @@ def route_problem(route: dict) -> str | None:
             return "header name not valid"
     if not all(isinstance(n, str) and len(n) <= NAME_MAX and _NAME_OK.fullmatch(n) for n in names):
         return "variable name not valid"
+    shown, limit = ((route.get("install") or {}).get("command_text"), COMMAND_MAX) if route["kind"] == "local-command" \
+        else (route.get("url"), URL_MAX)
+    if not _display_safe(shown, limit):
+        return "command or address not safe to show"
+    try:
+        build_mcp_entry(route, frozenset())    # everything the writer would refuse, refused here instead
+    except ValueError:
+        return "command or address not valid"
     return None
 
 
 def installable_routes(entry: dict) -> list[dict]:
     """Routes v1 can install: the entry is selectable and the route is a writable kind with valid names."""
     slug = entry.get("slug")
-    if not (entry.get("wizard") or {}).get("selectable") or not isinstance(slug, str) or len(slug) > 64:
+    if not (entry.get("wizard") or {}).get("selectable") or not isinstance(slug, str) or not _SLUG_OK.fullmatch(slug):
         return []
     return [r for r in entry.get("routes") or [] if isinstance(r, dict) and route_problem(r) is None]
 
@@ -142,11 +160,11 @@ def route_fingerprint(route: dict) -> str:
 
 
 def route_destination(route: dict) -> str:
-    """Where a value will go, in plain words: the command, or the host and path of the URL."""
+    """Where a value will go, in plain words: the command, or the host and path of the URL (whitespace collapsed)."""
     if route.get("kind") == "local-command":
-        return f"runs {(route.get('install') or {}).get('command_text', 'a local program')}"
+        return "runs " + " ".join(str((route.get("install") or {}).get("command_text", "a local program")).split())
     url = str(route.get("url", ""))
-    return "connects to " + (url.split("://", 1)[-1] or "an address not stated")
+    return "connects to " + (" ".join(url.split("://", 1)[-1].split()) or "an address not stated")
 
 
 def route_label(r: dict) -> str:

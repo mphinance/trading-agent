@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from trading_agent.wizard.screens import FIRST_SCREEN_SLUGS
+
 from trading_agent.wizard.catalog import (
     is_installable, order_catalog, region_is_uncurated, route_fingerprint, route_names, route_problem, search_catalog,
 )
@@ -95,7 +98,7 @@ def test_route_names_are_secret_unless_the_catalog_marks_a_mode_switch_explicitl
 
 
 def test_route_problem_names_the_defect_without_echoing_values():
-    ok = {"route_id": "r", "kind": "remote-url", "auth": {"env_vars": [{"name": "OK_NAME"}]}}
+    ok = {"route_id": "r", "kind": "remote-url", "url": "https://x.test/mcp", "auth": {"env_vars": [{"name": "OK_NAME"}]}}
     assert route_problem(ok) is None
     for bad in ({**ok, "kind": "local-gateway-required"}, {**ok, "route_id": "Bad Id"},
                 {**ok, "auth": {"env_vars": [{"name": "bad name"}]}}, {**ok, "auth": {"env_vars": [{"name": "X" * 65}]}},
@@ -108,3 +111,31 @@ def test_route_fingerprint_changes_when_the_destination_or_names_change():
     assert route_fingerprint(a) == route_fingerprint(dict(a))
     assert route_fingerprint(a) != route_fingerprint({**a, "url": "https://evil.test/mcp"})
     assert route_fingerprint(a) != route_fingerprint({**a, "auth": {"env_vars": [{"name": "K_TWO"}]}})
+
+
+@pytest.mark.parametrize("slug", ["a:b", "Upper", "has space", "x" * 65, "-lead", "a/b", "tr\nader"])
+def test_a_slug_the_writer_would_refuse_is_not_installable(slug):
+    e = entry(slug, "X", routes=[{"route_id": "r", "kind": "remote-url", "url": "https://x.test/mcp"}])
+    assert not is_installable(e)
+
+
+@pytest.mark.parametrize("bad", [
+    {"kind": "local-command", "install": {"command_text": "uvx x\nrm -rf /"}},
+    {"kind": "local-command", "install": {"command_text": "uvx x\x1b[31m"}},
+    {"kind": "local-command", "install": {"command_text": "uvx \u202egnp"}},
+    {"kind": "local-command", "install": {"command_text": "uvx " + "x" * 300}},
+    {"kind": "local-command", "install": {"command_text": "uvx x | sh"}},
+    {"kind": "remote-url", "url": "https://x.test/mcp\n"},
+    {"kind": "remote-url", "url": "https://x.test/\x1b[0m"},
+    {"kind": "remote-url", "url": "https://" + "a" * 600 + ".test/mcp"},
+    {"kind": "remote-url", "url": "https://evil.com\\.api.openai.com/mcp"},
+    {"kind": "remote-url", "url": "http://x.test/mcp"},
+])
+def test_route_with_an_unsafe_command_or_address_is_not_installable(bad):
+    assert route_problem({"route_id": "r", **bad}) is not None
+    assert not is_installable(entry("alpaca", "X", routes=[{"route_id": "r", **bad}]))
+
+
+def test_route_destination_collapses_whitespace():
+    from trading_agent.wizard.catalog import route_destination
+    assert route_destination({"kind": "local-command", "install": {"command_text": "uvx   x \t y"}}) == "runs uvx x y"

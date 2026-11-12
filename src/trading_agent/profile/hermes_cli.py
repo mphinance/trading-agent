@@ -40,9 +40,11 @@ class HermesNotBootstrapped(HermesUnavailable):
     ``hermes pm repair``"). The first ``profile install`` bootstraps it, so this is not a failure."""
 
 
-# The exact first-run text of a brand new HERMES_HOME (docs/spike/T0-results.md answer 2). It counts only with a
-# nonzero exit and never together with "corrupt" (a broken venv also mentions ``pm repair``).
-_T0_SIGNATURE = "no dependency environment is committed"
+# The exact first-run text of a brand new HERMES_HOME (docs/spike/T0-results.md answer 2, v0.23.1):
+#   no dependency environment is committed for this install; run `hermes pm repair`
+# It counts only with a nonzero exit, never together with "corrupt" (a broken venv also mentions ``pm repair``),
+# and never when the same output also names a Hermes version.
+_T0_SIGNATURE = re.compile(r"no dependency environment is committed for this install; run [`']?hermes pm repair[`']?")
 
 _NAMED_VERSION = re.compile(r"(?i)\bhermes(?:\s+agent)?\s+v?(\d+)\.(\d+)\.(\d+)([0-9A-Za-z.+_-]*)")
 _V_VERSION = re.compile(r"(?<![\w.])v(\d+)\.(\d+)\.(\d+)([0-9A-Za-z.+_-]*)")
@@ -113,17 +115,21 @@ class HermesCli:
     # ---- queries
 
     def version(self) -> str:
-        """The line of ``hermes --version`` that names the version (else the first line)."""
+        """The line of ``hermes --version`` that names the version: a token next to the word hermes on ANY line
+        first, then a bare ``v1.2.3``, else the first line."""
         res = self.run(["--version"], timeout=CALL_TIMEOUT)
         if res.timed_out:
             raise HermesUnavailable("hermes --version failed")
-        text = f"{res.stdout}\n{res.stderr}".lower()
-        if res.returncode != 0 and _T0_SIGNATURE in text and "corrupt" not in text:
-            raise HermesNotBootstrapped("hermes found, data root not initialized yet")
+        text = f"{res.stdout}\n{res.stderr}"
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
+        named = next((ln for ln in text.splitlines() if _NAMED_VERSION.search(ln)), None)
+        if res.returncode != 0 and _T0_SIGNATURE.search(text.lower()) and "corrupt" not in text.lower():
+            if named is None:
+                raise HermesNotBootstrapped("hermes found, data root not initialized yet")
+            return named.strip()    # a version was printed too: let the caller enforce the pin
         if res.returncode != 0 or not lines:
             raise HermesUnavailable("hermes --version failed")
-        return next((ln for ln in lines if parse_hermes_version(ln) is not None), lines[0])
+        return named.strip() if named else next((ln for ln in lines if _V_VERSION.search(ln)), lines[0])
 
     def profile_exists(self, name: str) -> bool:
         """True if the profile directory exists OR ``hermes profile list`` names it.
