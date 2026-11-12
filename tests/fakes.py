@@ -7,7 +7,7 @@ from trading_agent.platform import RunResult, shell_has_var, shell_vars
 
 
 class FakePlatform:
-    def __init__(self, home, environ=None, which_map=None, run_results=None, config_home=None, files=None):
+    def __init__(self, home, environ=None, which_map=None, run_results=None, config_home=None, files=None, dirs=None):
         self._home = Path(home)
         self._config_home = Path(config_home) if config_home else self._home / ".config"
         self._environ = dict(environ or {})
@@ -15,6 +15,7 @@ class FakePlatform:
         self._results = list(run_results or [])
         self.run_calls: list[list[str]] = []
         self.files: dict[Path, str] = {Path(k): v for k, v in (files or {}).items()}
+        self.dirs: dict[Path, list[str]] = {Path(k): list(v) for k, v in (dirs or {}).items()}
         self.calls: list[str] = []
 
     def home(self) -> Path:
@@ -44,6 +45,13 @@ class FakePlatform:
     def path_exists(self, path: Path) -> bool:
         self.calls.append("path_exists")
         return Path(path) in self.files
+
+    def list_dir(self, path: Path) -> list[str]:
+        self.calls.append("list_dir")
+        try:
+            return list(self.dirs[Path(path)])
+        except KeyError:
+            raise FileNotFoundError(str(path)) from None
 
     def login_shell_has_var(self, name: str) -> bool:
         self.calls.append("login_shell_has_var")
