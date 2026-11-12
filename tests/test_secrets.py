@@ -324,3 +324,35 @@ def test_scrub_is_linear_with_many_secrets():
     t0 = time.perf_counter()
     scrub(text, [f"secret value {i} &=%" for i in range(200)])
     assert time.perf_counter() - t0 < 2.0
+
+
+# ---- round 3: nested params, unbounded userinfo/name, default quote() form ----
+
+@pytest.mark.parametrize("text,gone", [
+    ("x?redirect_uri=https://app.example/cb?access_token=hunter2Secret!x&state=1", "hunter2Secret!x"),
+    ("/login?next=/api/v1/export?api_key=Pa55word_99", "Pa55word_99"),
+    ("?url=https://api.x.com/v1?token=s3cr3t-value", "s3cr3t-value"),
+    ("?q=1?password=letmein123", "letmein123"),
+    ("https://alice:" + "hunter2!" * 38 + "@host.example/x", "hunter2!hunter2!"),
+    ("?" + "x" * 90 + "_token=ZZtop99secretVAL", "ZZtop99secretVAL"),
+])
+def test_redact_nested_and_long_forms(text, gone):
+    assert gone not in sec.redact_patterns(text)
+
+
+def test_redact_keeps_state_param_beside_nested_secret():
+    out = sec.redact_patterns("?redirect_uri=https://a/cb?access_token=hunter2Secret!x&state=1")
+    assert "state=1" in out
+
+
+def test_redact_repeated_nested_params_neither_recurses_nor_is_slow():
+    text = "?a=" * 33_000
+    t0 = time.perf_counter()
+    sec.redact_patterns(text)
+    assert time.perf_counter() - t0 < 1.0
+
+
+def test_scrub_default_quote_form():
+    value = "ab/cd ef&gh"
+    assert quote(value) != quote(value, safe="")
+    assert scrub(f"echo {quote(value)} end", [value]) == f"echo {sec.HIDDEN} end"

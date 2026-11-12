@@ -209,7 +209,7 @@ def scrub(text: str, secrets: Iterable[str]) -> str:
         forms.add(json.dumps(secret)[1:-1])
         forms.add(json.dumps(secret, ensure_ascii=False)[1:-1])
         # percent-encoded echoes (URLs, form bodies), upper and lower case hex
-        for enc in (quote(secret, safe=""), quote_plus(secret)):
+        for enc in (quote(secret, safe=""), quote(secret), quote_plus(secret)):
             forms.add(enc)
             forms.add(re.sub(r"%[0-9A-F]{2}", lambda m: m.group(0).lower(), enc))
         forms.discard("")
@@ -234,11 +234,15 @@ def check_secret(name: str, value: str) -> None:
 
 _SK_KEY = re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{7,}")
 _BEARER = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=\-]{8,}")
-# Bounded scheme and userinfo: an unbounded scheme class retried from every start position is quadratic.
-_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,31}://)[^/\s@]{1,256}@")
+# Bounded scheme: an unbounded scheme class retried from every start position is quadratic.
+# The userinfo class stops at the next "/" so it stays linear without a bound (a bound would fail open).
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,31}://)[^/\s@]+@")
 # One bounded-name pattern for query parameters; the keyword and long-value rules run in the callback.
 # (Nested unbounded classes around a keyword alternation were quadratic on "?" + "token" * n.)
-_URL_PARAM = re.compile(r"([?&])([A-Za-z0-9_.\-]{1,64})=([^&\s#\"']+)")
+_URL_PARAM = re.compile(r"([?&])([A-Za-z0-9_.\-]+)=([^&\s#\"']+)")
+# Second pass, value class without "?": finds a sensitive param NESTED inside another param's value
+# (redirect_uri=https://app/cb?access_token=...). Two linear passes, never recursion.
+_URL_PARAM_NESTED = re.compile(r"([?&])([A-Za-z0-9_.\-]+)=([^?&\s#\"']+)")
 _SENSITIVE_NAME = ("token", "key", "secret", "sig", "auth", "passw", "pwd", "credential", "access")
 _TOKENISH = re.compile(r"[A-Za-z0-9_.~+/\-]{16,}")
 _HEX_RUN = re.compile(r"(?<![A-Za-z0-9])[A-Fa-f0-9]{32,}(?![A-Za-z0-9])")
@@ -268,6 +272,7 @@ def redact_patterns(text: str) -> str:
     base64 runs of 32+ chars, URL userinfo, and token-looking URL query values."""
     text = _URL_USERINFO.sub(lambda m: f"{m.group(1)}{HIDDEN}@", text)
     text = _URL_PARAM.sub(_param_sub, text)
+    text = _URL_PARAM_NESTED.sub(_param_sub, text)
     text = _BEARER.sub(lambda m: f"{m.group(1)} {HIDDEN}", text)
     text = _SK_KEY.sub(HIDDEN, text)
     text = _HEX_RUN.sub(HIDDEN, text)

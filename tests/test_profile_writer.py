@@ -834,3 +834,55 @@ def test_report_from_200kb_of_spaceless_stderr_is_fast_and_truncated(env, shape)
     assert time.perf_counter() - t0 < 5.0
     assert len(ei.value.report) < 1500
     assert not env.pdir().exists()
+
+
+# ---------------------------------------------------------------- round 3: cap context, tail display
+
+CUT_SHAPES = {
+    "sk-key": "sk-AbCdEfGhIjKlMnOpQrStUvWx",
+    "hex": "0123456789abcdef01234567",
+    "b64": "QWxhZGRpbjpvcGVuIHNlc2FtZTEy",
+    "bearer": "Bearer ZxCvBnMqWeRtYuIoPaSdF",
+    "userinfo": "https://alice:S3cr3tPassw0rdXYZ@host.example/p",
+    "param": "?api_key=ZZtop99secretVAL",
+}
+
+
+@pytest.mark.parametrize("shape", list(CUT_SHAPES))
+@pytest.mark.parametrize("offset", [1, 3, 7, 12])
+def test_secret_straddling_the_cap_cut_never_appears(env, shape, offset):
+    from trading_agent.profile import writer as w
+    secret = CUT_SHAPES[shape]
+    window = w._RAW_CAP + w._CONTEXT
+    final = " FINAL ERROR LINE"
+    after_len = window - (len(secret) - offset) - len(final)   # the window starts `offset` chars into the secret
+    blob = "noise " * 3000 + secret + ("word " * 5000)[:after_len] + final
+    assert len(blob) - blob.index(secret) - offset == window
+    env.set_control(fail_match="config set auth", fail_stderr=blob)
+    with pytest.raises(WriteError) as ei:
+        run_write(env, plan())
+    rep = ei.value.report
+    flat = " ".join(rep.split())
+    for win in _windows([secret]):
+        assert win not in rep and win not in flat, (shape, offset, win)
+    assert "FINAL ERROR LINE" in rep
+
+
+def test_long_stderr_shows_the_error_at_the_end(env):
+    blob = "lorem ipsum dolor " * 3000 + "\nFATAL: provider config rejected by hermes\n"
+    env.set_control(fail_match="config set auth", fail_stderr=blob)
+    with pytest.raises(WriteError) as ei:
+        run_write(env, plan())
+    assert "FATAL: provider config rejected by hermes" in ei.value.report
+    assert len(ei.value.report) < 1500
+
+
+@pytest.mark.parametrize("shape", ["dots", "token-runs", "no-separators", "userinfo-alphabet"])
+def test_spaceless_blob_fails_closed(env, shape):
+    blob = {"dots": "a." * 100_000, "token-runs": "?" + "token" * 40_000, "no-separators": "Ab1" * 70_000,
+            "userinfo-alphabet": "abc.-+:" * 30_000}[shape]
+    env.set_control(fail_match="config set auth", fail_stderr=blob)
+    with pytest.raises(WriteError) as ei:
+        run_write(env, plan())
+    assert "output omitted" in ei.value.report
+    assert "Ab1Ab1" not in ei.value.report and "token" not in ei.value.report.replace("config set", "")
