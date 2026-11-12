@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from trading_agent.findings import Finding
 from trading_agent.platform import RunResult, shell_has_var, shell_vars
 
 
@@ -72,3 +73,144 @@ class FakePlatform:
         if self._results:
             return self._results.pop(0)
         return RunResult(0, "", "", False)
+
+
+# ---------------------------------------------------------------- wizard fakes
+
+class ScriptExhausted(Exception):
+    """The wizard asked for more answers than the script has (also how tests simulate an interrupt)."""
+
+
+class ScriptedIO:
+    """Feeds a list of answers (choose: option id, confirm: bool, secret/ask: str) and records everything.
+
+    ``prompts`` holds (kind, prompt, [(option id, label), ...]); ``said`` holds every ``say`` text.
+    ``everything()`` is all text a user could have seen, for leak assertions.
+    """
+
+    def __init__(self, answers, on_prompt=None):
+        self.answers = list(answers)
+        self.said: list[str] = []
+        self.prompts: list[tuple[str, str, list[tuple[str, str]]]] = []
+        self.details: list[str] = []
+        self.on_prompt = on_prompt
+
+    def say(self, text: str) -> None:
+        self.said.append(text)
+
+    def _next(self, kind, prompt, options=()):
+        self.prompts.append((kind, prompt, [(o.id, o.label) for o in options]))
+        self.details.extend(o.detail for o in options if o.detail)
+        if self.on_prompt:
+            self.on_prompt(self)
+        if not self.answers:
+            raise ScriptExhausted(f"no answer left for {kind}: {prompt[:60]!r}")
+        return self.answers.pop(0)
+
+    def choose(self, prompt, options):
+        ids = [o.id for o in options]
+        a = self._next("choose", prompt, options)
+        assert a in ids, f"scripted answer {a!r} not offered; offered {ids}; prompt {prompt[:80]!r}"
+        return a
+
+    def confirm(self, prompt):
+        a = self._next("confirm", prompt)
+        assert isinstance(a, bool), f"confirm needs a bool, got {a!r}; prompt {prompt[:80]!r}"
+        return a
+
+    def secret(self, prompt):
+        a = self._next("secret", prompt)
+        assert isinstance(a, str), f"secret needs a str, got {a!r}; prompt {prompt[:80]!r}"
+        return a
+
+    def ask(self, prompt):
+        a = self._next("ask", prompt)
+        assert isinstance(a, str), f"ask needs a str, got {a!r}; prompt {prompt[:80]!r}"
+        return a
+
+    # helpers for assertions
+    def kinds(self):
+        return [k for k, _, _ in self.prompts]
+
+    def option_ids(self, index=-1):
+        return [i for i, _ in self.prompts[index][2]]
+
+    def prompt_texts(self):
+        out = []
+        for _, prompt, opts in self.prompts:
+            out.append(prompt)
+            out.extend(label for _, label in opts)
+        return out
+
+    def everything(self) -> str:
+        return "\n".join(self.said + self.prompt_texts() + self.details)
+
+
+class FakeHermes:
+    """Just the HermesCli surface the wizard touches. write_profile is monkeypatched in unit tests."""
+
+    def __init__(self, platform, root, version="Hermes Agent v0.23.1 (2026.9.24)", raises=None, existing=()):
+        self.platform = platform
+        self.root = Path(root)
+        self._version = version
+        self.raises = raises
+        self.existing = set(existing)
+        self.version_calls = 0
+        self.exists_calls: list[str] = []
+
+    def version(self):
+        self.version_calls += 1
+        if self.raises:
+            raise self.raises
+        return self._version
+
+    def profile_exists(self, name):
+        self.exists_calls.append(name)
+        return name in self.existing
+
+    def profile_dir(self, name):
+        return self.root / "profiles" / name
+
+
+class FakeStore:
+    def __init__(self, existing=()):
+        self.names = set(existing)
+        self.set_calls: list[str] = []
+
+    def set(self, name, value):
+        self.set_calls.append(name)
+        self.names.add(name)
+
+    def exists(self, name):
+        return name in self.names
+
+    def remove(self, name):
+        self.names.discard(name)
+
+
+def finding(fid, kind, what, names, *, state="present", where="environment variable",
+            reusable="copy-with-consent"):
+    return Finding(id=fid, kind=kind, what=what, where=where, state=state, names=tuple(names), reusable=reusable)
+
+
+def env_finding(name, kind="ai-key", *, where="environment variable", reusable="copy-with-consent",
+                state="present", what=None):
+    return finding(f"env:{name}", kind, what or f"{name} credential", [name], where=where,
+                   reusable=reusable, state=state)
+
+
+def port_finding(name, *, present=True):
+    return finding(f"ai-local:{name}", "ai-local", f"Something is listening on the usual {name} port",
+                   [name], state="present" if present else "absent", where="127.0.0.1:1", reusable="none")
+
+
+def cli_finding(name, *, present=True):
+    return finding(f"cli:{name}", "ai-cli", f"{name} CLI (found, not tested)", [name],
+                   state="present" if present else "absent", where=f"/usr/bin/{name}", reusable="reference-only")
+
+
+def assert_no_leak(text: str, *secrets: str) -> None:
+    """The whole secret, or an 8 character head or tail of it, must not appear (catches masked or partial leaks)."""
+    for secret in secrets:
+        for frag in (secret, secret[:8], secret[-8:]):
+            assert frag not in text, f"a piece of a secret leaked: {frag[:4]}..."
