@@ -15,7 +15,10 @@ dependencies = ["PyYAML>=6", "jsonschema>=4"]
 keyring = ["keyring>=24"]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "python-dotenv>=1.2.4",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trading_agent"]
