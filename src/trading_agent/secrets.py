@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from urllib.parse import quote, quote_plus
 import secrets as _stdlib_secrets
 from pathlib import Path
 from typing import Iterable, Protocol
@@ -191,7 +192,7 @@ def choose_store(platform: Platform, profile_dir: Path) -> SecretStore:
 
 
 def scrub(text: str, secrets: Iterable[str]) -> str:
-    """Replace every secret, and its dotenv, Python-repr and JSON escaped forms, with ``[hidden]``.
+    """Replace every secret, and its dotenv, Python-repr, JSON and percent-encoded forms, with ``[hidden]``.
 
     One pass over TEXT with longest-first alternation: overlapping and substring secrets
     resolve to the longest match, secrets are escaped (never used as patterns), and
@@ -207,6 +208,10 @@ def scrub(text: str, secrets: Iterable[str]) -> str:
         forms.add(repr(secret)[1:-1])
         forms.add(json.dumps(secret)[1:-1])
         forms.add(json.dumps(secret, ensure_ascii=False)[1:-1])
+        # percent-encoded echoes (URLs, form bodies), upper and lower case hex
+        for enc in (quote(secret, safe=""), quote_plus(secret)):
+            forms.add(enc)
+            forms.add(re.sub(r"%[0-9A-F]{2}", lambda m: m.group(0).lower(), enc))
         forms.discard("")
     if not forms:
         return text
@@ -229,11 +234,13 @@ def check_secret(name: str, value: str) -> None:
 
 _SK_KEY = re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{7,}")
 _BEARER = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=\-]{8,}")
-_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@]+@")
-_URL_SENSITIVE_PARAM = re.compile(
-    r"(?i)([?&][A-Za-z0-9_.\-]*(?:token|key|secret|sig|signature|auth|passw|pwd|credential|access)"
-    r"[A-Za-z0-9_.\-]*=)[^&\s#\"']+")
-_URL_LONG_VALUE = re.compile(r"([?&][A-Za-z0-9_.\-]+=)([A-Za-z0-9_.~+/\-]{16,})(?=$|[&\s#\"'])")
+# Bounded scheme and userinfo: an unbounded scheme class retried from every start position is quadratic.
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,31}://)[^/\s@]{1,256}@")
+# One bounded-name pattern for query parameters; the keyword and long-value rules run in the callback.
+# (Nested unbounded classes around a keyword alternation were quadratic on "?" + "token" * n.)
+_URL_PARAM = re.compile(r"([?&])([A-Za-z0-9_.\-]{1,64})=([^&\s#\"']+)")
+_SENSITIVE_NAME = ("token", "key", "secret", "sig", "auth", "passw", "pwd", "credential", "access")
+_TOKENISH = re.compile(r"[A-Za-z0-9_.~+/\-]{16,}")
 _HEX_RUN = re.compile(r"(?<![A-Za-z0-9])[A-Fa-f0-9]{32,}(?![A-Za-z0-9])")
 # '/' is not in this alphabet, so file paths never form one long run. A real base64 secret
 # containing '/' is cut into pieces; a piece of 32+ chars is still redacted.
@@ -248,12 +255,19 @@ def _b64_sub(m: re.Match) -> str:
     return run
 
 
+def _param_sub(m: re.Match) -> str:
+    sep, name, value = m.group(1), m.group(2), m.group(3)
+    lowered = name.lower()
+    if any(k in lowered for k in _SENSITIVE_NAME) or _TOKENISH.fullmatch(value):
+        return f"{sep}{name}={HIDDEN}"
+    return m.group(0)
+
+
 def redact_patterns(text: str) -> str:
     """Mask things shaped like credentials: sk-style keys, ``Bearer <token>``, hex or
     base64 runs of 32+ chars, URL userinfo, and token-looking URL query values."""
     text = _URL_USERINFO.sub(lambda m: f"{m.group(1)}{HIDDEN}@", text)
-    text = _URL_SENSITIVE_PARAM.sub(lambda m: f"{m.group(1)}{HIDDEN}", text)
-    text = _URL_LONG_VALUE.sub(lambda m: f"{m.group(1)}{HIDDEN}", text)
+    text = _URL_PARAM.sub(_param_sub, text)
     text = _BEARER.sub(lambda m: f"{m.group(1)} {HIDDEN}", text)
     text = _SK_KEY.sub(HIDDEN, text)
     text = _HEX_RUN.sub(HIDDEN, text)

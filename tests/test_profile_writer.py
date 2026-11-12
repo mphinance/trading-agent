@@ -790,3 +790,47 @@ def test_rollback_returns_true_when_it_acted(env):
     r = run_write(env, plan())
     assert rollback(r, hermes=env.hermes, store_factory=env.store_factory) is True
     assert not env.receipt_path().exists()
+
+
+# ---------------------------------------------------------------- round 2: cost bound, percent-encoded echoes
+
+def _windows(variants, size=8):
+    for v in variants:
+        for i in range(0, max(1, len(v) - size + 1)):
+            yield v[i:i + size]
+
+
+@pytest.mark.parametrize("value", [
+    "AbCd1234  EfGh5678", "AbCd1234\nEfGh5678", "AbCd1234\tEfGh5678", "AbCd1234\rEfGh5678",
+    "AbCd1234\r\nEfGh5678", 'AbCd1234"EfGh5678', "AbCd1234\\EfGh5678", "AbCd1234&=/+%?EfGh5678",
+    "Qx9" + "abcdefghij" * 71,
+])
+@pytest.mark.parametrize("encoder", ["quote", "quote_plus"])
+@pytest.mark.parametrize("case", ["upper", "lower"])
+def test_report_scrubs_percent_encoded_echo(env, value, encoder, case):
+    import re
+    from urllib.parse import quote, quote_plus
+    enc = (quote(value, safe="") if encoder == "quote" else quote_plus(value))
+    if case == "lower":
+        enc = re.sub(r"%[0-9A-F]{2}", lambda m: m.group(0).lower(), enc)
+    env.set_control(fail_match="config set model.provider", fail_stderr=f"bad {enc} tail\n")
+    with pytest.raises(WriteError) as ei:
+        run_write(env, plan(ai=AiChoice("openrouter", ""), env_values={"OPENROUTER_API_KEY": value}))
+    rep = ei.value.report
+    for w in _windows([value, enc, " ".join(value.split())]):
+        assert w not in rep, w
+    assert HIDDEN in rep
+
+
+@pytest.mark.parametrize("shape", ["dots", "token-runs", "no-separators", "userinfo-alphabet"])
+def test_report_from_200kb_of_spaceless_stderr_is_fast_and_truncated(env, shape):
+    import time
+    blob = {"dots": "a." * 100_000, "token-runs": "?" + "token" * 40_000, "no-separators": "Ab1" * 70_000,
+            "userinfo-alphabet": "abc.-+:" * 30_000}[shape]
+    env.set_control(fail_match="config set auth", fail_stderr=blob, fail_stdout=blob)
+    t0 = time.perf_counter()
+    with pytest.raises(WriteError) as ei:
+        run_write(env, plan(env_values={"A_KEY": "Zq9" + "k" * 40}))
+    assert time.perf_counter() - t0 < 5.0
+    assert len(ei.value.report) < 1500
+    assert not env.pdir().exists()

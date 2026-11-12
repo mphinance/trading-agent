@@ -233,21 +233,33 @@ def _validate_plan(plan: WritePlan) -> dict | None:
 
 # ------------------------------------------------------------------ reports
 
-def _report(text: str, plan_values: list[str]) -> str:
+_RAW_CAP = 16 * 1024  # keep only the LAST 16 KB of raw tool output before pattern redaction
+
+
+def _scrub_known(text: str, plan_values: list[str]) -> str:
     # Platform.run decodes with universal newlines, so a value containing CR comes back with LF:
-    # scrub the newline-translated form of every value as well as the original.
+    # scrub the newline-translated form of every value as well as the original. scrub() is linear.
     forms = set(plan_values)
     for v in plan_values:
         forms.add(v.replace("\r\n", "\n").replace("\r", "\n"))
-    return redact_patterns(scrub(text, forms))
+    return scrub(text, forms)
 
 
-def _tail(text: str, plan_values: list[str]) -> str:
-    """Scrub and redact the RAW text first, only then normalize whitespace and truncate, then run
-    the result through scrub/redact once more. Normalizing or cutting first would change a secret's
-    form (so scrub misses it) or leave a prefix of it."""
-    text = _report(text, plan_values)
-    text = " ".join(text.split())
+def _report(text: str, plan_values: list[str]) -> str:
+    """For SHORT, already bounded text (the final report)."""
+    return redact_patterns(_scrub_known(text, plan_values))
+
+
+def _clean(raw: str, plan_values: list[str]) -> str:
+    """Raw tool output to bounded redacted text: scrub the FULL text with the known values (linear),
+    keep the last 16 KB, then pattern redaction (cost bounded by the cap)."""
+    return redact_patterns(_scrub_known(raw, plan_values)[-_RAW_CAP:])
+
+
+def _tail(raw: str, plan_values: list[str]) -> str:
+    """scrub (full) -> cap -> redact -> normalize whitespace -> truncate -> scrub and redact again.
+    Normalizing or cutting before scrubbing would change a secret's form or leave a prefix of it."""
+    text = " ".join(_clean(raw, plan_values).split())
     text = text[:_REPORT_LIMIT] + ("..." if len(text) > _REPORT_LIMIT else "")
     return _report(text, plan_values)
 
@@ -256,9 +268,8 @@ def _hermes_failure(what: str, res: RunResult, plan_values: list[str]) -> _StepE
     if res.timed_out:
         return _StepError(f"{what}: hermes timed out")
     # each stream separately and raw: a secret never spans the stderr/stdout boundary
-    detail = " ".join(part for part in (_report(res.stderr or "", plan_values),
-                                        _report(res.stdout or "", plan_values)) if part)
-    detail = _tail(detail, plan_values)
+    detail = _tail(" ".join(part for part in (_clean(res.stderr or "", plan_values),
+                                              _clean(res.stdout or "", plan_values)) if part), plan_values)
     return _StepError(f"{what}: hermes exited {res.returncode}" + (f": {detail}" if detail.strip() else ""))
 
 

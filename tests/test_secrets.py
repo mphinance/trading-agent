@@ -272,3 +272,55 @@ def test_check_secret_names_only():
     with pytest.raises(ValueError) as e:
         sec.check_secret("A_KEY", "pre${HOME}post")
     assert "pre" not in str(e.value) and "post" not in str(e.value)
+
+
+# ---- cost bounds and percent-encoded forms ----
+
+import time
+from urllib.parse import quote, quote_plus
+
+_N = 100_000
+PATHOLOGICAL = {
+    "dot-runs": "a." * (_N // 2), "colon-runs": "a:" * (_N // 2), "slashes": "//" * (_N // 2),
+    "ats": "@" * _N, "percents": "%" * _N, "equals": "=" * _N, "q-equals": "?=" * (_N // 2),
+    "q-a-equals": "?a=" * (_N // 3), "one-token": "A1" * (_N // 2), "b64-ish": "aB3+" * (_N // 4),
+    "userinfo-alphabet": ("abc.-+:" * _N)[:_N], "schemes": "http://" * (_N // 7), "a-slash-slash": "a://" * (_N // 4),
+    "q-key-runs": "?key" * (_N // 4), "q-token-runs": "?" + "token" * (_N // 5), "q-auth-runs": "?" + "auth" * (_N // 4),
+    "amp-pairs": "&a=1" * (_N // 4), "long-hex": "f" * _N, "sk-runs": "sk-" * (_N // 3),
+    "bearer-runs": "Bearer " * (_N // 7), "bearer-long": "Bearer " + "a" * _N, "long-param": "?x=" + "a" * _N,
+    "scheme-no-slash": "a" * _N + "://", "userinfo-no-at": "a://" + "b" * _N,
+}
+
+
+@pytest.mark.parametrize("name", list(PATHOLOGICAL))
+def test_redact_patterns_is_fast_on_pathological_input(name):
+    text = PATHOLOGICAL[name]
+    t0 = time.perf_counter()
+    sec.redact_patterns(text)
+    assert time.perf_counter() - t0 < 1.0, name
+
+
+NASTY = ["AbCd1234  EfGh5678", "AbCd1234\nEfGh5678", "AbCd1234\tEfGh5678", "AbCd1234\rEfGh5678",
+         "AbCd1234\r\nEfGh5678", 'AbCd1234"EfGh5678', "AbCd1234\\EfGh5678", "AbCd1234&=/+%?EfGh5678",
+         "Qx9" + "abcdefghij" * 71]
+
+
+@pytest.mark.parametrize("value", NASTY)
+def test_scrub_percent_encoded_forms(value):
+    forms = {quote(value, safe=""), quote_plus(value)}
+    forms |= {__import__("re").sub(r"%[0-9A-F]{2}", lambda m: m.group(0).lower(), f) for f in forms}
+    for f in forms:
+        out = scrub(f"hermes exited 1: {f} tail", [value])
+        assert out == f"hermes exited 1: {sec.HIDDEN} tail", f[:40]
+
+
+def test_scrub_plain_value_forms_unchanged():
+    assert scrub("x sk-ABC123 y", ["sk-ABC123"]) == f"x {sec.HIDDEN} y"
+    assert scrub("nothing here", ["zz9"]) == "nothing here"
+
+
+def test_scrub_is_linear_with_many_secrets():
+    text = "a b " * 250_000
+    t0 = time.perf_counter()
+    scrub(text, [f"secret value {i} &=%" for i in range(200)])
+    assert time.perf_counter() - t0 < 2.0
