@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from trading_agent.wizard.screens import FIRST_SCREEN_SLUGS
-from trading_agent.wizard.flow import is_installable, order_catalog, region_is_uncurated, search_catalog
+from trading_agent.wizard.catalog import (
+    is_installable, order_catalog, region_is_uncurated, route_fingerprint, route_names, route_problem, search_catalog,
+)
 
 
 def entry(slug, name=None, *, region_codes=None, status=("official",), trading="true",
@@ -78,3 +80,31 @@ def test_is_installable_needs_selectable_and_routes():
     assert not is_installable(entry("a", selectable=False))
     assert not is_installable(entry("a", routes=[]))
     assert not is_installable(entry("a", routes=[{"route_id": "g", "kind": "local-gateway-required"}]))
+
+
+def test_route_names_are_secret_unless_the_catalog_marks_a_mode_switch_explicitly():
+    route = {"auth": {"env_vars": [
+        {"name": "A_KEY", "role": "key-id"},                                                  # no flag: secret
+        {"name": "B_MODE", "role": "mode-switch"},                                            # secret flag absent: secret
+        {"name": "C_MODE", "role": "mode-switch", "secret": False},                           # explicit: plain
+        {"name": "D_SECRET", "role": "secret", "secret": False}],                             # not a mode switch: secret
+        "headers": ["API_KEY", "PAPER_TRADING"], "header_env": {"API_KEY": "T_API_KEY"}}}
+    assert [(n.name, n.secret) for n in route_names(route)] == [
+        ("A_KEY", True), ("B_MODE", True), ("C_MODE", False), ("D_SECRET", True), ("T_API_KEY", True),
+        ("PAPER_TRADING", True)]
+
+
+def test_route_problem_names_the_defect_without_echoing_values():
+    ok = {"route_id": "r", "kind": "remote-url", "auth": {"env_vars": [{"name": "OK_NAME"}]}}
+    assert route_problem(ok) is None
+    for bad in ({**ok, "kind": "local-gateway-required"}, {**ok, "route_id": "Bad Id"},
+                {**ok, "auth": {"env_vars": [{"name": "bad name"}]}}, {**ok, "auth": {"env_vars": [{"name": "X" * 65}]}},
+                {**ok, "auth": {"headers": ["bad header!"]}}):
+        assert route_problem(bad)
+
+
+def test_route_fingerprint_changes_when_the_destination_or_names_change():
+    a = {"kind": "remote-url", "url": "https://a.test/mcp", "auth": {"env_vars": [{"name": "K_ONE"}]}}
+    assert route_fingerprint(a) == route_fingerprint(dict(a))
+    assert route_fingerprint(a) != route_fingerprint({**a, "url": "https://evil.test/mcp"})
+    assert route_fingerprint(a) != route_fingerprint({**a, "auth": {"env_vars": [{"name": "K_TWO"}]}})

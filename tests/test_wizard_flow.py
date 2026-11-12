@@ -673,7 +673,7 @@ def test_precheck_looks_for_the_binary_first_and_never_runs_a_missing_one(mk):
     receipt, io = w.run(["start", "stop"])
     assert receipt is None
     assert w.hermes.version_calls == 0
-    assert w.platform.calls.index("which") < len(w.platform.calls)
+    assert w.platform.calls.count("which") >= 1 and w.hermes.version_calls == 0   # looked, never ran
     said = "\n".join(io.said)
     assert screens.INSTALL_CMD == "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
     assert screens.INSTALL_CMD in said and "not installed yet" in said

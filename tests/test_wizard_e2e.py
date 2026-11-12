@@ -197,3 +197,28 @@ def test_e2e_state_file_and_everything_said_never_hold_a_value(world):
     for text in seen_states + [io.everything()]:
         assert_no_leak(text, S3)
     assert dotenv_read(world.pdir() / ".env") == {"OPENROUTER_API_KEY": S3}
+
+
+def test_e2e_a_stale_receipt_never_makes_a_false_you_are_set_up(world):
+    import shutil
+    deps = deps_for(world, findings=OLLAMA)
+    first = run_wizard(ScriptedIO([*TOP, "use:ai-local:ollama", "continue", "none", "done", "do"]), deps)
+    assert first is not None and world.receipt_path().exists()
+    shutil.rmtree(world.pdir())                              # the profile was deleted; its receipt file is left over
+    state_path = world.config_home / "trading-agent" / "state.json"
+    doc = json.loads(state_path.read_text())
+    doc["current"] = "WRITE"                                 # an interrupted second run, resumed at WRITE
+    state_path.write_text(json.dumps(doc))
+    io = ScriptedIO([])
+    with pytest.raises(ScriptExhausted):
+        run_wizard(io, deps_for(world, findings=OLLAMA))
+    assert "You are set up" not in "\n".join(io.said)
+    assert WizardState.load(world.platform).current is State.REVIEW
+    # a profile recreated by someone else (no ownership marker) is no better proof
+    world.pdir().mkdir(parents=True)
+    doc["current"] = "VERIFY"
+    state_path.write_text(json.dumps(doc))
+    io2 = ScriptedIO([])
+    with pytest.raises(ScriptExhausted):
+        run_wizard(io2, deps_for(world, findings=OLLAMA))
+    assert "You are set up" not in "\n".join(io2.said)
