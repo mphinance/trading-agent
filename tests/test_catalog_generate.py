@@ -126,7 +126,7 @@ def test_readme_only_stubs_generated(cat):
 
 def test_no_readme_means_no_stubs(cat):
     (cat / "readme.md").unlink()
-    assert len(build_generated_layer(cat, TODAY)) == 4
+    assert len(build_generated_layer(cat, TODAY, strict_readme=False)) == 4
 
 
 def test_unreviewed_entry_not_wireable(cat):
@@ -238,6 +238,88 @@ def test_seed_overlay_validates_on_fixture(cat):
     merged = by_slug(build_catalog(cat, overlay, TODAY))
     assert "banner" not in merged["alpaca"]["wizard"]
     assert merged["alpaca"]["routes"][0]["route_id"] == "local"
+
+
+def test_strict_missing_readme_fails(cat):
+    (cat / "readme.md").unlink()
+    with pytest.raises(CatalogError, match=r"readme\.md"):
+        build_generated_layer(cat, TODAY)
+
+
+def test_strict_section_absent_fails(cat):
+    r = cat / "readme.md"
+    r.write_text(r.read_text().replace("brokers with no MCP route", "brokers without a route"))
+    with pytest.raises(CatalogError, match=r"readme\.md.*section"):
+        build_generated_layer(cat, TODAY)
+    assert len(build_generated_layer(cat, TODAY, strict_readme=False)) == 4
+
+
+def test_strict_count_mismatch_fails_with_both_numbers(cat):
+    r = cat / "readme.md"
+    r.write_text(r.read_text().replace("<b>3 brokers", "<b>9 brokers"))
+    with pytest.raises(CatalogError, match=r"readme\.md.*9.*3"):
+        build_generated_layer(cat, TODAY)
+
+
+def test_strict_count_mismatch_when_row_dropped(cat):
+    r = cat / "readme.md"
+    r.write_text(re.sub(r"^\| \*\*SoFi.*\n", "", r.read_text(), flags=re.M))
+    with pytest.raises(CatalogError, match=r"readme\.md.*3.*2"):
+        build_generated_layer(cat, TODAY)
+
+
+def test_non_utf8_file_raises_catalog_error_naming_file(cat):
+    (cat / "brokers" / "alpaca.md").write_bytes(b"---\nname: \xff\xfe\n---\n")
+    with pytest.raises(CatalogError, match=r"brokers/alpaca\.md"):
+        build_generated_layer(cat, TODAY)
+
+
+def test_directory_named_md_is_skipped(cat):
+    (cat / "brokers" / "weird.md").mkdir()
+    assert "weird" not in by_slug(build_generated_layer(cat, TODAY))
+
+
+def test_symlinked_md_is_rejected(cat, tmp_path):
+    target = tmp_path / "elsewhere.md"
+    target.write_text((cat / "brokers" / "alpaca.md").read_text())
+    (cat / "brokers" / "linked.md").symlink_to(target)
+    with pytest.raises(CatalogError, match=r"brokers/linked\.md.*symlink"):
+        build_generated_layer(cat, TODAY)
+
+
+@pytest.mark.parametrize("bad,needle", [
+    ({"alpaca": []}, "alpaca"),
+    ([], "overlay"),
+    ({"alpaca": {"routes": {}}}, "alpaca.*routes"),
+    ({"alpaca": {"wizard": []}}, "alpaca.*wizard"),
+    ({"alpaca": {"overlay_reviewed_on": 5}}, "alpaca.*overlay_reviewed_on"),
+])
+def test_overlay_shape_errors_name_slug(cat, bad, needle):
+    with pytest.raises(CatalogError, match=needle):
+        merge_overlay(build_generated_layer(cat, TODAY), bad)
+
+
+def _run_main(cat, tmp_path, overlay_text="{}"):
+    ov = tmp_path / "overlay.json"
+    ov.write_text(overlay_text)
+    return generate.main(["--catalog-root", str(cat), "--out", str(tmp_path / "o.json"),
+                          "--overlay", str(ov)])
+
+
+def test_main_exit1_one_line_for_each_failure(cat, tmp_path, capsys):
+    (cat / "brokers" / "alpaca.md").write_bytes(b"---\nname: \xff\n---\n")
+    assert _run_main(cat, tmp_path) == 1
+    err = capsys.readouterr().err
+    assert "brokers/alpaca.md" in err and err.count("\n") == 1 and "Traceback" not in err
+    (cat / "brokers" / "alpaca.md").write_text(
+        (FIXTURE / "brokers" / "alpaca.md").read_text())
+    for text in ('{"alpaca": []}', "[]"):
+        assert _run_main(cat, tmp_path, text) == 1
+        err = capsys.readouterr().err
+        assert err.count("\n") == 1 and "Traceback" not in err
+    (cat / "readme.md").unlink()
+    assert _run_main(cat, tmp_path) == 1
+    assert "readme.md" in capsys.readouterr().err
 
 
 @pytest.mark.integration

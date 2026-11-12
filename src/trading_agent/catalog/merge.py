@@ -16,7 +16,26 @@ def _default_selectable(entry: dict[str, Any]) -> bool:
     return ("remote" in kinds or "local" in kinds) and entry.get("status") != ["none"]
 
 
+_KEY_TYPES: dict[str, type] = {
+    "routes": list, "wizard": dict, "region_codes": list, "region_notes": list,
+    "overlay_reviewed_on": str, "sync": dict,
+}
+
+
+def _check_overlay_shape(overlay: Any) -> None:
+    if not isinstance(overlay, dict):
+        raise CatalogError("overlay: must be an object keyed by slug")
+    for slug, ov in overlay.items():
+        if not isinstance(ov, dict):
+            raise CatalogError(f"overlay '{slug}': entry must be an object")
+        for key, typ in _KEY_TYPES.items():
+            if key in ov and not isinstance(ov[key], typ):
+                raise CatalogError(
+                    f"overlay '{slug}': '{key}' must be of type {typ.__name__}")
+
+
 def merge_overlay(generated: list[dict], overlay: dict[str, dict]) -> list[dict]:
+    _check_overlay_shape(overlay)
     known = {e["slug"] for e in generated}
     for slug in sorted(overlay):
         if slug not in known:

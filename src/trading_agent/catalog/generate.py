@@ -34,9 +34,17 @@ def _route_kinds(server_type: str) -> list[str]:
     return kinds or ["unknown"]
 
 
+def _read_text(path: Path, rel: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # Content-free on purpose: never echo file bytes.
+        raise CatalogError(f"{rel}: unreadable or not UTF-8 text") from None
+
+
 def _entry_from_file(path: Path, directory: str, today: date) -> dict:
     rel = f"{directory}/{path.name}"
-    fm = parse_front_matter(path.read_text(encoding="utf-8"), rel)
+    fm = parse_front_matter(_read_text(path, rel), rel)
     for key in REQUIRED_KEYS:
         if not fm.get(key):
             raise CatalogError(f"{rel}: missing '{key}'")
@@ -79,13 +87,21 @@ def _slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
-def _readme_stubs(catalog_root: Path) -> list[dict]:
+_SUMMARY_COUNT = re.compile(r"<b>(\d+) brokers with no MCP route")
+
+
+def _readme_stubs(catalog_root: Path, none_files: int, strict: bool) -> list[dict]:
     readme = next((p for p in (catalog_root / "readme.md", catalog_root / "README.md")
                    if p.is_file()), None)
     if readme is None:
+        if strict:
+            raise CatalogError("readme.md: not found, cannot extract no-route stubs")
         return []
-    section = _NOROUTE_SECTION.search(readme.read_text(encoding="utf-8"))
+    section = _NOROUTE_SECTION.search(_read_text(readme, readme.name))
     if not section:
+        if strict:
+            raise CatalogError(
+                f"{readme.name}: no-route '<details>' section not found, cannot extract stubs")
         return []
     stubs = []
     for line in section.group(0).split("\n"):
@@ -106,10 +122,18 @@ def _readme_stubs(catalog_root: Path) -> list[dict]:
             "server_type_raw": "n/a",
             "route_kinds": ["none"],
         })
+    if strict:
+        declared = int(_SUMMARY_COUNT.search(section.group(0)).group(1))  # regex matched above
+        found = none_files + len(stubs)
+        if declared != found:
+            raise CatalogError(
+                f"{readme.name}: summary says {declared} brokers with no MCP route, "
+                f"found {none_files} file entries with status none + {len(stubs)} stubs = {found}")
     return stubs
 
 
-def build_generated_layer(catalog_root: Path, today: date | None = None) -> list[dict]:
+def build_generated_layer(catalog_root: Path, today: date | None = None, *,
+                          strict_readme: bool = True) -> list[dict]:
     today = today or date.today()
     entries: list[dict] = []
     for directory in ("brokers", "aggregators"):
@@ -120,8 +144,16 @@ def build_generated_layer(catalog_root: Path, today: date | None = None) -> list
             # Same skips as check-readme-stats.mjs.
             if path.name == "readme.md" or path.name.startswith("_"):
                 continue
+            # Policy: the catalog is a trusted checkout. Only regular files directly under
+            # brokers/ and aggregators/ are read; a directory named *.md is skipped and a
+            # symlink (even to a regular file) is rejected so nothing outside the root is read.
+            if path.is_symlink():
+                raise CatalogError(f"{directory}/{path.name}: symlinks are not allowed")
+            if not path.is_file():
+                continue
             entries.append(_entry_from_file(path, directory, today))
-    entries.extend(_readme_stubs(catalog_root))
+    none_files = sum(e["status"] == ["none"] for e in entries)
+    entries.extend(_readme_stubs(catalog_root, none_files, strict_readme))
     seen: set[str] = set()
     for e in entries:
         if e["slug"] in seen:
@@ -131,8 +163,9 @@ def build_generated_layer(catalog_root: Path, today: date | None = None) -> list
 
 
 def build_catalog(catalog_root: Path, overlay: dict[str, dict],
-                  today: date | None = None) -> list[dict]:
-    merged = merge_overlay(build_generated_layer(catalog_root, today), overlay)
+                  today: date | None = None, *, strict_readme: bool = True) -> list[dict]:
+    merged = merge_overlay(
+        build_generated_layer(catalog_root, today, strict_readme=strict_readme), overlay)
     for entry in merged:
         validate_entry(entry)
     return merged
