@@ -16,7 +16,8 @@ from pathlib import Path
 
 from trading_agent.platform import Platform
 
-_KEY_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,128}")
+# longest real key: broker:<slug 64>/<route id 32>:<NAME 64> = 169 characters
+_KEY_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,192}")
 _VALUE_MAX = 512
 
 
@@ -92,5 +93,5 @@ class WizardState:
             for k, v in decisions.items():
                 ws.set(k, v)
             return ws
-        except (OSError, ValueError, KeyError, TypeError):
+        except Exception:  # noqa: BLE001 - any unreadable or hostile file (even RecursionError) means fresh
             return cls()

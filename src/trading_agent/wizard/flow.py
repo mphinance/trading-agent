@@ -2,9 +2,10 @@
 
 Rules this module keeps (FIRST_RUN.md, AUTODETECTION.md section 9, global constraints):
 
-* Secret VALUES live in exactly two places: ``_Wizard._values`` (memory) and the ``WritePlan`` handed
-  to ``write_profile``. A value is read from the environment in ONE function (``_copy_from_environment``),
-  only after a per-item yes. Nothing says, logs or persists a value; the state file holds decision tokens.
+* Secret VALUES live only in ``ValueMixin._values`` (memory) and the ``WritePlan`` handed to ``write_profile``.
+  Consent to copy a found key is per consumer and per process (values.py); a restart asks again.
+* The state file holds decision tokens and finding ids, never a value, and every saved answer is re-validated
+  on load against its domain (a hand-edited or hostile file cannot steer the wizard).
 * Nothing is pre-checked, nothing is required, every screen has Back where there is a place to go back to.
 * Every write goes through ``write_profile`` into the one new profile.
 """
@@ -15,89 +16,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from trading_agent.catalog.merge import BANNER
 from trading_agent.detect.binaries import AI_CLIS, detect_ai_clis
 from trading_agent.detect.env import detect_env, load_credential_specs
 from trading_agent.detect.mcp_files import detect_mcp_entries
 from trading_agent.detect.ports import probe_ports
 from trading_agent.findings import Finding
-from trading_agent.libraries import Library, keys_needed, listed_only
+from trading_agent.libraries import Library, listed_only
 from trading_agent.platform import Platform
-from trading_agent.profile.hermes_cli import HermesCli, HermesNotBootstrapped, HermesUnavailable, validate_profile_name
+from trading_agent.profile.hermes_cli import (
+    HermesCli, HermesNotBootstrapped, HermesUnavailable, parse_hermes_version, validate_profile_name,
+)
 from trading_agent.profile.receipt import Receipt, ReceiptError
 from trading_agent.profile.writer import (
-    AiChoice, BrokerChoice, ProfileExists, WriteError, WritePlan, _validate_ai, write_profile,
+    AiChoice, BrokerChoice, ProfileExists, WriteError, WritePlan, receipt_owns_profile, validate_ai_choice,
+    write_profile,
 )
-from trading_agent.secrets import SecretStore, check_secret, redact_patterns, scrub
+from trading_agent.secrets import SecretStore, redact_patterns, scrub
 from trading_agent.wizard import screens as S
+from trading_agent.wizard.catalog import (  # noqa: F401 - re-exported: the public catalog API lives here too
+    NameSpec, entry_tags, installable_routes, is_installable, order_catalog, plain, region_is_uncurated,
+    route_destination, route_fingerprint, route_label, route_names, search_catalog, submit_words, trading_text,
+)
 from trading_agent.wizard.io import BACK_INPUT, IO, Option
 from trading_agent.wizard.state import State, WizardState
-
-# ---------------------------------------------------------------- catalog helpers
+from trading_agent.wizard.values import BackSignal, Consumer, ValueMixin
 
 _FIRST_SET = frozenset(S.FIRST_SCREEN_SLUGS)
-_WRITABLE_KINDS = frozenset({"remote-url", "local-command"})  # the kinds writer.build_mcp_entry can write
-_MODE_WORDS = ("PAPER", "DEMO", "SANDBOX", "MODE", "READ_ONLY", "READONLY", "_ENV")
-_SECRET_SUFFIXES = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE", "PIN", "ID")
 _KEY_ENV_RE = re.compile(r"[A-Z][A-Z0-9]*(_[A-Z0-9]+)+")   # at least one underscore: a pasted key is not a name
-
-
-def order_catalog(entries: Sequence[dict]) -> list[dict]:
-    """First-screen slugs (those present), in list order, then the rest A to Z. Ordering only: nothing is dropped."""
-    by_slug = {e["slug"]: e for e in entries}
-    first = [by_slug[s] for s in S.FIRST_SCREEN_SLUGS if s in by_slug]
-    rest = sorted((e for e in entries if e["slug"] not in _FIRST_SET),
-                  key=lambda e: (str(e.get("name", "")).casefold(), e["slug"]))
-    return first + rest
-
-
-def region_is_uncurated(entry: dict) -> bool:
-    return not entry.get("region_codes")
-
-
-def search_catalog(entries: Sequence[dict], *, text: str = "", region: str | None = None,
-                   status: str | None = None, trading: str | None = None,
-                   route_kind: str | None = None) -> list[dict]:
-    """Filter the merged catalog. With a region, entries without ``region_codes`` follow the matches
-    as the "region not curated" group and are never hidden."""
-    needle = text.strip().casefold()
-    rows = []
-    for e in order_catalog(entries):
-        if needle:
-            hay = " ".join([str(e.get("name", "")), e["slug"], str(e.get("region_raw", "")),
-                            *map(str, e.get("region_codes") or [])]).casefold()
-            if needle not in hay:
-                continue
-        if status and status not in (e.get("status") or []):
-            continue
-        if trading and e.get("trading") != trading:
-            continue
-        if route_kind and route_kind not in (e.get("route_kinds") or []):
-            continue
-        rows.append(e)
-    if not region or not region.strip():
-        return rows
-    want = region.strip().upper()
-    matched, uncurated = [], []
-    for e in rows:
-        if region_is_uncurated(e):
-            uncurated.append(e)
-        else:
-            codes = {str(c).upper() for c in e["region_codes"]}
-            if want in codes or "GLOBAL" in codes:
-                matched.append(e)
-    return matched + uncurated
-
-
-def installable_routes(entry: dict) -> list[dict]:
-    """Routes v1 can install: the entry must be selectable and the route a kind the writer can write."""
-    if not (entry.get("wizard") or {}).get("selectable"):
-        return []
-    return [r for r in entry.get("routes") or [] if r.get("kind") in _WRITABLE_KINDS]
-
-
-def is_installable(entry: dict) -> bool:
-    return bool(installable_routes(entry))
+_AI_KINDS = ("none", "cli", "openrouter", "custom", "ollama", "lm-studio")
 
 
 # ---------------------------------------------------------------- dependencies
@@ -145,7 +91,7 @@ class Deps:
 _CLI_NAMES = {"claude": ("Claude Code", "Claude"), "codex": ("Codex", "Codex"),
               "gemini": ("Gemini CLI", "Gemini"), "agy": ("Antigravity", "Antigravity")}
 _LOCAL = (("ollama", "Ollama"), ("lm-studio", "LM Studio"))
-# key name -> (id fragment, label, cost line, AiChoice kind, base url)
+# key name -> (label, cost line, AiChoice kind, base url)
 _KEY_PROVIDERS = {
     S.OPENROUTER_KEY_ENV: ("OpenRouter", "One key, many models, pay as you go. Cheap models cost cents.",
                            "openrouter", ""),
@@ -155,108 +101,80 @@ _KEY_PROVIDERS = {
                        "custom", S.OPENAI_BASE_URL),
 }
 _UNSUPPORTED_AI_KEYS = ("ANTHROPIC_API_KEY",)
-_LOGIN_SHELL_WHERE = "login shell environment"  # detect/env.py: present in the login shell only, value unreachable
-_VERSION_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
-_FINAL_MODES = frozenset({"reuse", "paste", "plain", "keep-existing", "skip"})
-
-# the order states are walked; Back goes to _BACK unless a handler says otherwise
-_BACK = {
-    State.PRECHECK: State.START, State.SCAN: State.PRECHECK, State.AI_ROUTE: State.SCAN,
-    State.AI_VERIFY: State.AI_ROUTE, State.BROKER_PICK: State.AI_VERIFY, State.BROKER_INSTALL: State.BROKER_PICK,
-    State.BROKER_VERIFY: State.BROKER_INSTALL, State.DATA_KEYS: State.SKILLS, State.REVIEW: State.DATA_KEYS,
-}
+_VERSION_PIN = S.HERMES_MIN_VERSION
 
 
 class _Quit(Exception):
     """The user chose to stop here. State is already saved."""
 
 
-@dataclass
-class _NameSpec:
-    name: str
-    secret: bool
-
-
-def _looks_like_mode_switch(var: str) -> bool:
-    """For header-derived names, which carry no secret flag: plain only if it reads like a mode switch AND not
-    like a credential. When unsure the answer is False, so the value is hidden."""
-    up = var.upper()
-    if up.endswith(_SECRET_SUFFIXES):
-        return False
-    return any(w in up for w in _MODE_WORDS)
-
-
-def _route_names(route: dict) -> list[_NameSpec]:
-    """EVERY env var NAME and header NAME the route lists. A header's variable is ``header_env[h]`` or h itself.
-    Mode switches (role mode-switch, or a header named like PAPER_TRADING) are plain, everything else is secret."""
-    auth = route.get("auth") or {}
-    out: list[_NameSpec] = []
-    seen: set[str] = set()
-    for v in auth.get("env_vars") or []:
-        name = v.get("name")
-        if not isinstance(name, str) or name in seen:
-            continue
-        secret = bool(v.get("secret", True)) and v.get("role") != "mode-switch"
-        out.append(_NameSpec(name, secret))
-        seen.add(name)
-    header_env = auth.get("header_env") or {}
-    for h in auth.get("headers") or []:
-        var = header_env.get(h, h)
-        if not isinstance(var, str) or var in seen:
-            continue
-        out.append(_NameSpec(var, not _looks_like_mode_switch(var)))
-        seen.add(var)
-    return out
+def _ai_provider_label(kind: str, ref: str) -> str:
+    if kind == "custom":
+        return {S.VENICE_BASE_URL: "Venice", S.OPENAI_BASE_URL: "OpenAI"}.get(ref, "an OpenAI-compatible service")
+    return {"openrouter": "OpenRouter", "ollama": "Ollama", "lm-studio": "LM Studio"}.get(kind, "no AI yet")
 
 
 # ---------------------------------------------------------------- the wizard
 
-class _Wizard:
+class _Wizard(ValueMixin):
     def __init__(self, io: IO, deps: Deps) -> None:
         self.io = io
         self.d = deps
         self.p = deps.platform
+        self._save_failed = False
         self.ws = WizardState.load(self.p)
         if self.ws.current is State.DONE:       # a finished run is history: a new run starts fresh
             self.ws = WizardState()
-        self.ws.save(self.p)
-        self._values: dict[str, str] = {}       # secret VALUES: memory only, never persisted
+        self._init_values()
         self._findings: list[Finding] | None = None
         self._could_not: list[str] = []
         self.receipt: Receipt | None = None
+        self._validate_decisions()
+        self._save()
 
     # ---- plumbing
 
     def say(self, text: str) -> None:
         self.io.say(text)
 
+    def _save(self) -> None:
+        try:
+            self.ws.save(self.p)
+        except OSError:
+            if not self._save_failed:
+                self._save_failed = True
+                self.say(S.STATE_NOT_SAVED)
+
     def go(self, state: State) -> State:
         self.ws.current = state
-        self.ws.save(self.p)
+        self._save()
         return state
 
     def decide(self, key: str, value: str) -> None:
         self.ws.set(key, value)
-        self.ws.save(self.p)
+        self._save()
 
     def forget(self, *keys: str) -> None:
         for k in keys:
             self.ws.forget(k)
-        self.ws.save(self.p)
+        self._save()
 
     def dec(self, key: str, default: str = "") -> str:
         return self.ws.decisions.get(key, default)
 
-    def safe(self, text: str) -> str:
+    def profile_dir(self) -> Path:
+        return self.d.hermes.profile_dir(self.dec("profile_name") or S.DEFAULT_PROFILE_NAME)
+
+    def safe(self, text: object) -> str:
         """Text that may have touched a value: known values scrubbed, then credential shapes redacted."""
         return redact_patterns(scrub(str(text), list(self._values.values())))
 
     def run(self) -> Receipt | None:
         self._resume_fixups()
+        table = self._table()
         try:
             while True:
-                cur = self.ws.current
-                nxt = self._table()[cur]()
+                nxt = table[self.ws.current]()
                 if nxt is None:
                     return self.receipt
                 self.go(nxt)
@@ -273,24 +191,81 @@ class _Wizard:
             State.VERIFY: self._st_verify, State.DONE: self._st_done,
         }
 
+    # ---- saved state: validate every answer against its domain
+
+    def _validate_decisions(self) -> None:
+        dropped = False
+        name = self.dec("profile_name")
+        if name:
+            try:
+                validate_profile_name(name)
+            except ValueError:
+                self.ws.forget("profile_name")
+                dropped = True
+        dropped |= self._validate_ai_decisions()
+        dropped |= self._validate_broker_decisions()
+        ids = [i for i in self.dec("skills").split(",") if i]
+        ok = [i for i in ids if i in {lib.id for lib in listed_only(self.d.libraries)}]
+        if ok != ids:
+            self.ws.set("skills", ",".join(ok))
+            dropped = True
+        if self.dec("scan.apps") not in ("", "yes", "no"):
+            self.ws.forget("scan.apps")
+            dropped = True
+        if self.ws.current.value in ("WRITE", "VERIFY") and not self.dec("profile_name"):
+            self.ws.current = State.PRECHECK
+        if dropped:
+            self.say(S.STATE_DROPPED)
+        self._prune(self._expected_pairs())
+
+    def _validate_ai_decisions(self) -> bool:
+        keys = ("ai.kind", "ai.ref", "ai.key_env")
+        if not any(self.dec(k) for k in keys):
+            return False
+        try:
+            if self.dec("ai.kind") not in _AI_KINDS:
+                raise ValueError("kind")
+            validate_ai_choice(self._ai_choice())
+            return False
+        except ValueError:
+            for k in keys:
+                self.ws.forget(k)
+            return True
+
+    def _validate_broker_decisions(self) -> bool:
+        slug = self.dec("broker.slug")
+        if slug in ("", "none"):
+            return False
+        route = self._route()
+        if route is None:
+            for k in ("broker.slug", "broker.route", "broker.fp"):
+                self.ws.forget(k)
+            return True
+        if self.dec("broker.fp") != route_fingerprint(route):
+            self._revoke_consumer(self._broker_key())
+            self.ws.set("broker.fp", route_fingerprint(route))
+            self.say(S.STALE_NOTE)
+        return False
+
     def _resume_fixups(self) -> None:
-        """A run interrupted at WRITE or VERIFY: if the receipt shows the write finished, go on; else review again."""
+        """Interrupted at WRITE or VERIFY: trust a saved receipt only if the profile it describes still exists
+        and carries its ownership marker; otherwise review again."""
         if self.ws.current not in (State.WRITE, State.VERIFY):
             return
-        name = self.dec("profile_name")
         rec = None
+        name = self.dec("profile_name")
         if name:
             try:
                 rec = Receipt.load(self.p, name)
             except (ReceiptError, ValueError):
                 rec = None
-        if rec is not None and "skills" in rec.steps_done:
+        if rec is not None and "skills" in rec.steps_done and receipt_owns_profile(rec, self.d.hermes):
             self.receipt = rec
             self.go(State.VERIFY)
         else:
             self.go(State.REVIEW)
 
-    # ---- findings (names only), loaded lazily so a resumed run never re-asks for what it already has
+    # ---- findings (names only), loaded lazily and always live
 
     def _run_detectors(self, apps: bool) -> None:
         found: list[Finding] = []
@@ -311,18 +286,7 @@ class _Wizard:
         return self._findings or []
 
     def _present(self, fid: str) -> Finding | None:
-        for f in self.findings():
-            if f.id == fid and f.state == "present":
-                return f
-        return None
-
-    def _finding_for(self, name: str, kinds: tuple[str, ...]) -> Finding | None:
-        """The finding for env var NAME, but only of the given kinds. This is the AI/broker/data scoping:
-        a Gemini exchange key (broker-key) is never an AI key, and an AI key is never a broker key."""
-        for f in self.findings():
-            if f.kind in kinds and f.names == (name,):
-                return f
-        return None
+        return next((f for f in self.findings() if f.id == fid and f.state == "present"), None)
 
     # ---- START
 
@@ -336,77 +300,92 @@ class _Wizard:
 
     # ---- PRECHECK
 
+    def _version_problem(self, line: str) -> str | None:
+        """None if fine, 'old' if below the pin or a pre-release, 'unreadable' if no version could be read."""
+        parsed = parse_hermes_version(line)
+        if parsed is None:
+            return "unreadable"
+        triple, pre = parsed
+        return "old" if pre or triple < _VERSION_PIN else None
+
+    def _check_once(self) -> tuple[str, list[Option]]:
+        """One look at Hermes: ('ok'|'problem', extra options for the next prompt)."""
+        if self.p.which("hermes") is None:
+            self.say(S.HERMES_MISSING)
+            self.say(S.HERMES_INSTALL_HINT.format(cmd=S.INSTALL_CMD))
+            return "problem", []
+        try:
+            line = self.d.hermes.version()
+        except HermesNotBootstrapped:
+            self.say(S.HERMES_NOT_BOOTSTRAPPED)
+            return "ok", []
+        except HermesUnavailable:
+            self.say(S.HERMES_FAILED)
+            return "problem", []
+        problem = self._version_problem(line)
+        if problem is None:
+            return "ok", []
+        if problem == "old":
+            self.say(S.HERMES_OUT_OF_RANGE.format(requires=S.HERMES_REQUIRES, version=line))
+            self.say(S.HERMES_UPDATE_HINT)
+            return "problem", []
+        self.say(S.HERMES_VERSION_UNREADABLE)
+        return "problem", [Option("continue", "Continue anyway")]
+
     def _hermes_check(self) -> str:
-        """'ok', 'stop' or 'back'. Looks for the binary first and never runs an install command."""
+        """'ok' or 'back'; raises _Quit on Stop. Never runs an install command."""
         while True:
-            problem: str | None = None
-            if self.p.which("hermes") is None:
-                self.say(S.HERMES_MISSING)
-                self.say(S.HERMES_INSTALL_HINT.format(cmd=S.INSTALL_CMD))
-                problem = "missing"
-            else:
-                try:
-                    line = self.d.hermes.version()
-                except HermesNotBootstrapped:
-                    self.say(S.HERMES_NOT_BOOTSTRAPPED)
-                    return "ok"
-                except HermesUnavailable:
-                    self.say(S.HERMES_FAILED)
-                    problem = "failed"
-                else:
-                    m = _VERSION_RE.search(line)
-                    if m is None:
-                        self.say(S.HERMES_VERSION_UNREADABLE)
-                        return "ok"
-                    if tuple(int(x) for x in m.groups()) < S.HERMES_MIN_VERSION:
-                        self.say(S.HERMES_OUT_OF_RANGE.format(requires=S.HERMES_REQUIRES, version=line))
-                        self.say(S.HERMES_UPDATE_HINT)
-                        problem = "old"
-                    else:
-                        return "ok"
-            a = self.io.choose(S.HERMES_WHAT_NOW, [Option("again", "Check again"),
+            result, extra = self._check_once()
+            if result == "ok":
+                return "ok"
+            a = self.io.choose(S.HERMES_WHAT_NOW, [*extra, Option("again", "Check again"),
                                                     Option("stop", "Stop here for now"), Option("back", "Back")])
-            if a == "again":
-                continue
+            if a == "continue":
+                return "ok"
             if a == "back":
                 return "back"
-            raise _Quit
+            if a == "stop":
+                raise _Quit
+
+    def _next_name(self, current: str | None) -> str | None:
+        """Ask for a valid profile name. None means Back."""
+        if current is not None:
+            return current
+        while True:
+            raw = self.io.ask(S.NAME_PROMPT).strip()
+            if raw == BACK_INPUT:
+                return None
+            cand = raw or S.DEFAULT_PROFILE_NAME
+            try:
+                validate_profile_name(cand)
+            except ValueError:
+                self.say(S.NAME_INVALID)   # never echoes what was typed
+                continue
+            return cand
 
     def _st_precheck(self) -> State:
         if not self.d.online:
             self.say(S.OFFLINE_NOTE)
-        r = self._hermes_check()
-        if r == "back":
+        if self._hermes_check() == "back":
             return State.START
         name: str | None = self.dec("profile_name") or None
         if name is not None:
-            a = self.io.choose(S.NAME_KEEP.format(name=name),
-                               [Option("continue", "Continue"), Option("rename", "Pick another name"),
-                                Option("back", "Back")])
+            a = self.io.choose(S.NAME_KEEP.format(name=name), [
+                Option("continue", "Continue"), Option("rename", "Pick another name"), Option("back", "Back")])
             if a == "back":
                 return State.START
-            if a == "rename":
-                name = None
+            name = None if a == "rename" else name
         while True:
+            name = self._next_name(name)
             if name is None:
-                raw = self.io.ask(S.NAME_PROMPT).strip()
-                if raw == BACK_INPUT:
-                    return State.START
-                cand = raw or S.DEFAULT_PROFILE_NAME
-                try:
-                    validate_profile_name(cand)
-                except ValueError:
-                    self.say(S.NAME_INVALID)   # never echoes what was typed
-                    continue
-                name = cand
-            if self.d.hermes.profile_exists(name):
-                a = self.io.choose(S.PROFILE_TAKEN.format(name=name),
-                                   [Option("rename", "Pick another name"), Option("back", "Back")])
-                if a == "back":
-                    return State.START
-                name = None
-                continue
-            break
+                return State.START
+            if not self.d.hermes.profile_exists(name):
+                break
+            a = self.io.choose(S.PROFILE_TAKEN.format(name=name),
+                               [Option("rename", "Pick another name"), Option("back", "Back")])
+            if a == "back":
+                return State.START
+            name = None
         if name != self.dec("profile_name"):
             self._forget_keep_existing()
         self.decide("profile_name", name)
@@ -414,7 +393,7 @@ class _Wizard:
 
     def _forget_keep_existing(self) -> None:
         for k, v in list(self.ws.decisions.items()):
-            if k.startswith("val:") and v == "keep-existing":
+            if v == "keep-existing":
                 self.ws.forget(k)
 
     # ---- SCAN
@@ -449,139 +428,7 @@ class _Wizard:
             self.say("\n".join(could))
         self.say(S.SCAN_FOOTER)
 
-    # ---- value engine (the only code that handles secret values)
-
-    def _copy_from_environment(self, name: str) -> bool:
-        """The ONE place a found key's value is read: only after a per-item yes. The value goes into
-        ``self._values`` and is never returned, printed or persisted."""
-        value = self.p.environ().get(name)
-        if not value:
-            return False
-        try:
-            check_secret(name, value)
-        except ValueError:
-            return False
-        self._values[name] = value
-        return True
-
-    def _profile_dir(self) -> Path:
-        return self.d.hermes.profile_dir(self.dec("profile_name") or S.DEFAULT_PROFILE_NAME)
-
-    def _exists_in_profile(self, name: str) -> bool:
-        try:
-            return bool(self.d.store_factory(self._profile_dir()).exists(name))
-        except Exception:  # noqa: BLE001 - cannot tell: fail safe and ask instead of risking an overwrite
-            return True
-
-    def _collision_kept(self, name: str) -> bool:
-        """True if NAME is already in the target profile's .env and the user chose to keep it."""
-        if not self._exists_in_profile(name):
-            return False
-        a = self.io.choose(S.EXISTS_PROMPT.format(name=name),
-                           [Option("keep", "Keep what is there"), Option("replace", "Replace it")])
-        if a == "keep":
-            self._values.pop(name, None)
-            self.decide(f"val:{name}", "keep-existing")
-            return True
-        return False
-
-    def _paste(self, name: str, *, again: bool = False) -> bool:
-        """Ask for a secret with no echo. True if a value was stored; empty input skips."""
-        prompt = (S.PASTE_AGAIN if again else S.PASTE_PROMPT).format(name=name)
-        while True:
-            v = self.io.secret(prompt)
-            if v == "":
-                self._values.pop(name, None)
-                self.decide(f"val:{name}", "skip")
-                return False
-            try:
-                check_secret(name, v)
-            except ValueError:
-                self.say(S.BAD_VALUE)
-                continue
-            self._values[name] = v
-            self.decide(f"val:{name}", "paste")
-            return True
-
-    def _plain(self, name: str, *, again: bool = False) -> bool:
-        prompt = (S.PLAIN_AGAIN if again else S.PLAIN_PROMPT).format(name=name)
-        while True:
-            v = self.io.ask(prompt).strip()
-            if v == "":
-                self._values.pop(name, None)
-                self.decide(f"val:{name}", "skip")
-                return False
-            try:
-                check_secret(name, v)
-            except ValueError:
-                self.say(S.BAD_VALUE)
-                continue
-            self._values[name] = v
-            self.decide(f"val:{name}", "plain")
-            return True
-
-    def _offer_reuse(self, name: str, finding: Finding | None) -> str:
-        """'reused', 'declined' (remembered per finding id) or 'unavailable' (nothing copyable; paste instead)."""
-        if finding is None or finding.state != "present":
-            return "unavailable"
-        if finding.reusable != "copy-with-consent":
-            self.say(S.REFERENCE_ONLY.format(name=name))
-            return "unavailable"
-        if finding.where == _LOGIN_SHELL_WHERE:
-            self.say(S.LOGIN_SHELL_ONLY.format(name=name))
-            return "unavailable"
-        if self.dec(f"declined:{finding.id}"):
-            return "declined"
-        if self.io.confirm(S.REUSE_PROMPT.format(name=name)):
-            if self._copy_from_environment(name):
-                self.decide(f"val:{name}", "reuse")
-                return "reused"
-            self.say(S.VANISHED.format(name=name))
-            return "unavailable"
-        self.decide(f"declined:{finding.id}", "1")
-        return "declined"
-
-    def _obtain(self, name: str, *, secret: bool, kinds: tuple[str, ...]) -> None:
-        """Get a value for NAME (or an explicit skip). Already-decided names are left alone."""
-        if self.dec(f"val:{name}") in _FINAL_MODES:
-            return
-        if self._collision_kept(name):
-            return
-        if not secret:
-            self._plain(name)
-            return
-        if self._offer_reuse(name, self._finding_for(name, kinds)) == "reused":
-            return
-        a = self.io.choose(S.PASTE_ONE.format(name=name), [Option("paste", "Paste it"),
-                                                            Option("skip", "Skip, finish later")])
-        if a == "skip":
-            self._values.pop(name, None)
-            self.decide(f"val:{name}", "skip")
-            return
-        self._paste(name)
-
-    def _drop_value(self, name: str) -> None:
-        self._values.pop(name, None)
-        self.forget(f"val:{name}")
-
-    def _ensure_values(self) -> None:
-        """Before REVIEW: any decided name whose value this process does not hold gets it back
-        (re-read after a recorded yes, or asked again). Values are never saved between runs."""
-        for name in self._expected_names():
-            mode = self.dec(f"val:{name}")
-            if name in self._values or mode not in ("reuse", "paste", "plain"):
-                continue
-            if mode == "reuse":
-                if self._copy_from_environment(name):
-                    continue
-                self.say(S.VANISHED.format(name=name))
-                self._paste(name)
-            elif mode == "paste":
-                self._paste(name, again=True)
-            else:
-                self._plain(name, again=True)
-
-    # ---- what is expected in the plan (stale decisions for things no longer picked are ignored)
+    # ---- what is chosen and what that implies (consumers of values)
 
     def _ai_choice(self) -> AiChoice:
         kind = self.dec("ai.kind", "none")
@@ -589,15 +436,13 @@ class _Wizard:
             return AiChoice("cli", self.dec("ai.ref"))
         if kind == "custom":
             return AiChoice("custom", self.dec("ai.ref"), self.dec("ai.key_env"))
-        return AiChoice(kind)  # type: ignore[arg-type]
+        return AiChoice(kind, self.dec("ai.ref"), self.dec("ai.key_env"))  # type: ignore[arg-type]
 
     def _ai_value_name(self) -> str | None:
         kind = self.dec("ai.kind")
         if kind == "openrouter":
             return S.OPENROUTER_KEY_ENV
-        if kind == "custom":
-            return self.dec("ai.key_env") or None
-        return None
+        return (self.dec("ai.key_env") or None) if kind == "custom" else None
 
     def _entry(self) -> dict | None:
         slug = self.dec("broker.slug")
@@ -609,23 +454,58 @@ class _Wizard:
             return None
         return next((r for r in installable_routes(entry) if r.get("route_id") == self.dec("broker.route")), None)
 
+    def _broker_key(self) -> str:
+        return f"broker:{self.dec('broker.slug')}/{self.dec('broker.route')}"
+
+    def _broker_name(self) -> str:
+        e = self._entry()
+        return e.get("name", e["slug"]) if e else ""
+
     def _selected_libs(self) -> list[Library]:
         ids = [i for i in self.dec("skills").split(",") if i]
         return [lib for lib in listed_only(self.d.libraries) if lib.id in ids]
 
-    def _data_names(self) -> tuple[str, ...]:
-        return keys_needed(self._selected_libs())
+    def _ai_consumer(self) -> Consumer:
+        who = _ai_provider_label(self.dec("ai.kind"), self.dec("ai.ref"))
+        return Consumer("ai", f"the {who} AI connection", who, ("ai-key",))
 
-    def _expected_names(self) -> list[str]:
-        names: list[str] = []
+    def _consumers(self) -> list[tuple[Consumer, list[NameSpec]]]:
+        out: list[tuple[Consumer, list[NameSpec]]] = []
         ai = self._ai_value_name()
         if ai:
-            names.append(ai)
+            out.append((self._ai_consumer(), [NameSpec(ai, True)]))
         route = self._route()
         if route:
-            names += [n.name for n in _route_names(route)]
-        names += list(self._data_names())
-        return list(dict.fromkeys(names))
+            nm = self._broker_name()
+            out.append((Consumer(self._broker_key(), f"the {nm} connection", nm, ("broker-key",)),
+                        route_names(route)))
+        for lib in self._selected_libs():
+            if lib.needs_keys:
+                out.append((Consumer(f"lib:{lib.id}", f"the {lib.name} library", lib.name, ("data-key",)),
+                            [NameSpec(n, True) for n in lib.needs_keys]))
+        return out
+
+    def _expected_pairs(self) -> set[tuple[str, str]]:
+        return {(c.key, s.name) for c, specs in self._consumers() for s in specs}
+
+    def _data_consumers(self) -> list[tuple[Consumer, list[NameSpec]]]:
+        return [(c, specs) for c, specs in self._consumers() if c.key.startswith("lib:")]
+
+    def _data_names(self) -> list[str]:
+        return sorted({s.name for _, specs in self._data_consumers() for s in specs})
+
+    def _ensure_values(self) -> None:
+        """Before REVIEW: every expected name is decided for its consumer. After a restart nothing is held,
+        so each one is asked about again (same prompts, per consumer)."""
+        self._prune(self._expected_pairs())
+        for c, specs in self._consumers():
+            for s in specs:
+                self._obtain(c, s)
+
+    def _plan_values(self) -> dict[str, str]:
+        self._prune(self._expected_pairs())
+        granted = {n for _, n in self._grants}
+        return {n: v for n, v in self._values.items() if n in granted}
 
     # ---- AI_ROUTE (v1 rulings R23, R26, R29)
 
@@ -633,9 +513,8 @@ class _Wizard:
         return [n for n in AI_CLIS if self._present(f"cli:{n}") is not None]
 
     def _set_ai(self, kind: str, *, ref: str = "", key_env: str = "") -> None:
-        old = self._ai_value_name()
-        if old and old != (key_env or (S.OPENROUTER_KEY_ENV if kind == "openrouter" else "")):
-            self._drop_value(old)
+        if (kind, ref, key_env) != (self.dec("ai.kind"), self.dec("ai.ref"), self.dec("ai.key_env")):
+            self._revoke_consumer("ai")     # a different provider or address never inherits an earlier answer
         self.decide("ai.kind", kind)
         self.decide("ai.ref", ref)
         self.decide("ai.key_env", key_env)
@@ -647,10 +526,9 @@ class _Wizard:
                 opts.append(Option(f"use:ai-local:{key}", f"{label} [Found on this computer]",
                                    "Free and private. Runs on your own machine; speed depends on it."))
         for name, (label, cost, _kind, _url) in _KEY_PROVIDERS.items():
-            if private and name != S.VENICE_KEY_ENV:
-                continue
             f = self._present(f"env:{name}")
-            if f is not None and f.kind == "ai-key" and not self.dec(f"declined:{f.id}"):
+            if (not private or name == S.VENICE_KEY_ENV) and f is not None and f.kind == "ai-key" \
+                    and not self.dec(f"declined:{f.id}"):
                 opts.append(Option(f"use:{f.id}", f"{label} [Key found in your settings]", cost))
         if not private:
             opts.append(Option("paste-openrouter", "OpenRouter: paste a key",
@@ -664,28 +542,29 @@ class _Wizard:
         opts.append(Option("private", "Show all options" if private else "Keep it private",
                            "" if private else "Shows only a model on this computer, or Venice."))
         clis = self._clis_found()
-        if clis:
-            brand = _CLI_NAMES[clis[0]][1]
-            opts.append(Option("skip", "Skip for now", f"No brain yet. Your {brand} sign-in stays untouched."))
-        else:
-            opts.append(Option("skip", "Skip for now", "No brain yet. You can add one later."))
-        opts.append(Option("back", "Back"))
-        # We pick, you confirm: the first option is the best CONFIGURABLE one found. Nothing is pre-checked.
-        first = opts[0]
+        detail = f"No brain yet. Your {_CLI_NAMES[clis[0]][1]} sign-in stays untouched." if clis \
+            else "No brain yet. You can add one later."
+        opts += [Option("skip", "Skip for now", detail), Option("back", "Back")]
+        first = opts[0]   # We pick, you confirm: the first option is the best CONFIGURABLE one. Nothing is pre-checked.
         if first.id not in ("private", "skip", "back"):
             opts[0] = Option(first.id, first.label + " (Recommended)", first.detail)
         return opts
 
-    def _st_ai_route(self) -> State:
-        for n in self._clis_found():
-            label, brand = _CLI_NAMES[n]
-            self.say(S.AI_CLI_NOTE.format(label=label, brand=brand))
+    def _say_ai_notes(self) -> None:
+        clis = self._clis_found()
+        if clis:
+            labels = [_CLI_NAMES[n] for n in clis]
+            tmpl = S.AI_CLI_NOTE if len(clis) == 1 else S.AI_CLI_NOTE_MANY
+            self.say(tmpl.format(label=" and ".join(x[0] for x in labels),
+                                 brand=" and ".join(dict.fromkeys(x[1] for x in labels))))
         for name in _UNSUPPORTED_AI_KEYS:
-            f = self._present(f"env:{name}")
-            if f is not None:
+            if self._present(f"env:{name}") is not None:
                 self.say(S.AI_UNSUPPORTED_KEY.format(name=name))
         if not any(self._present(f"ai-local:{k}") for k, _ in _LOCAL):
             self.say(S.AI_NO_LOCAL)
+
+    def _st_ai_route(self) -> State:
+        self._say_ai_notes()
         private = self.dec("ai.private") == "1"
         while True:
             if private:
@@ -696,96 +575,96 @@ class _Wizard:
             if a == "private":
                 private = not private
                 self.decide("ai.private", "1" if private else "0")
-                continue
-            if a == "skip":
+            elif a == "skip":
                 clis = self._clis_found()
-                if clis:
-                    self._set_ai("cli", ref=clis[0])  # recorded only because the user chose to defer
-                else:
-                    self._set_ai("none")
+                self._set_ai("cli", ref=clis[0]) if clis else self._set_ai("none")  # cli only on an explicit defer
                 return State.AI_VERIFY
-            if self._ai_pick(a):
+            elif self._ai_pick(a):
                 return State.AI_VERIFY
 
     def _ai_pick(self, a: str) -> bool:
-        """Apply a menu choice. False means 'back to the menu' (declined, or a typed address was backed out of)."""
+        """Apply a menu choice. False means 'back to the menu' (declined, backed out, or not a choice I know)."""
         if a.startswith("use:ai-local:"):
             self._set_ai(a.split(":", 2)[2])
             return True
-        if a.startswith("use:env:"):
-            name = a.split(":", 2)[2]
-            _label, _cost, kind, url = _KEY_PROVIDERS[name]
-            finding = self._present(f"env:{name}")
-            if self._collision_kept(name):
-                self._set_ai_for_key(kind, url, name)
-                return True
-            result = self._offer_reuse(name, finding)
-            if result == "declined":
-                return False
-            self._set_ai_for_key(kind, url, name)
-            if result == "unavailable":
-                self._paste(name)
-            return True
+        if a.startswith("use:env:") and a.split(":", 2)[2] in _KEY_PROVIDERS:
+            return self._ai_use_found_key(a.split(":", 2)[2])
         if a == "paste-openrouter":
-            self._set_ai_for_key("openrouter", "", S.OPENROUTER_KEY_ENV)
-            self._ai_paste(S.OPENROUTER_KEY_ENV)
-            return True
+            return self._ai_paste("openrouter", "", S.OPENROUTER_KEY_ENV)
         if a == "paste-venice":
-            self._set_ai_for_key("custom", S.VENICE_BASE_URL, S.VENICE_KEY_ENV)
-            self._ai_paste(S.VENICE_KEY_ENV)
-            return True
+            return self._ai_paste("custom", S.VENICE_BASE_URL, S.VENICE_KEY_ENV)
         if a == "custom":
             return self._ai_custom()
-        raise AssertionError("unknown AI menu choice")
+        self.say(S.INVALID_CHOICE)
+        return False
 
     def _set_ai_for_key(self, kind: str, url: str, name: str) -> None:
-        if kind == "openrouter":
-            self._set_ai("openrouter")
-        else:
-            self._set_ai("custom", ref=url, key_env=name)
+        self._set_ai("openrouter") if kind == "openrouter" else self._set_ai("custom", ref=url, key_env=name)
 
-    def _ai_paste(self, name: str) -> None:
-        if self.dec(f"val:{name}") in _FINAL_MODES and name in self._values:
-            return
-        if self._collision_kept(name):
-            return
-        self._paste(name)
+    def _ai_use_found_key(self, name: str) -> bool:
+        _label, _cost, kind, url = _KEY_PROVIDERS[name]
+        old = (self.dec("ai.kind"), self.dec("ai.ref"), self.dec("ai.key_env"))
+        self._set_ai_for_key(kind, url, name)
+        if self._obtain(self._ai_consumer(), NameSpec(name, True), how="card") == "declined":
+            if old[0]:   # declined: the menu comes back with the earlier choice as it was
+                self._set_ai(old[0], ref=old[1], key_env=old[2])
+            else:
+                self.forget("ai.kind", "ai.ref", "ai.key_env")
+            return False
+        return True
 
-    def _ai_custom(self) -> bool:
+    def _ai_paste(self, kind: str, url: str, name: str) -> bool:
+        self._set_ai_for_key(kind, url, name)
+        self._obtain(self._ai_consumer(), NameSpec(name, True), how="paste")
+        return True
+
+    def _ask_address(self) -> str | None:
         while True:
             url = self.io.ask(S.AI_ASK_ADDRESS).strip()
             if url == BACK_INPUT:
-                return False
+                return None
             try:
-                _validate_ai(AiChoice("custom", url))
+                validate_ai_choice(AiChoice("custom", url))
             except ValueError:
                 self.say(S.AI_ADDRESS_INVALID)   # never echoes the address (it may carry a password)
                 continue
-            break
+            return url
+
+    def _ask_key_name(self) -> str | None:
         while True:
             key_env = self.io.ask(S.AI_ASK_KEY_NAME).strip()
+            if key_env == BACK_INPUT:
+                return None
             if key_env == "" or (len(key_env) <= 64 and _KEY_ENV_RE.fullmatch(key_env)):
-                break
+                return key_env
             self.say(S.AI_KEY_NAME_INVALID)
+
+    def _ai_custom(self) -> bool:
+        url = self._ask_address()
+        key_env = self._ask_key_name() if url is not None else None
+        if url is None or key_env is None:
+            return False
         self._set_ai("custom", ref=url, key_env=key_env)
         if key_env:
-            self._ai_paste(key_env)
+            self._obtain(self._ai_consumer(), NameSpec(key_env, True), how="paste")
         return True
 
     # ---- AI_VERIFY
 
     def _st_ai_verify(self) -> State:
         choice = self._ai_choice()
+        real = self.d.verify_ai is not default_verify_ai
         if choice.kind in ("none", "cli"):
-            self.say(S.AI_NOTHING_TO_TEST)
-            opts = [Option("continue", "Continue"), Option("back", "Back")]
+            prompt, opts = S.AI_NOTHING_TO_TEST, [Option("continue", "Continue"), Option("back", "Back")]
         elif not self.d.online:
-            self.say(f"AI check: {S.NEEDS_INTERNET}.")
             self.decide("ai.verify", "offline")
-            opts = [Option("continue", "Continue"), Option("back", "Back")]
+            prompt, opts = S.AI_OFFLINE_PROMPT, [Option("continue", "Continue"), Option("back", "Back")]
+        elif not real:
+            prompt, opts = S.AI_VERIFY_STUB, [Option("continue", "Continue"), Option("back", "Back")]
         else:
+            prompt = S.AI_VERIFY_PROMPT
             opts = [Option("test", "Test it"), Option("skip", "Skip the test"), Option("back", "Back")]
-        a = self.io.choose(S.AI_VERIFY_PROMPT, opts)
+        a = self.io.choose(prompt, opts)
         if a == "back":
             return State.AI_ROUTE
         if a == "test":
@@ -814,23 +693,10 @@ class _Wizard:
 
     # ---- BROKER_PICK
 
-    @staticmethod
-    def _trading_text(e: dict) -> str:
-        return {"true": "yes", "false": "no", "draft-only": "draft only"}.get(str(e.get("trading")), "not stated")
-
     def _entry_option(self, e: dict, *, flag_region: bool = False) -> Option:
-        tags = []
-        st = e.get("status") or []
-        if "official" in st:
-            tags.append(S.TAG_OFFICIAL)
-        if "community" in st:
-            tags.append(S.TAG_COMMUNITY)
-        if "aggregator-only" in st or "none" in st:
-            tags.append(S.TAG_NO_DIRECT)
-        if flag_region and region_is_uncurated(e):
-            tags.append(S.REGION_NOT_CURATED)
+        tags = entry_tags(e, flag_region=flag_region)
         label = e.get("name", e["slug"]) + (f" [{'; '.join(tags)}]" if tags else "")
-        detail = (f"{e.get('region_raw') or 'region not stated'}. Trading: {self._trading_text(e)}. "
+        detail = (f"{e.get('region_raw') or 'region not stated'}. Trading: {trading_text(e)}. "
                   f"Last checked {e.get('last_verified', 'not stated')}.")
         return Option(f"pick:{e['slug']}", label, detail)
 
@@ -847,16 +713,9 @@ class _Wizard:
             if a == "none":
                 self._set_broker("none", "")
                 return State.SKILLS
-            if a == "all":
-                rest = [e for e in entries if e["slug"] not in _FIRST_SET]
-                picked = self._pick_from(rest, flag_region=False)
-            elif a == "search":
-                picked = self._search_menu()
-            else:
-                picked = a
-            if picked is None:
-                continue
-            nxt = self._select_entry(picked.split(":", 1)[1])
+            picked = (self._pick_from(entries, flag_region=False) if a == "all"
+                      else self._search_menu() if a == "search" else a)
+            nxt = self._select_entry(picked.split(":", 1)[1]) if picked and picked.startswith("pick:") else None
             if nxt is not None:
                 return nxt
 
@@ -867,10 +726,8 @@ class _Wizard:
 
     def _search_menu(self) -> str | None:
         text = self.io.ask(S.SEARCH_TEXT).strip()
-        if text == BACK_INPUT:
-            return None
-        region = self.io.ask(S.SEARCH_REGION).strip()
-        if region == BACK_INPUT:
+        region = self.io.ask(S.SEARCH_REGION).strip() if text != BACK_INPUT else BACK_INPUT
+        if BACK_INPUT in (text, region):
             return None
         f = self.io.choose(S.SEARCH_FILTER, [
             Option("any", "Anything"), Option("official", "Official only"), Option("trade", "Can trade"),
@@ -881,6 +738,8 @@ class _Wizard:
                               status="official" if f == "official" else None,
                               trading="true" if f == "trade" else None,
                               route_kind=f if f in ("remote", "local") else None)
+        if region and all(region_is_uncurated(e) for e in self.d.catalog):
+            self.say(S.REGION_NONE_CURATED)
         if not rows:
             self.say(S.SEARCH_NONE)
             return None
@@ -888,10 +747,13 @@ class _Wizard:
 
     def _set_broker(self, slug: str, route_id: str) -> None:
         if (slug, route_id) != (self.dec("broker.slug"), self.dec("broker.route")):
-            for n in _route_names(self._route() or {}):
-                self._drop_value(n.name)
+            self.forget("broker.fp")
         self.decide("broker.slug", slug)
         self.decide("broker.route", route_id)
+        route = self._route()
+        if route is not None:
+            self.decide("broker.fp", route_fingerprint(route))
+        self._prune(self._expected_pairs())
 
     def _select_entry(self, slug: str) -> State | None:
         entry = next((e for e in self.d.catalog if e["slug"] == slug), None)
@@ -899,14 +761,13 @@ class _Wizard:
             return None
         routes = installable_routes(entry)
         if not routes:
-            banner = (entry.get("wizard") or {}).get("banner") or BANNER
-            self.say(S.NOT_INSTALLABLE.format(name=entry.get("name", slug), banner=banner,
-                                              page=entry.get("page_path") or "the catalog page",
-                                              url=entry.get("source_url") or "no address listed"))
+            self.say(S.NOT_INSTALLABLE.format(
+                name=entry.get("name", slug), banner=(entry.get("wizard") or {}).get("banner") or S.BANNER,
+                page=entry.get("page_path") or "the catalog page", url=entry.get("source_url") or "no address listed"))
             return None
         route = routes[0]
         if len(routes) > 1:
-            opts = [Option(f"route:{r['route_id']}", self._route_label(r)) for r in routes] + [Option("back", "Back")]
+            opts = [Option(f"route:{r['route_id']}", route_label(r)) for r in routes] + [Option("back", "Back")]
             a = self.io.choose(S.ROUTE_PROMPT.format(name=entry.get("name", slug)), opts)
             if a == "back":
                 return None
@@ -914,17 +775,10 @@ class _Wizard:
         self._set_broker(slug, route["route_id"])
         return State.BROKER_INSTALL
 
-    @staticmethod
-    def _route_label(r: dict) -> str:
-        how = (r.get("paper") or {}).get("how_to_enable")
-        return f"{r['route_id']} ({r.get('kind')}, {r.get('maintainer', 'maintainer not stated')})" + (
-            f": {how}" if how else "")
-
     # ---- BROKER_INSTALL
 
     def _describe_route(self, entry: dict, route: dict) -> None:
-        name = entry.get("name", entry["slug"])
-        lines = [S.INSTALL_PROMPT.format(name=name)]
+        lines = [S.INSTALL_PROMPT.format(name=entry.get("name", entry["slug"]))]
         if route["kind"] == "local-command":
             inst = route.get("install") or {}
             lines.append(f"How it connects: it runs a local program: {inst.get('command_text', 'not stated')}")
@@ -936,23 +790,14 @@ class _Wizard:
         if paper.get("how_to_enable"):
             lines.append(f"Paper trading, in the broker page's own words: {paper['how_to_enable']}")
         elif paper.get("supported"):
-            lines.append(f"Paper trading: {paper['supported']}")
-        sub = route.get("submit") or {}
-        if sub.get("can_submit_order"):
-            lines.append(f"Orders, per the broker page: can submit {sub['can_submit_order']}; "
-                         f"confirmation {sub.get('confirmation', 'not stated')}.")
-        ro = route.get("read_only") or {}
-        if ro.get("available"):
-            lines.append(f"Read-only option, per the broker page: {ro.get('how', 'available')}")
-        advice = (route.get("auth") or {}).get("key_scope_advice")
-        if advice:
-            lines.append(f"Tip from the page: {advice}")
-        if (route.get("auth") or {}).get("headers"):
-            lines.append(S.UNSET_SENTENCE)
-        elif _route_names(route):
-            lines.append(S.UNSET_SENTENCE)
-        if not _route_names(route):
-            lines.append(S.OAUTH_ONLY)
+            lines.append(f"Paper trading: {plain(paper['supported'])}")
+        if (route.get("submit") or {}).get("can_submit_order"):
+            lines.append("Orders, per the broker page: " + submit_words(route["submit"]) + ".")
+        if (route.get("read_only") or {}).get("available"):
+            lines.append(f"Read-only option, per the broker page: {route['read_only'].get('how', 'available')}")
+        if (route.get("auth") or {}).get("key_scope_advice"):
+            lines.append(f"Tip from the page: {route['auth']['key_scope_advice']}")
+        lines.append(S.UNSET_SENTENCE if route_names(route) else S.OAUTH_ONLY)
         self.say("\n".join(lines))
 
     def _st_broker_install(self) -> State:
@@ -960,30 +805,29 @@ class _Wizard:
         if entry is None or route is None:
             return State.BROKER_PICK
         self._describe_route(entry, route)
-        names = _route_names(route)
+        c, specs = next((c, s) for c, s in self._consumers() if c.key == self._broker_key())
         opts = [Option("continue", "Continue")]
-        if any(self.dec(f"val:{n.name}") for n in names):
+        if any(self._decided(c, s.name) for s in specs):
             opts.append(Option("redo", "Enter these values again"))
-        opts.append(Option("back", "Back"))
-        a = self.io.choose(f"Connect {entry.get('name', entry['slug'])}.", opts)
+        a = self.io.choose(f"Connect {self._broker_name()}.", [*opts, Option("back", "Back")])
         if a == "back":
             return State.BROKER_PICK
         if a == "redo":
-            for n in names:
-                self._drop_value(n.name)
-        for n in names:
-            self._obtain(n.name, secret=n.secret, kinds=("broker-key",))
+            self._revoke_consumer(c.key)
+        try:
+            for s in specs:
+                self._obtain(c, s)
+        except BackSignal:
+            return State.BROKER_PICK
         return State.BROKER_VERIFY
 
     # ---- BROKER_VERIFY
 
     def _st_broker_verify(self) -> State:
-        entry = self._entry()
-        name = entry.get("name", entry["slug"]) if entry else "the broker"
         status = S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED
         self.decide("broker.verify", "offline" if not self.d.online else "pending")
-        self.say(S.BROKER_VERIFY_LATER.format(status=status))
-        a = self.io.choose(S.BROKER_VERIFY_PROMPT.format(name=name),
+        self.say(S.BROKER_VERIFY_LATER.format(name=self._broker_name() or "the broker", status=status))
+        a = self.io.choose(S.BROKER_VERIFY_PROMPT.format(name=self._broker_name() or "the broker"),
                            [Option("continue", "Continue"), Option("back", "Back")])
         return State.BROKER_INSTALL if a == "back" else State.SKILLS
 
@@ -991,28 +835,26 @@ class _Wizard:
 
     def _st_skills(self) -> State:
         libs = listed_only(self.d.libraries)   # an unlisted library is never offered
-        picked = {i for i in self.dec("skills").split(",") if i}
-        picked &= {lib.id for lib in libs}
+        picked = {i for i in self.dec("skills").split(",") if i} & {lib.id for lib in libs}
         if not libs:
             self.say(S.SKILLS_NONE_LISTED)
         while True:
             opts = []
             for lib in libs:
-                mark = "[x]" if lib.id in picked else "[ ]"
                 keys = f" Needs keys: {', '.join(lib.needs_keys)}." if lib.needs_keys else ""
-                opts.append(Option(f"lib:{lib.id}", f"{mark} {lib.name} ({lib.license})",
+                opts.append(Option(f"lib:{lib.id}", f"{'[x]' if lib.id in picked else '[ ]'} {lib.name} ({lib.license})",
                                    f"{lib.kind} library.{keys}"))
-            opts += [Option("done", "Done"), Option("back", "Back")]
-            a = self.io.choose(S.SKILLS_PROMPT, opts)
+            a = self.io.choose(S.SKILLS_PROMPT, [*opts, Option("done", "Done"), Option("back", "Back")])
             if a == "back":
                 return State.BROKER_VERIFY if self._route() else State.BROKER_PICK
             if a == "done":
-                self.decide("skills", ",".join(sorted(picked)))
                 self.decide("skills.done", "1")
                 return State.DATA_KEYS
-            lid = a.split(":", 1)[1]
-            picked ^= {lid}
-            self.decide("skills", ",".join(sorted(picked)))
+            if a.startswith("lib:") and a[4:] in {lib.id for lib in libs}:
+                picked ^= {a[4:]}
+                self.decide("skills", ",".join(sorted(picked)))
+            else:
+                self.say(S.INVALID_CHOICE)
 
     # ---- DATA_KEYS (R27: names come only from the picked libraries)
 
@@ -1020,37 +862,51 @@ class _Wizard:
         names = self._data_names()
         if not names:
             self.say(S.DATA_KEYS_NONE)
-            a = self.io.choose("Optional data keys.", [Option("continue", "Continue"), Option("back", "Back")])
-            return State.SKILLS if a == "back" else State.REVIEW
+            return State.REVIEW
         a = self.io.choose(S.DATA_KEYS_PROMPT.format(names=", ".join(names)),
                            [Option("add", "Add keys"), Option("skip", "Skip"), Option("back", "Back")])
         if a == "back":
             return State.SKILLS
-        for n in names:
-            if a == "add":
-                self._obtain(n, secret=True, kinds=("data-key",))
-            elif not self.dec(f"val:{n}"):
-                self.decide(f"val:{n}", "skip")
+        try:
+            for c, specs in self._data_consumers():
+                for s in specs:
+                    self._data_key(c, s, add=a == "add")
+        except BackSignal:
+            return State.SKILLS
         if a == "add" and not self.d.online:
             self.say(S.DATA_KEYS_OFFLINE)
         return State.REVIEW
 
-    # ---- REVIEW
+    def _data_key(self, c: Consumer, s: NameSpec, *, add: bool) -> None:
+        """Add and Skip each re-decide: switching drops what the other choice left behind."""
+        if add:
+            if self.dec(self._dk(c.key, s.name)) == "skip":
+                self.forget(self._dk(c.key, s.name))
+            self._obtain(c, s)
+        else:
+            self._mark(c, s.name, "skip")
 
-    def _broker_name(self) -> str:
-        e = self._entry()
-        return e.get("name", e["slug"]) if e else ""
+    # ---- REVIEW
 
     def _review_text(self) -> str:
         choice = self._ai_choice()
+        who = _ai_provider_label(choice.kind, choice.ref)
+        ai_name = self._ai_value_name()
+        nokey = S.REVIEW_NO_KEY if ai_name and not (
+            any(k == "ai" and n == ai_name for k, n in self._grants)
+            or self.dec(self._dk("ai", ai_name)) == "keep-existing") else ""
         lines = [S.REVIEW_HEAD, S.REVIEW_PROFILE.format(name=self.dec("profile_name"))]
         brand = _CLI_NAMES.get(choice.ref, ("", "your CLI"))[1]
-        lines.append(S.REVIEW_AI.get(choice.kind, S.REVIEW_AI["none"]).format(brand=brand, ref=choice.ref))
-        if self._route() is not None:
-            lines.append(S.REVIEW_BROKER.format(name=self._broker_name()))
-        written = [n for n in self._expected_names() if n in self._values]
-        if written:
-            lines.append(S.REVIEW_KEYS.format(n=len(written), names=", ".join(written)))
+        lines.append(S.REVIEW_AI.get(choice.kind, S.REVIEW_AI["none"]).format(
+            brand=brand, ref=choice.ref, who=who, nokey=nokey))
+        route = self._route()
+        if route is not None:
+            lines.append(S.REVIEW_BROKER.format(name=self._broker_name(), dest=route_destination(route)))
+        values = self._plan_values()
+        if values:
+            lines.append(S.REVIEW_KEYS.format(names=", ".join(values)))
+            lines += [S.REVIEW_KEYS_FOR.format(name=s.name, who=c.label)
+                      for c, specs in self._consumers() for s in specs if (c.key, s.name) in self._grants]
         skills = [lib.id for lib in self._selected_libs()]
         if skills:
             lines.append(S.REVIEW_SKILLS.format(n=len(skills), y="y" if len(skills) == 1 else "ies",
@@ -1059,18 +915,22 @@ class _Wizard:
         return "\n".join(lines)
 
     def _st_review(self) -> State:
-        self._ensure_values()
+        try:
+            self._ensure_values()
+        except BackSignal:
+            return State.DATA_KEYS if self._data_names() else State.SKILLS
         a = self.io.choose(self._review_text(), [Option("do", "Do it"), Option("back", "Back")])
-        return State.DATA_KEYS if a == "back" else State.WRITE
+        if a == "back":
+            return State.DATA_KEYS if self._data_names() else State.SKILLS
+        return State.WRITE
 
     # ---- WRITE
 
     def _build_plan(self) -> WritePlan:
         route = self._route()
         broker = BrokerChoice(slug=self.dec("broker.slug"), route_id=self.dec("broker.route"), entry=route) if route else None
-        env = {n: self._values[n] for n in self._expected_names() if n in self._values}
         return WritePlan(profile_name=self.dec("profile_name"), ai=self._ai_choice(), broker=broker,
-                         skills=[lib.id for lib in self._selected_libs()], env_values=env)
+                         skills=[lib.id for lib in self._selected_libs()], env_values=self._plan_values())
 
     def _st_write(self) -> State:
         plan = self._build_plan()
@@ -1079,27 +939,30 @@ class _Wizard:
             self.receipt = write_profile(plan, hermes=self.d.hermes, source_dir=self.d.source_dir,
                                          store_factory=self.d.store_factory)
         except ProfileExists:
-            self.go(State.REVIEW)
-            self.say(S.WRITE_EXISTS.format(name=plan.profile_name))
-            a = self.io.choose(S.WRITE_WHAT_NOW, [Option("rename", "Pick another name"), Option("back", "Back")])
-            if a == "rename":
-                self.forget("profile_name")
-                return State.PRECHECK
-            return State.REVIEW
+            return self._write_exists(plan.profile_name)
         except WriteError as e:
             self.go(State.REVIEW)
             self.say(S.WRITE_FAILED.format(report=self.safe(e.report)))
             return self._write_failed()
         except Exception as e:  # noqa: BLE001
             self.go(State.REVIEW)
-            detail = self.safe(e) if isinstance(e, ValueError) else type(e).__name__
-            self.say(S.WRITE_FAILED_PLAIN.format(detail=detail))
+            self.say(S.WRITE_FAILED_PLAIN.format(detail=self.safe(e) if isinstance(e, ValueError) else type(e).__name__))
             return self._write_failed()
         finally:
             if isinstance(env, dict):
                 env.clear()
         self._values.clear()
+        self._grants.clear()
         return State.VERIFY
+
+    def _write_exists(self, name: str) -> State:
+        self.go(State.REVIEW)
+        self.say(S.WRITE_EXISTS.format(name=name))
+        a = self.io.choose(S.WRITE_WHAT_NOW, [Option("rename", "Pick another name"), Option("back", "Back")])
+        if a == "rename":
+            self.forget("profile_name")
+            return State.PRECHECK
+        return State.REVIEW
 
     def _write_failed(self) -> State:
         a = self.io.choose(S.WRITE_WHAT_NOW, [Option("review", "Back to the review"), Option("stop", "Stop here")])
@@ -1111,17 +974,14 @@ class _Wizard:
 
     def _verify_lines(self) -> list[str]:
         lines: list[str] = []
-        kind = self.dec("ai.kind", "none")
-        if kind not in ("none", "cli"):
+        if self.dec("ai.kind", "none") not in ("none", "cli"):
             if not self.d.online:
                 lines.append(f"AI check: {S.NEEDS_INTERNET}.")
-            elif self.dec("ai.verify") == "passed":
-                lines.append(S.AI_CHECK_PASSED)
             else:
-                lines.append(S.AI_CHECK_NOT_TESTED)
-        if self.dec("broker.slug", "none") != "none":
-            status = S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED
-            lines.append(f"Broker connection: {status}.")
+                lines.append(S.AI_CHECK_PASSED if self.dec("ai.verify") == "passed" else S.AI_CHECK_NOT_TESTED)
+        if self._route() is not None:
+            lines.append(f"Broker connection: {S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED}"
+                         " (testing is not built yet).")
         return lines
 
     def _st_verify(self) -> State:
@@ -1143,25 +1003,24 @@ class _Wizard:
         if route is None:
             out.append(S.LATER_BROKER)
         else:
-            if not _route_names(route):
+            if not route_names(route):
                 out.append(S.LATER_OAUTH.format(name=self._broker_name()))
-            status = S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED
-            out.append(S.LATER_BROKER_TEST.format(name=self._broker_name(), status=status))
-        for n in self._expected_names():
-            if self.dec(f"val:{n}") == "skip":
-                out.append(S.LATER_NAME.format(name=n))
+            out.append(S.LATER_BROKER_TEST.format(
+                name=self._broker_name(), status=S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED))
+        out += [S.LATER_NAME.format(name=s.name, who=c.who) for c, specs in self._consumers() for s in specs
+                if self.dec(self._dk(c.key, s.name)) == "skip"]
         return out
 
     def _st_done(self) -> None:
+        name = self.dec("profile_name")
         choice = self._ai_choice()
-        ai = {"none": "none yet", "cli": "none yet", "openrouter": "OpenRouter", "custom": "OpenAI-compatible service",
-              "ollama": "Ollama", "lm-studio": "LM Studio"}.get(choice.kind, "none yet")
-        broker = self._broker_name() or "none"
-        text = S.DONE_TITLE + "\n" + S.DONE_BODY.format(ai=ai, broker=broker, n=len(self._selected_libs()))
+        text = S.DONE_TITLE + "\n" + S.DONE_BODY.format(
+            ai=_ai_provider_label(choice.kind, choice.ref), broker=self._broker_name() or "none",
+            n=len(self._selected_libs()))
         later = self._left_to_do()
         if later:
             text += "\n" + S.FINISH_LATER_TITLE + "\n" + "\n".join(f"- {x}" for x in later)
-        text += "\n" + S.DONE_UNDO.format(name=self.dec("profile_name"))
+        text += "\n" + S.DONE_UNDO.format(name=name, receipt=Receipt.path(self.p, name))
         self.say(text)
         return None
 

@@ -2,22 +2,24 @@
 from __future__ import annotations
 
 import io as _io
+import json
+from pathlib import Path
 import stat
 
 import pytest
 import yaml
 from dotenv.main import DotEnv
 
-from fakes import ScriptedIO, ScriptExhausted, assert_no_leak, env_finding, port_finding
-from test_profile_writer import LOCAL_ROUTE, REMOTE_ROUTE, Env
+from fakes import K1, K2, K3, ScriptedIO, ScriptExhausted, assert_no_leak, env_finding, port_finding
+from test_profile_writer import LOCAL_ROUTE, Env
 from test_wizard_flow import LIBS, entry
 from trading_agent.profile.receipt import Receipt
 from trading_agent.wizard.flow import Deps, Detectors, run_wizard
 from trading_agent.wizard.state import State, WizardState
 
-S1 = "sk-E2E-first-secret-0123456789"
-S2 = "sk-E2E-second-secret-0123456789"
-S3 = "sk-E2E-third-secret-0123456789"
+S1, S2, S3 = K1, K2, K3
+REAL_OVERLAY = json.loads((Path(__file__).parents[1] / "catalog" / "overlay.json").read_text())
+REAL_TRADIER = REAL_OVERLAY["tradier"]["routes"]    # the real catalog entry, not a fixture that masks its gaps
 TOP = ["start", "", "scan"]
 OLLAMA = [port_finding("ollama")]
 
@@ -38,7 +40,7 @@ def deps_for(world, *, findings=(), catalog=None, libraries=None, online=True):
                             mcp_files=lambda enabled: pick(("mcp-entry",)) if enabled else [],
                             ai_clis=lambda: pick(("ai-cli",)), ports=lambda: pick(("ai-local", "gateway"))),
         catalog=catalog if catalog is not None else [entry("alpaca", "Alpaca", [LOCAL_ROUTE]),
-                                                     entry("tradier", "Tradier", [REMOTE_ROUTE])],
+                                                     entry("tradier", "Tradier", REAL_TRADIER)],
         libraries=LIBS if libraries is None else libraries,
         store_factory=world.store_factory, source_dir=world.dist, online=online)
 
@@ -65,8 +67,8 @@ def dotenv_read(path):
 def test_e2e_local_broker_with_pasted_and_reused_keys(world):
     world.platform._e["ALPACA_API_KEY"] = S3          # found in the environment, copied only after a yes
     deps = deps_for(world, findings=[*OLLAMA, env_finding("ALPACA_API_KEY", "broker-key")])
-    io = ScriptedIO([*TOP, "use:ai-local:ollama", "skip", "pick:alpaca", "continue", True, "paste", S2, "true",
-                     "continue", "lib:skill-a", "done", "continue", "do"])
+    io = ScriptedIO([*TOP, "use:ai-local:ollama", "continue", "pick:alpaca", "continue", True, "paste", S2, "true",
+                     "continue", "lib:skill-a", "done", "do"])
     receipt = run_wizard(io, deps)
 
     assert isinstance(receipt, Receipt) and receipt.profile_name == "trader"
@@ -92,22 +94,24 @@ def test_e2e_local_broker_with_pasted_and_reused_keys(world):
     assert "You are set up." in "\n".join(io.said)
 
 
-def test_e2e_remote_broker_headers_are_references_and_mode_switch_is_typed(world):
+def test_e2e_remote_broker_from_the_real_overlay_names_the_broker_in_every_variable(world):
     deps = deps_for(world, findings=OLLAMA)
-    io = ScriptedIO([*TOP, "use:ai-local:ollama", "skip", "pick:tradier", "continue", "paste", S1, "true",
-                     "continue", "done", "continue", "do"])
+    io = ScriptedIO([*TOP, "use:ai-local:ollama", "continue", "pick:tradier", "continue", "true", "paste", S1,
+                     "continue", "done", "do"])
     receipt = run_wizard(io, deps)
     assert receipt is not None
     cfg = yaml.safe_load((world.pdir() / "config.yaml").read_text())
     assert cfg["mcp_servers"]["tradier"] == {
         "url": "https://mcp.tradier.com/mcp",
-        "headers": {"API_KEY": "${TRADIER_API_KEY}", "PAPER_TRADING": "${PAPER_TRADING}"}}
-    assert dotenv_read(world.pdir() / ".env") == {"TRADIER_API_KEY": S1, "PAPER_TRADING": "true"}
+        "headers": {"API_KEY": "${TRADIER_API_KEY}", "PAPER_TRADING": "${TRADIER_PAPER_TRADING}"}}
+    # no generic API_KEY in the shared .env: collisions across brokers are impossible
+    assert dotenv_read(world.pdir() / ".env") == {"TRADIER_API_KEY": S1, "TRADIER_PAPER_TRADING": "true"}
+    assert any(p.startswith("Tradier: ") and "TRADIER_API_KEY" in p for k, p, _ in io.prompts)
     assert_secret_only_in_profile_env(world, [S1])
 
 
 def test_e2e_nothing_found_still_sets_up_a_bare_profile(world):
-    io = ScriptedIO([*TOP, "skip", "continue", "none", "done", "continue", "do"])
+    io = ScriptedIO([*TOP, "skip", "continue", "none", "done", "do"])
     receipt = run_wizard(io, deps_for(world))
     assert receipt is not None
     pdir = world.pdir()
@@ -119,7 +123,7 @@ def test_e2e_nothing_found_still_sets_up_a_bare_profile(world):
 
 
 def test_e2e_offline_setup_completes(world):
-    io = ScriptedIO([*TOP, "use:ai-local:ollama", "continue", "none", "done", "continue", "do"])
+    io = ScriptedIO([*TOP, "use:ai-local:ollama", "continue", "none", "done", "do"])
     receipt = run_wizard(io, deps_for(world, findings=OLLAMA, online=False))
     assert receipt is not None
     later = "\n".join(io.said)
@@ -129,7 +133,7 @@ def test_e2e_offline_setup_completes(world):
 def test_e2e_write_failure_rolls_back_and_never_shows_the_secret(world):
     world.set_control(fail_match="config set model.provider", fail_stderr=f"boom, you sent {S1}", fail_code=1)
     deps = deps_for(world, findings=OLLAMA)
-    io = ScriptedIO([*TOP, "paste-openrouter", S1, "skip", "none", "done", "continue", "do", "stop"])
+    io = ScriptedIO([*TOP, "paste-openrouter", S1, "continue", "none", "done", "do", "stop"])
     receipt = run_wizard(io, deps)
     assert receipt is None
     assert S1 not in io.everything()
@@ -148,7 +152,7 @@ def test_e2e_write_failure_then_retry_succeeds(world):
         if io.prompts and io.prompts[-1][1] == "What now?":
             world.set_control()
     deps = deps_for(world, findings=OLLAMA)
-    io = ScriptedIO([*TOP, "use:ai-local:ollama", "skip", "none", "done", "continue", "do", "review", "do"],
+    io = ScriptedIO([*TOP, "use:ai-local:ollama", "continue", "none", "done", "do", "review", "do"],
                     on_prompt=heal)
     receipt = run_wizard(io, deps)
     assert receipt is not None and world.pdir().is_dir()
@@ -156,13 +160,13 @@ def test_e2e_write_failure_then_retry_succeeds(world):
 
 def test_e2e_resume_reasks_the_pasted_value_and_finishes(world):
     deps = deps_for(world, findings=OLLAMA)
-    first = ScriptedIO([*TOP, "paste-openrouter", S1, "skip", "none", "done", "continue"])
+    first = ScriptedIO([*TOP, "paste-openrouter", S1, "continue", "none", "done"])
     with pytest.raises(ScriptExhausted):
         run_wizard(first, deps)                       # interrupted at REVIEW, nothing written yet
     assert not world.pdir().exists()
     state_text = (world.config_home / "trading-agent" / "state.json").read_text()
     assert S1 not in state_text
-    second = ScriptedIO([S2, "do"])                   # a fresh process: the value must be pasted again
+    second = ScriptedIO(["paste", S2, "do"])                   # a fresh process: the value must be pasted again
     receipt = run_wizard(second, deps_for(world, findings=OLLAMA))
     assert receipt is not None
     assert dotenv_read(world.pdir() / ".env") == {"OPENROUTER_API_KEY": S2}
@@ -188,7 +192,7 @@ def test_e2e_state_file_and_everything_said_never_hold_a_value(world):
     def hook(io_):
         p = world.config_home / "trading-agent" / "state.json"
         seen_states.append(p.read_text() if p.exists() else "")
-    io = ScriptedIO([*TOP, "use:env:OPENROUTER_API_KEY", True, "skip", "none", "done", "continue", "do"], on_prompt=hook)
+    io = ScriptedIO([*TOP, "use:env:OPENROUTER_API_KEY", True, "continue", "none", "done", "do"], on_prompt=hook)
     assert run_wizard(io, deps) is not None
     for text in seen_states + [io.everything()]:
         assert_no_leak(text, S3)

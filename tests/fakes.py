@@ -209,8 +209,30 @@ def cli_finding(name, *, present=True):
                    state="present" if present else "absent", where=f"/usr/bin/{name}", reusable="reference-only")
 
 
+# Fixed, random-looking 24 character secrets with no shared prefix. Every 4 character window of them is
+# checked, so a masked or partial leak (v[:6], v[-7:], "ends in ...") is caught.
+K1 = "aQ7xM2kZp9Wv4TnR8yJd3HsB"
+K2 = "Lr5Cg8bN2uXe6FtY1oVm9PzD"
+K3 = "Wm3Hk7sQ4dJf9ZxA2nUv8GcR"
+K4 = "Yt6Bp1eN5qLc8VhS3zKw7MaJ"
+K5 = "Dn4Rz9vKc2Ws7TqH5jXb8MeG"
+ALL_SECRETS = (K1, K2, K3, K4, K5)
+
+
+def windows(secret: str, size: int = 4):
+    return [secret[i:i + size] for i in range(len(secret) - size + 1)]
+
+
 def assert_no_leak(text: str, *secrets: str) -> None:
-    """The whole secret, or an 8 character head or tail of it, must not appear (catches masked or partial leaks)."""
+    """No whole secret and no 4 character window of any secret may appear in TEXT."""
     for secret in secrets:
-        for frag in (secret, secret[:8], secret[-8:]):
-            assert frag not in text, f"a piece of a secret leaked: {frag[:4]}..."
+        for w in windows(secret):
+            assert w not in text, f"a piece of a secret leaked: {w[:2]}..."
+
+
+def sweep_tree(root, secrets, *, allow=()) -> None:
+    """Every file under ROOT (state file, receipt, hermes call log, config.yaml) except ALLOW must be clean."""
+    allowed = {Path(a) for a in allow}
+    for p in Path(root).rglob("*"):
+        if p.is_file() and p not in allowed:
+            assert_no_leak(p.read_bytes().decode("utf-8", errors="replace"), *secrets)

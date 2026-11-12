@@ -79,12 +79,23 @@
         "url": "https://mcp.tradier.com/mcp",
         "auth": {
           "type": "bearer-token",
-          "env_vars": [],
+          "env_vars": [
+            {
+              "name": "TRADIER_PAPER_TRADING",
+              "role": "mode-switch",
+              "required": false,
+              "secret": false
+            }
+          ],
           "headers": [
             "API_KEY",
             "PAPER_TRADING"
           ],
-          "key_scope_advice": "Use a paper token with PAPER_TRADING true first."
+          "key_scope_advice": "Use a paper token with PAPER_TRADING true first.",
+          "header_env": {
+            "API_KEY": "TRADIER_API_KEY",
+            "PAPER_TRADING": "TRADIER_PAPER_TRADING"
+          }
         },
         "paper": {
           "supported": "yes",
