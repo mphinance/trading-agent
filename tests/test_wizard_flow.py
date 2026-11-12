@@ -175,7 +175,7 @@ ALPACA_ENV = {"ALPACA_API_KEY": KEY1, "ALPACA_SECRET_KEY": KEY2}
 ALPACA_FINDINGS = [env_finding("ALPACA_API_KEY", "broker-key"), env_finding("ALPACA_SECRET_KEY", "broker-key")]
 TOP = ["start", "", "scan"]                       # START, PRECHECK (name), SCAN
 AI_OLLAMA = ["use:ai-local:ollama", "continue"]   # AI_ROUTE, AI_VERIFY (the stub verifier: Continue only)
-HAPPY = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true", "continue",
+HAPPY = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true",
          "lib:skill-a", "done", "do"]
 
 
@@ -235,7 +235,7 @@ def test_review_lists_exactly_what_will_happen_and_nothing_declined(mk):
 
 def test_review_text_for_declined_items(mk):
     w = mk(environ=ALPACA_ENV, findings=[*OLLAMA, *ALPACA_FINDINGS])
-    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", False, "skip", True, "", "continue", "done"]
+    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", False, "skip", True, "", "done"]
     io = ScriptedIO(answers)
     with pytest.raises(ScriptExhausted):
         run_wizard(io, w.deps)
@@ -255,9 +255,8 @@ BACK_CASES = [
     ("AI_VERIFY", [*PRE_AI, "back"], State.AI_ROUTE),
     ("BROKER_PICK", [*TOP, *AI_OLLAMA, "back"], State.AI_VERIFY),
     ("BROKER_INSTALL", [*TOP, *AI_OLLAMA, "pick:alpaca", "back"], State.BROKER_PICK),
-    ("BROKER_VERIFY", [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true", "back"], State.BROKER_INSTALL),
-    ("SKILLS-with-broker", [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true", "continue", "back"],
-     State.BROKER_VERIFY),
+    ("SKILLS-with-broker", [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true", "back"],
+     State.BROKER_INSTALL),
     ("SKILLS-no-broker", [*TOP, *AI_OLLAMA, "none", "back"], State.BROKER_PICK),
     ("DATA_KEYS", [*TOP, *AI_OLLAMA, "none", "lib:skill-keyed", "done", "back"], State.SKILLS),
     ("REVIEW-no-keys", [*TOP, *AI_OLLAMA, "none", "lib:skill-a", "done", "back"], State.SKILLS),
@@ -365,7 +364,7 @@ def test_reuse_requires_yes_and_names_destination(mk):
 
 def test_reuse_is_not_copied_when_the_user_says_no(mk):
     w = happy_world(mk)
-    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", False, "skip", False, "skip", "", "continue",
+    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", False, "skip", False, "skip", "",
                "done", "do"]
     receipt, io = w.run(answers)
     assert receipt is not None
@@ -408,7 +407,7 @@ def test_ai_key_reuse_when_yes_goes_to_the_new_profile_only(mk):
 def test_login_shell_only_finding_cannot_be_copied_so_paste_is_offered(mk):
     f = env_finding("ALPACA_API_KEY", "broker-key", where="login shell environment")
     w = mk(environ={}, findings=[*OLLAMA, f])
-    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "paste", PASTED, "skip", "", "continue",
+    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "paste", PASTED, "skip", "",
                "done", "do"]
     receipt, io = w.run(answers)
     assert "confirm" not in io.kinds()                         # no "copy it" question: nothing to copy from
@@ -432,7 +431,7 @@ def test_reference_only_finding_is_never_offered_for_copy(mk):
     cat = [entry("capital-com", "Capital", [route])]
     f = env_finding("CAP_API_PASSWORD", "broker-key", reusable="reference-only")
     w = mk(environ={"CAP_API_PASSWORD": KEY1}, findings=[*OLLAMA, f], catalog=cat)
-    answers = [*TOP, *AI_OLLAMA, "pick:capital-com", "continue", "paste", PASTED, "continue", "done", "do"]
+    answers = [*TOP, *AI_OLLAMA, "pick:capital-com", "continue", "paste", PASTED, "done", "do"]
     receipt, io = w.run(answers)
     assert "confirm" not in io.kinds()
     assert "I will not copy this one" in io.everything()
@@ -454,7 +453,7 @@ def test_gemini_exchange_key_is_never_offered_as_an_ai_key(mk):
 def test_gemini_exchange_key_is_offered_in_the_broker_step_only(mk):
     gem = [env_finding("GEMINI_API_KEY", "broker-key"), env_finding("GEMINI_API_SECRET", "broker-key")]
     w = mk(environ={"GEMINI_API_KEY": KEY1, "GEMINI_API_SECRET": KEY2}, findings=gem)
-    answers = [*TOP, "skip", "continue", "all", "pick:gemini-exchange", "continue", True, True, "continue", "done", "do"]
+    answers = [*TOP, "skip", "continue", "all", "pick:gemini-exchange", "continue", True, True, "done", "do"]
     receipt, io = w.run(answers)
     assert w.writes[0].values == {"GEMINI_API_KEY": KEY1, "GEMINI_API_SECRET": KEY2}
     assert [p for k, p, _ in io.prompts if k == "confirm"][0].count("GEMINI_API_KEY") == 1
@@ -465,7 +464,7 @@ def test_an_ai_key_name_is_not_offered_for_a_broker_route(mk):
         {"name": "OPENAI_API_KEY", "role": "secret", "required": True, "secret": True}]})
     w = mk(environ={"OPENAI_API_KEY": KEY1}, findings=[env_finding("OPENAI_API_KEY", "ai-key")],
            catalog=[entry("kraken", "Odd", [route])])
-    answers = [*TOP, "skip", "continue", "pick:kraken", "continue", "skip", "continue", "done", "do"]
+    answers = [*TOP, "skip", "continue", "pick:kraken", "continue", "skip", "done", "do"]
     receipt, io = w.run(answers)
     assert "confirm" not in io.kinds()
 
@@ -566,7 +565,7 @@ def test_only_a_catalog_marked_mode_switch_is_typed_in_plain_and_only_from_the_a
         {"name": "DEMO_MODE", "role": "mode-switch", "required": False, "secret": False}]})
     w = mk(findings=OLLAMA, catalog=[entry("etoro", "E", [route])])
     answers = [*TOP, *AI_OLLAMA, "pick:etoro", "continue", "demo", "paper", "paste", PASTED, "paste", KEY2,
-               "continue", "done", "do"]
+               "done", "do"]
     receipt, io = w.run(answers)
     by_name = {n: [k for k, p, _ in io.prompts if n in p and k in ("ask", "secret")]
                for n in ("DEMO_MODE", "SANDBOX_TOKEN", "PAPER_TRADING")}
@@ -647,7 +646,7 @@ def test_nothing_to_test_prompt_does_not_ask_to_check(mk):
 
 def test_offline_marks_finish_later(mk):
     w = happy_world(mk, online=False)
-    answers = [*TOP, "use:ai-local:ollama", "continue", "pick:alpaca", "continue", True, True, "true", "continue",
+    answers = [*TOP, "use:ai-local:ollama", "continue", "pick:alpaca", "continue", True, True, "true",
                "lib:skill-a", "done", "do"]
     receipt, io = w.run(answers)
     said = "\n".join(io.said)
@@ -844,7 +843,7 @@ def test_non_selectable_broker_cannot_be_installed_and_shows_the_banner(mk):
     receipt, io = w.run(answers, on_prompt=hook)
     said = "\n".join(io.said)
     assert "setup details not curated yet" in said
-    assert "https://example.test/m1-finance" in said and "brokers/m1-finance.md" in said
+    assert "https://example.test/m1-finance" in said and "brokers/m1-finance.md" not in said
     assert "set this up yourself" in said
     assert w.writes[0].plan.broker is None
     assert State.BROKER_INSTALL not in seen
@@ -874,14 +873,14 @@ def test_search_flow_filters_and_keeps_uncurated_visible(mk):
 def test_multiple_routes_ask_which_one(mk):
     two = entry("etoro", "Two", [dict(REMOTE_ROUTE, route_id="hosted-live"), dict(REMOTE_ROUTE, route_id="hosted-paper")])
     w = mk(findings=OLLAMA, catalog=[two])
-    answers = [*TOP, *AI_OLLAMA, "pick:etoro", "route:hosted-paper", "continue", "", "skip", "continue", "done", "do"]
+    answers = [*TOP, *AI_OLLAMA, "pick:etoro", "route:hosted-paper", "continue", "", "skip", "done", "do"]
     w.run(answers)
     assert w.writes[0].plan.broker.route_id == "hosted-paper"
 
 
 def test_every_env_var_and_header_name_is_asked_including_mode_switches(mk):
     w = mk(findings=OLLAMA)
-    answers = [*TOP, *AI_OLLAMA, "pick:tradier", "continue", "true", "paste", PASTED, "continue", "done", "do"]
+    answers = [*TOP, *AI_OLLAMA, "pick:tradier", "continue", "true", "paste", PASTED, "done", "do"]
     receipt, io = w.run(answers)
     asked = "\n".join(p for k, p, _ in io.prompts if k in ("secret", "ask", "choose", "confirm"))
     assert "TRADIER_API_KEY" in asked and "TRADIER_PAPER_TRADING" in asked
@@ -896,7 +895,7 @@ def test_every_env_var_and_header_name_is_asked_including_mode_switches(mk):
 
 def test_local_route_mode_switch_is_typed_in_plain_and_secrets_hidden(mk):
     w = mk(findings=OLLAMA)
-    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "paste", PASTED, "paste", KEY2, "false", "continue",
+    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "paste", PASTED, "paste", KEY2, "false",
                "done", "do"]
     receipt, io = w.run(answers)
     assert w.writes[0].values == {"ALPACA_API_KEY": PASTED, "ALPACA_SECRET_KEY": KEY2, "ALPACA_PAPER_TRADE": "false"}
@@ -906,7 +905,7 @@ def test_local_route_mode_switch_is_typed_in_plain_and_secrets_hidden(mk):
 
 def test_skipped_names_are_listed_under_finish_later_and_explained(mk):
     w = mk(findings=OLLAMA)
-    answers = [*TOP, *AI_OLLAMA, "pick:tradier", "continue", "", "skip", "continue", "done", "do"]
+    answers = [*TOP, *AI_OLLAMA, "pick:tradier", "continue", "", "skip", "done", "do"]
     receipt, io = w.run(answers)
     later = "\n".join(io.said)
     later = later[later.index(screens.FINISH_LATER_TITLE):]
@@ -917,7 +916,7 @@ def test_skipped_names_are_listed_under_finish_later_and_explained(mk):
 def test_existing_name_in_the_profile_env_asks_keep_or_replace(mk):
     store = FakeStore(existing={"ALPACA_API_KEY"})
     w = happy_world(mk, store=store)
-    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "keep", True, "true", "continue", "lib:skill-a", "done", "do"]
+    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "keep", True, "true", "lib:skill-a", "done", "do"]
     receipt, io = w.run(answers)
     assert w.factory_dirs and all(d == w.hermes.profile_dir("trader") for d in w.factory_dirs)
     assert "ALPACA_API_KEY" not in w.writes[0].values            # kept: not overwritten
@@ -931,7 +930,7 @@ def test_existing_name_in_the_profile_env_asks_keep_or_replace(mk):
 def test_existing_name_replace_goes_on_to_get_a_value(mk):
     store = FakeStore(existing={"ALPACA_API_KEY"})
     w = happy_world(mk, store=store)
-    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "replace", True, True, "true", "continue", "lib:skill-a",
+    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "replace", True, True, "true", "lib:skill-a",
                "done", "do"]
     w.run(answers)
     assert w.writes[0].values["ALPACA_API_KEY"] == KEY1
@@ -1080,7 +1079,7 @@ def test_write_error_then_review_allows_another_try(mk):
 def test_no_secret_in_state_file_or_say_output(mk):
     w = mk(environ={**ALPACA_ENV, "OPENROUTER_API_KEY": K4}, findings=[*OLLAMA, *ALPACA_FINDINGS])
     states: list[str] = []
-    answers = [*TOP, "paste-openrouter", PASTED, "continue", "pick:alpaca", "continue", True, True, "true", "continue",
+    answers = [*TOP, "paste-openrouter", PASTED, "continue", "pick:alpaca", "continue", True, True, "true",
                "lib:skill-keyed", "done", "add", "paste", K5, "do"]
     receipt, io = w.run(answers, on_prompt=lambda io_: states.append(w.state_text()))
     assert receipt is not None

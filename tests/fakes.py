@@ -236,3 +236,31 @@ def sweep_tree(root, secrets, *, allow=()) -> None:
     for p in Path(root).rglob("*"):
         if p.is_file() and p not in allowed:
             assert_no_leak(p.read_bytes().decode("utf-8", errors="replace"), *secrets)
+
+
+import json as _json  # noqa: E402
+import re as _re  # noqa: E402
+
+_CONSUMER_KEY = r"(?:ai|broker:[a-z0-9_-]+/[a-z0-9_-]+|lib:[a-z0-9-]+):[A-Z_][A-Z0-9_]*"
+_STATE_KEYS = {
+    "profile_name": r"[a-z][a-z0-9_-]{0,31}", "scan.apps": r"yes|no", "ai.kind": r"[a-z-]+",
+    "ai.ref": r"https?://[A-Za-z0-9.:/_\[\]-]+|[A-Za-z0-9._+-]*", "ai.key_env": r"[A-Z_][A-Z0-9_]*|",
+    "ai.private": r"[01]", "ai.verify": r"[a-z-]+", "broker.slug": r"[a-z0-9_-]+", "broker.route": r"[a-z0-9_-]*",
+    "broker.fp": r"[0-9a-f]{16}", "broker.verify": r"[a-z]+", "skills": r"[a-z0-9,-]*", "skills.done": r"1",
+}
+
+
+def assert_state_is_clean(text: str) -> None:
+    """The saved state holds only known decision keys, with values of a non-secret shape (so a hash, a prefix
+    or any other trace of a secret under any key, known or new, is caught)."""
+    if not text:
+        return
+    doc = _json.loads(text)
+    assert set(doc) == {"current", "decisions"}
+    for key, value in doc["decisions"].items():
+        if key in _STATE_KEYS:
+            assert _re.fullmatch(_STATE_KEYS[key], value), f"state value for {key} has an unexpected shape"
+        elif key.startswith("declined:"):
+            assert value == "1" and _re.fullmatch(r"declined:[A-Za-z0-9_.:-]+", key)
+        else:
+            assert _re.fullmatch(_CONSUMER_KEY, key) and value in ("skip", "keep-existing"), f"unknown state key {key[:20]}"

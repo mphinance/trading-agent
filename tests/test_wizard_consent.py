@@ -7,6 +7,7 @@ import traceback
 import pytest
 
 from fakes import (
+    assert_state_is_clean,
     ALL_SECRETS, K1, K2, K3, K4, K5, FakeStore, ScriptedIO, ScriptExhausted, assert_no_leak, cli_finding,
     env_finding, finding, port_finding, sweep_tree,
 )
@@ -43,7 +44,7 @@ AI_THEN_BROKER = [*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "co
 
 
 def test_refusing_to_share_a_name_removes_the_broker_from_the_plan_entirely(mk):
-    w, io, plan, review = run_shared(mk, [*AI_THEN_BROKER, "refuse", "continue", "done", "do"])
+    w, io, plan, review = run_shared(mk, [*AI_THEN_BROKER, "refuse", "done", "do"])
     share = next(p for k, p, o in io.prompts if k == "choose" and "will be able to read" in p)
     assert "The Community Broker connection will be able to read the OPENROUTER_API_KEY you gave the OpenRouter AI connection" in share
     assert plan.broker is None                                            # not installed: no entry, no reference
@@ -53,14 +54,14 @@ def test_refusing_to_share_a_name_removes_the_broker_from_the_plan_entirely(mk):
 
 
 def test_granting_the_same_value_lists_every_reader_in_review(mk):
-    w, io, plan, review = run_shared(mk, [*AI_THEN_BROKER, "same", "continue", "done", "do"])
+    w, io, plan, review = run_shared(mk, [*AI_THEN_BROKER, "same", "done", "do"])
     assert plan.broker is not None and dict(w.writes[0].values) == {ORKEY: K1}
     assert f"{ORKEY}: the OpenRouter AI connection and the Community Broker connection" in review
     assert "(no key yet)" not in review
 
 
 def test_reverse_ai_skipped_then_broker_pastes_the_same_name_asks_the_ai_consumer(mk):
-    answers = [*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "continue", "done",
+    answers = [*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "done",
                "same", "do"]
     w, io, plan, review = run_shared(mk, answers, findings=[], environ={})
     assert any("OpenRouter AI connection will be able to read the OPENROUTER_API_KEY you gave the Community Broker" in p
@@ -72,7 +73,7 @@ def test_reverse_ai_skipped_then_broker_pastes_the_same_name_asks_the_ai_consume
 
 
 def test_reverse_refusal_leaves_the_ai_unconfigured_and_says_so(mk):
-    answers = [*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "continue", "done",
+    answers = [*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "done",
                "refuse", "do"]
     w, io, plan, review = run_shared(mk, answers, findings=[], environ={})
     assert plan.ai == AiChoice("none") and plan.broker is not None and dict(w.writes[0].values) == {ORKEY: K2}
@@ -97,7 +98,7 @@ def test_a_library_key_needs_its_own_grant_in_both_directions(mk):
 
 def test_custom_ai_consumer_is_named_by_its_host_with_no_grammar_slip(mk):
     answers = [*TOP, "custom", "https://llm.example.org/v1", ORKEY, K1, "continue", "pick:kraken", "continue", "refuse",
-               "continue", "done", "do"]
+               "done", "do"]
     w, io, plan, review = run_shared(mk, answers, findings=[], environ={})
     text = io.everything()
     assert "the AI service at llm.example.org" in text and "the an " not in text
@@ -106,7 +107,7 @@ def test_custom_ai_consumer_is_named_by_its_host_with_no_grammar_slip(mk):
 
 def test_reuse_prompt_names_the_consumer_in_plain_words(mk):
     w = mk(environ=ALPACA_ENV, findings=[*OLLAMA, *ALPACA_FINDINGS])
-    receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true", "continue", "done", "do"])
+    receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true", "done", "do"])
     for p in (p for k, p, _ in io.prompts if k == "confirm"):
         assert "so the Alpaca connection can use it" in p
 
@@ -177,7 +178,7 @@ def test_hostile_state_cannot_make_the_wizard_copy_an_unrelated_environment_valu
 
 def test_a_changed_route_on_resume_drops_its_value_decisions_and_asks_again(mk):
     w = mk(findings=OLLAMA)
-    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "skip", "skip", "", "continue", "done"]
+    answers = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "skip", "skip", "", "done"]
     with pytest.raises(ScriptExhausted):
         w.run(answers)                                    # skips are persisted
     assert any(k.startswith("broker:alpaca/local:") for k in json.loads(w.state_text())["decisions"])
@@ -193,12 +194,12 @@ def test_a_changed_route_on_resume_drops_its_value_decisions_and_asks_again(mk):
 
 def test_review_shows_where_a_key_will_go(mk):
     w = mk(environ=ALPACA_ENV, findings=[*OLLAMA, *ALPACA_FINDINGS])
-    receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true", "continue", "done", "do"])
+    receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, True, "true", "done", "do"])
     review = next(p for k, p, _ in io.prompts if "Here is exactly what I will do" in p)
     assert "runs uvx alpaca-mcp-server" in review
     w2 = mk(findings=OLLAMA)
     w2.state_path().unlink()
-    receipt, io2 = w2.run([*TOP, *AI_OLLAMA, "pick:tradier", "continue", "true", "skip", "continue", "done", "do"])
+    receipt, io2 = w2.run([*TOP, *AI_OLLAMA, "pick:tradier", "continue", "true", "skip", "done", "do"])
     assert "connects to mcp.tradier.com/mcp" in next(p for k, p, _ in io2.prompts if "exactly what I will do" in p)
 
 
@@ -242,12 +243,13 @@ def test_custom_address_rules_and_no_crash_on_a_long_or_bidi_address(mk):
 
 
 def test_back_on_every_ask_prompt(mk):
-    # custom address
+    # custom address: back to the AI menu, nothing stored
     w = mk()
-    seen, hook = w.trace()
+    io0 = ScriptedIO([*TOP, "custom", "<"])
     with pytest.raises(ScriptExhausted):
-        w.run([*TOP, "custom", "<"], on_prompt=hook)
-    assert seen[-1] is State.AI_ROUTE
+        run_wizard(io0, w.deps)
+    assert "brain" in io0.prompts[-1][1] and io0.kinds()[-1] == "choose"
+    assert not [k for k in json.loads(w.state_text())["decisions"] if k.startswith("ai.")]
     # custom key name: back to the AI menu, nothing recorded
     w2 = mk()
     w2.state_path().unlink()
@@ -380,7 +382,7 @@ def test_add_then_back_then_skip_does_not_write_the_key(mk):
 
 def test_broker_verify_does_not_promise_a_test_that_will_not_run(mk):
     w = mk(findings=OLLAMA)
-    receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "skip", "skip", "", "continue", "done", "do"])
+    receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:alpaca", "continue", "skip", "skip", "", "done", "do"])
     text = io.everything()
     assert "I will test the connection after setup" not in text and "not built yet" in text
 
@@ -425,7 +427,7 @@ class Boom(ScriptedIO):
         return super()._next(kind, prompt, options)
 
 
-HAPPY_SECRETS = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, False, "paste", K3, "true", "continue", "lib:skill-keyed",
+HAPPY_SECRETS = [*TOP, *AI_OLLAMA, "pick:alpaca", "continue", True, False, "paste", K3, "true", "lib:skill-keyed",
                  "done", "add", "paste", K5, "do"]
 
 
@@ -446,3 +448,68 @@ def test_interrupt_at_every_prompt_leaks_nothing(mk, exc):
         with pytest.raises((ScriptExhausted, KeyboardInterrupt, EOFError)):
             run_wizard(io2, w.deps)
         assert_no_leak(io2.everything(), K1, K2, K3, K5)
+
+
+# ------------------------------------------------------------------ M-5, M-6, M-7, M-8
+
+def test_state_file_holds_only_known_keys_with_non_secret_shapes_at_every_prompt(mk):
+    w = mk(environ=ALPACA_ENV, findings=[*OLLAMA, *ALPACA_FINDINGS])
+    answers = [*TOP, "paste-openrouter", K3, "continue", "pick:alpaca", "continue", True, False, "paste", K4, "true",
+               "lib:skill-keyed", "done", "add", "paste", K5, "do"]
+    receipt, io = w.run(answers, on_prompt=lambda io_: assert_state_is_clean(w.state_text()))
+    assert receipt is not None
+    assert_state_is_clean(w.state_text())
+
+
+def test_a_rejected_paste_is_never_echoed_in_any_part(mk):
+    rejected = K1[:10] + "${x}" + K1[10:]
+    w = mk()
+    receipt, io = w.run([*TOP, "paste-openrouter", rejected, K3, "continue", "none", "done", "do"])
+    assert screens.BAD_VALUE in io.said
+    assert_no_leak(io.everything() + w.state_text(), rejected)
+    assert w.writes[0].values == {ORKEY: K3}
+
+
+RAW_TOKENS = ("local-command", "remote-url", "client-prompt-only", "none-documented", "draft-then-execute")
+
+
+def test_route_labels_and_orders_are_in_plain_words_never_raw_catalog_tokens(mk):
+    raw = {"submit": {"can_submit_order": "yes", "confirmation": "client-prompt-only"},
+           "read_only": {"available": True, "how": "a flag"}}
+    two = entry("etoro", "Two", [dict(LOCAL_ROUTE, route_id="a", **raw),
+                                 dict(LOCAL_ROUTE, route_id="b", submit={"can_submit_order": "yes",
+                                                                         "confirmation": "none-documented"})])
+    w = mk(findings=OLLAMA, catalog=[two])
+    receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:etoro", "route:a", "continue", "skip", "skip", "", "done", "do"])
+    text = io.everything()
+    for tok in RAW_TOKENS:
+        assert tok not in text, tok
+    assert "only a prompt in your AI app" in text and "runs a program on this computer" in text
+
+
+def test_the_header_mapping_is_explained_once_in_plain_words(mk):
+    import json as _j
+    from pathlib import Path
+    real = _j.loads((Path(__file__).parents[1] / "catalog" / "overlay.json").read_text())["tradier"]["routes"]
+    w = mk(findings=OLLAMA, catalog=[entry("tradier", "Tradier", real)])
+    receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:tradier", "continue", "true", "skip", "done", "do"])
+    said = "\n".join(io.said)
+    assert "The Tradier page calls this PAPER_TRADING; in this profile it is stored as TRADIER_PAPER_TRADING." in said
+    assert "The Tradier page calls this API_KEY; in this profile it is stored as TRADIER_API_KEY." in said
+
+
+def test_not_installable_copy_does_not_over_promise_or_show_a_repo_path(mk):
+    w = mk(findings=OLLAMA)
+    io = ScriptedIO([*TOP, *AI_OLLAMA, "pick:kraken"])
+    with pytest.raises(ScriptExhausted):
+        run_wizard(io, w.deps)
+    assert "not installable here yet, I will point you to its page" in dict(io.prompts[-1][2])["pick:kraken"]
+    assert "set you up" not in io.everything() and "I will show the steps" not in io.everything()
+    nourl = entry("nourl", "No Url", [], selectable=False)
+    nourl["source_url"] = ""
+    w2 = mk(findings=OLLAMA, catalog=[nourl])
+    w2.state_path().unlink()
+    io2 = ScriptedIO([*TOP, *AI_OLLAMA, "all", "pick:nourl", "none"])
+    with pytest.raises(ScriptExhausted):
+        run_wizard(io2, w2.deps)
+    assert "see the broker's own page" in "\n".join(io2.said) and "brokers/nourl.md" not in "\n".join(io2.said)

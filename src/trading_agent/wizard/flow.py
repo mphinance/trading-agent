@@ -779,9 +779,10 @@ class _Wizard(ValueMixin):
             return None
         routes = installable_routes(entry)
         if not routes:
+            url = entry.get("source_url")
             self.say(S.NOT_INSTALLABLE.format(
                 name=entry.get("name", slug), banner=(entry.get("wizard") or {}).get("banner") or S.BANNER,
-                page=entry.get("page_path") or "the catalog page", url=entry.get("source_url") or "no address listed"))
+                where=f"see {url}" if url else "see the broker's own page"))
             return None
         route = routes[0]
         if len(routes) > 1:
@@ -815,6 +816,9 @@ class _Wizard(ValueMixin):
             lines.append(f"Read-only option, per the broker page: {route['read_only'].get('how', 'available')}")
         if (route.get("auth") or {}).get("key_scope_advice"):
             lines.append(f"Tip from the page: {route['auth']['key_scope_advice']}")
+        auth = route.get("auth") or {}
+        lines += [S.HEADER_MAP.format(broker=entry.get("name", entry["slug"]), header=h, var=v)
+                  for h, v in (auth.get("header_env") or {}).items() if h in (auth.get("headers") or []) and h != v]
         lines.append(S.UNSET_SENTENCE if route_names(route) else S.OAUTH_ONLY)
         self.say("\n".join(lines))
 
@@ -843,12 +847,11 @@ class _Wizard(ValueMixin):
     # ---- BROKER_VERIFY
 
     def _st_broker_verify(self) -> State:
+        """No verifier exists yet, so this only says so (no screen to click through) and moves on."""
         status = S.NEEDS_INTERNET if not self.d.online else S.NOT_TESTED
         self.decide("broker.verify", "offline" if not self.d.online else "pending")
         self.say(S.BROKER_VERIFY_LATER.format(name=self._broker_name() or "the broker", status=status))
-        a = self.io.choose(S.BROKER_VERIFY_PROMPT.format(name=self._broker_name() or "the broker"),
-                           [Option("continue", "Continue"), Option("back", "Back")])
-        return State.BROKER_INSTALL if a == "back" else State.SKILLS
+        return State.SKILLS
 
     # ---- SKILLS (R27)
 
@@ -865,7 +868,7 @@ class _Wizard(ValueMixin):
                                    f"{lib.kind} library.{keys}"))
             a = self.io.choose(S.SKILLS_PROMPT, [*opts, Option("done", "Done"), Option("back", "Back")])
             if a == "back":
-                return State.BROKER_VERIFY if self._route() else State.BROKER_PICK
+                return State.BROKER_INSTALL if self._route() else State.BROKER_PICK
             if a == "done":
                 self.decide("skills.done", "1")
                 return State.DATA_KEYS
@@ -1005,7 +1008,7 @@ class _Wizard(ValueMixin):
 
     def _verify_lines(self) -> list[str]:
         lines: list[str] = []
-        if self.dec("ai.kind", "none") not in ("none", "cli"):
+        if self._plan_ai().kind not in ("none", "cli"):
             if not self.d.online:
                 lines.append(f"AI check: {S.NEEDS_INTERNET}.")
             else:
@@ -1041,7 +1044,7 @@ class _Wizard(ValueMixin):
         written = set(self.receipt.env_names_written) if self.receipt else set()
         out += [S.LATER_NAME.format(name=s.name, who=c.who) for c, specs in self._consumers() for s in specs
                 if self.dec(self._dk(c.key, s.name)) == "skip" and s.name not in written]
-        out += [S.LATER_LEFT_OUT.format(label=cap(label), name=name) for label, name in self.left_out.values()]
+        out += [S.LATER_LEFT_OUT.format(label=label, name=name) for label, name in self.left_out.values()]
         return out
 
     def _st_done(self) -> None:

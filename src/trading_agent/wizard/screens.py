@@ -153,14 +153,15 @@ SEARCH_NONE = "Nothing matched."
 REGION_NOT_CURATED = "region not curated"
 TAG_COMMUNITY = "Made by a third party, not the broker"
 TAG_NO_DIRECT = "No direct AI connection"
-TAG_SELF_SETUP = "you set this one up yourself, I will show the steps"
+TAG_SELF_SETUP = "not installable here yet, I will point you to its page"
 REGION_NONE_CURATED = ("No broker has region codes yet, so every broker is shown under region not curated.")
 TAG_OFFICIAL = "Official"
 NOT_INSTALLABLE = ("{name}: {banner}.\n"
-                   "How to set this up yourself: see {page} ({url}).\n"
+                   "How to set this up yourself: {where}.\n"
                    "This setup cannot install it yet.")
 ROUTE_PROMPT = "{name} has more than one way to connect. Pick one."
 INSTALL_PROMPT = "Setting up {name}. Next I ask for each name this connection needs."
+HEADER_MAP = "The {broker} page calls this {header}; in this profile it is stored as {var}."
 UNSET_SENTENCE = ("If a name stays unset, the broker connection will not start until it is set. "
                   "You can set it later in the profile's private .env file.")
 OAUTH_ONLY = ("This route signs in on the broker's own site. Setup cannot do that sign-in for you, "

@@ -68,7 +68,7 @@ def test_e2e_local_broker_with_pasted_and_reused_keys(world):
     world.platform._e["ALPACA_API_KEY"] = S3          # found in the environment, copied only after a yes
     deps = deps_for(world, findings=[*OLLAMA, env_finding("ALPACA_API_KEY", "broker-key")])
     io = ScriptedIO([*TOP, "use:ai-local:ollama", "continue", "pick:alpaca", "continue", True, "paste", S2, "true",
-                     "continue", "lib:skill-a", "done", "do"])
+                     "lib:skill-a", "done", "do"])
     receipt = run_wizard(io, deps)
 
     assert isinstance(receipt, Receipt) and receipt.profile_name == "trader"
@@ -97,7 +97,7 @@ def test_e2e_local_broker_with_pasted_and_reused_keys(world):
 def test_e2e_remote_broker_from_the_real_overlay_names_the_broker_in_every_variable(world):
     deps = deps_for(world, findings=OLLAMA)
     io = ScriptedIO([*TOP, "use:ai-local:ollama", "continue", "pick:tradier", "continue", "true", "paste", S1,
-                     "continue", "done", "do"])
+                     "done", "do"])
     receipt = run_wizard(io, deps)
     assert receipt is not None
     cfg = yaml.safe_load((world.pdir() / "config.yaml").read_text())
@@ -238,7 +238,7 @@ REMOTE_SHARE = {"route_id": "hosted", "kind": "remote-url", "maintainer": "commu
 def test_e2e_refusing_to_share_installs_no_broker_and_writes_no_reference(world, route):
     world.platform._e[ORKEY] = K1
     deps = deps_for(world, findings=[env_finding(ORKEY)], catalog=[entry("kraken", "Third Party", [route])])
-    io = ScriptedIO([*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", "refuse", "continue", "done", "do"])
+    io = ScriptedIO([*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", "refuse", "done", "do"])
     assert run_wizard(io, deps) is not None
     cfg_text = (world.pdir() / "config.yaml").read_text()
     cfg = yaml.safe_load(cfg_text)
@@ -253,7 +253,7 @@ def test_e2e_refusing_to_share_installs_no_broker_and_writes_no_reference(world,
 def test_e2e_granting_the_same_value_writes_both_references(world):
     world.platform._e[ORKEY] = K1
     deps = deps_for(world, findings=[env_finding(ORKEY)], catalog=[entry("kraken", "Third Party", [LOCAL_SHARE])])
-    io = ScriptedIO([*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", "same", "continue", "done", "do"])
+    io = ScriptedIO([*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", "same", "done", "do"])
     assert run_wizard(io, deps) is not None
     cfg = yaml.safe_load((world.pdir() / "config.yaml").read_text())
     assert cfg["mcp_servers"]["kraken"]["env"] == {ORKEY: f"${{{ORKEY}}}"} and cfg["model"]["provider"] == "openrouter"
@@ -263,7 +263,7 @@ def test_e2e_granting_the_same_value_writes_both_references(world):
 
 def test_e2e_reverse_refusal_leaves_the_ai_unconfigured_and_the_broker_installed(world):
     deps = deps_for(world, catalog=[entry("kraken", "Third Party", [LOCAL_SHARE])])
-    io = ScriptedIO([*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "continue",
+    io = ScriptedIO([*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2,
                      "done", "refuse", "do"])
     assert run_wizard(io, deps) is not None
     cfg = yaml.safe_load((world.pdir() / "config.yaml").read_text())
@@ -277,7 +277,7 @@ def test_e2e_reverse_refusal_leaves_the_ai_unconfigured_and_the_broker_installed
 
 def test_e2e_reverse_grant_gives_the_ai_the_value_and_says_so(world):
     deps = deps_for(world, catalog=[entry("kraken", "Third Party", [LOCAL_SHARE])])
-    io = ScriptedIO([*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2, "continue",
+    io = ScriptedIO([*TOP, "paste-openrouter", "", "continue", "pick:kraken", "continue", "paste", K2,
                      "done", "same", "do"])
     assert run_wizard(io, deps) is not None
     cfg = yaml.safe_load((world.pdir() / "config.yaml").read_text())
