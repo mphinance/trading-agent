@@ -1,0 +1,103 @@
+{
+  "alpaca": {
+    "routes": [
+      {
+        "route_id": "local",
+        "kind": "local-command",
+        "maintainer": "official",
+        "install": {
+          "method": "uvx",
+          "command_text": "uvx alpaca-mcp-server",
+          "needs": [
+            "python>=3.10",
+            "uv"
+          ]
+        },
+        "auth": {
+          "type": "api-key-plus-secret",
+          "env_vars": [
+            {
+              "name": "ALPACA_API_KEY",
+              "role": "key-id",
+              "required": true,
+              "secret": true
+            },
+            {
+              "name": "ALPACA_SECRET_KEY",
+              "role": "secret",
+              "required": true,
+              "secret": true
+            },
+            {
+              "name": "ALPACA_PAPER_TRADE",
+              "role": "mode-switch",
+              "required": false,
+              "secret": false
+            }
+          ]
+        },
+        "paper": {
+          "supported": "yes",
+          "default": "paper",
+          "how_to_enable": "ALPACA_PAPER_TRADE (default true on the local server)",
+          "enforced_by": "env-or-flag"
+        },
+        "read_only": {
+          "available": true,
+          "how": "ALPACA_TOOLSETS restricts which tool groups are exposed"
+        },
+        "submit": {
+          "can_submit_order": "yes",
+          "confirmation": "client-prompt-only",
+          "confirmation_is_agent_callable": false
+        }
+      },
+      {
+        "route_id": "hosted-paper",
+        "kind": "remote-url",
+        "maintainer": "official",
+        "url": "https://paper-api.alpaca.markets/mcp",
+        "auth": {
+          "type": "oauth-browser",
+          "env_vars": []
+        },
+        "paper": {
+          "supported": "yes",
+          "default": "separate-endpoint",
+          "how_to_enable": "connect the paper URL, not the live one",
+          "enforced_by": "server"
+        }
+      }
+    ]
+  },
+  "tradier": {
+    "routes": [
+      {
+        "route_id": "hosted",
+        "kind": "remote-url",
+        "maintainer": "official",
+        "url": "https://mcp.tradier.com/mcp",
+        "auth": {
+          "type": "bearer-token",
+          "env_vars": [],
+          "headers": [
+            "API_KEY",
+            "PAPER_TRADING"
+          ],
+          "key_scope_advice": "Use a paper token with PAPER_TRADING true first."
+        },
+        "paper": {
+          "supported": "yes",
+          "default": "unconfirmed",
+          "how_to_enable": "set the PAPER_TRADING header to true with a paper token",
+          "enforced_by": "env-or-flag"
+        },
+        "submit": {
+          "can_submit_order": "yes",
+          "confirmation": "none-documented",
+          "confirmation_is_agent_callable": false
+        }
+      }
+    ]
+  }
+}

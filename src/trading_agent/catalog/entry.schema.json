@@ -1,0 +1,482 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "broker-catalog-entry.json",
+  "title": "Broker catalog entry",
+  "type": "object",
+  "required": [
+    "slug",
+    "name",
+    "directory",
+    "status",
+    "trading",
+    "server_type_raw",
+    "route_kinds",
+    "page_path",
+    "source"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "directory": {
+      "enum": [
+        "brokers",
+        "aggregators",
+        "readme-only"
+      ]
+    },
+    "page_path": {
+      "type": "string",
+      "description": "relative path in the catalog repo, empty for readme-only stubs"
+    },
+    "source": {
+      "enum": [
+        "front-matter",
+        "readme-only"
+      ]
+    },
+    "region_raw": {
+      "type": "string"
+    },
+    "region_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Curated overlay. Short codes or the word GLOBAL. Empty means not curated yet; the wizard must show region_raw and not filter on it. Eligibility is never inferred."
+    },
+    "region_notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Curated, e.g. exclusions stated on the page."
+    },
+    "status": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "official",
+          "community",
+          "aggregator-only",
+          "none"
+        ]
+      },
+      "description": "Raw status split on '+'. 'official + community' becomes two items."
+    },
+    "trading": {
+      "enum": [
+        "true",
+        "false",
+        "draft-only"
+      ],
+      "description": "Kept as the catalog's string values."
+    },
+    "server_type_raw": {
+      "type": "string"
+    },
+    "route_kinds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "remote",
+          "local",
+          "skills-only",
+          "none",
+          "unknown"
+        ]
+      },
+      "description": "Normalized from server_type_raw by keyword (remote, local, n/a, unknown). Curated overlay may add skills-only."
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "last_verified": {
+      "type": "string",
+      "format": "date"
+    },
+    "routes": {
+      "type": "array",
+      "description": "Curated overlay. One item per selectable route, because several brokers have separate hosted and local servers with different power.",
+      "items": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "kind",
+          "maintainer"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "route_id": {
+            "type": "string",
+            "description": "e.g. 'hosted-live', 'hosted-paper', 'local'"
+          },
+          "kind": {
+            "enum": [
+              "remote-url",
+              "local-command",
+              "local-gateway-required",
+              "skills-only",
+              "aggregator",
+              "none"
+            ]
+          },
+          "maintainer": {
+            "enum": [
+              "official",
+              "community",
+              "vendor"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hosted endpoint, only if printed on the broker page"
+          },
+          "install": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "method": {
+                "enum": [
+                  "uvx",
+                  "npx",
+                  "docker",
+                  "installer-script",
+                  "git-clone-build",
+                  "cli-plugin",
+                  "manual",
+                  "unknown"
+                ]
+              },
+              "command_text": {
+                "type": "string",
+                "description": "Exact command from the broker page. Shown to the user; shown to the user as the page prints it. Never templated with secrets."
+              },
+              "needs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "e.g. python>=3.10, node>=22, uv, docker. Checked by the wizard before install."
+              }
+            }
+          },
+          "gateway": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Set only when the page documents a desktop or gateway process the route depends on.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "detect_hint": {
+                "type": "string"
+              }
+            }
+          },
+          "auth": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "enum": [
+                  "oauth-browser",
+                  "api-key",
+                  "api-key-plus-secret",
+                  "oauth-client-env",
+                  "login-cli",
+                  "bearer-token",
+                  "none",
+                  "b2b-credentials",
+                  "unknown"
+                ]
+              },
+              "env_vars": {
+                "type": "array",
+                "description": "NAMES only. Values are supplied by the user and stored in the OS keyring or the profile .env. The wizard checks presence by name and never prints a value.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "role"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]*$"
+                    },
+                    "role": {
+                      "enum": [
+                        "key-id",
+                        "secret",
+                        "passphrase",
+                        "token",
+                        "client-id",
+                        "client-secret",
+                        "refresh-token",
+                        "mode-switch",
+                        "other"
+                      ]
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "secret": {
+                      "type": "boolean",
+                      "description": "true means keyring or .env storage and zero echo."
+                    }
+                  }
+                }
+              },
+              "headers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Header names a hosted route expects, names only."
+              },
+              "key_scope_advice": {
+                "type": "string",
+                "description": "e.g. create a trading-disabled or no-withdrawal key where the broker offers one. One line, curated."
+              }
+            }
+          },
+          "paper": {
+            "description": "Information from the page, not a wizard setting.",
+            "type": "object",
+            "required": [
+              "supported",
+              "default"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "supported": {
+                "enum": [
+                  "yes",
+                  "no",
+                  "demo-only",
+                  "unconfirmed"
+                ]
+              },
+              "default": {
+                "enum": [
+                  "paper",
+                  "live",
+                  "per-call",
+                  "separate-endpoint",
+                  "unconfirmed"
+                ],
+                "description": "What the server does with no setting. 'per-call' means the mode is a tool parameter, so only a prompt restricts live."
+              },
+              "how_to_enable": {
+                "type": "string",
+                "description": "Flag, env var or URL from the page, e.g. a --paper-trading flag, an env var, a separate paper URL."
+              },
+              "enforced_by": {
+                "enum": [
+                  "server",
+                  "env-or-flag",
+                  "prompt-only",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "read_only": {
+            "type": "object",
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "how": {
+                "type": "string",
+                "description": "Flag, env var, or scope that removes write tools server-side."
+              }
+            }
+          },
+          "submit": {
+            "type": "object",
+            "required": [
+              "can_submit_order",
+              "confirmation"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "can_submit_order": {
+                "enum": [
+                  "yes",
+                  "no",
+                  "queues-for-in-app-confirm",
+                  "unconfirmed"
+                ]
+              },
+              "confirmation": {
+                "enum": [
+                  "none-documented",
+                  "draft-then-execute",
+                  "preview-token",
+                  "dry-run-then-confirm",
+                  "typed-confirm",
+                  "in-broker-ui",
+                  "client-prompt-only",
+                  "unconfirmed"
+                ]
+              },
+              "confirmation_is_agent_callable": {
+                "type": "boolean",
+                "description": "Informational: true when the page describes the confirm step as another tool call the model makes, not a human action."
+              }
+            }
+          },
+          "risk_flags": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "community-code",
+                "single-maintainer",
+                "private-api",
+                "browser-automation",
+                "unpinned-remote-code",
+                "no-license",
+                "pre-1.0",
+                "upstream-deleted",
+                "endpoint-unverified",
+                "region-limited",
+                "b2b-only",
+                "paid-tier-required",
+                "dedicated-account-advised"
+              ]
+            }
+          }
+        }
+      },
+      "default": []
+    },
+    "wizard": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "selectable": {
+          "type": "boolean",
+          "description": "false only for entries with no MCP route (status none, skills-only, B2B, upstream deleted); they are still searchable and listed with the reason."
+        },
+        "not_selectable_reason": {
+          "type": "string"
+        },
+        "first_screen_rank": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Ordering only. Null means not on the first screen. Never a filter."
+        },
+        "region_boost": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Region codes where this entry is promoted."
+        },
+        "summary_line": {
+          "type": "string",
+          "description": "One sentence, curated, stating the safety posture. Not copied page prose."
+        },
+        "paper_first_pick": {
+          "type": "boolean"
+        },
+        "banner": {
+          "type": "string",
+          "description": "Shown on the card when the entry has no curated overlay yet."
+        }
+      },
+      "required": [
+        "selectable"
+      ]
+    },
+    "sync": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "catalog_commit": {
+          "type": "string",
+          "description": "Commit of the catalog repo this entry was generated from."
+        },
+        "freshness_state": {
+          "enum": [
+            "fresh",
+            "aging",
+            "stale",
+            "never-verified",
+            "future-dated"
+          ],
+          "description": "Computed with the same thresholds as check-freshness.mjs."
+        },
+        "upstream_flags": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "CHANGED",
+              "NEW",
+              "GONE",
+              "DEAD",
+              "BLIND"
+            ]
+          },
+          "description": "Latest result per slug from check-upstream.mjs."
+        },
+        "overlay_reviewed_on": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date",
+          "description": "When a human last reviewed the curated overlay for this slug."
+        }
+      }
+    },
+    "overlay_reviewed_on": {
+      "type": "string",
+      "format": "date",
+      "description": "When a human last reviewed the curated overlay for this slug."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "front-matter"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "then": {
+        "required": [
+          "last_verified",
+          "source_url"
+        ]
+      }
+    }
+  ]
+}
