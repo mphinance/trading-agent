@@ -186,6 +186,17 @@ def test_a_different_value_can_be_entered_and_the_other_consumer_is_asked_about_
     assert_no_leak(io.everything() + w.state_text(), K1, K2)
 
 
+def test_an_empty_paste_after_different_keeps_the_first_consumers_value(mk):
+    w = mk(findings=[OR_FINDING], environ={ORKEY: K1}, catalog=SHARED_CATALOG)
+    answers = [*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", "different", "", "done", "do"]
+    receipt, io = w.run(answers)
+    plan = w.writes[0].plan
+    assert dict(w.writes[0].values) == {ORKEY: K1}                         # the AI consumer still has its key
+    assert plan.ai == AiChoice("openrouter") and plan.broker is None       # nothing granted to the broker without a value
+    assert "left out" in "\n".join(io.said).lower()
+    assert_no_leak(io.everything() + w.state_text(), K1)
+
+
 # ------------------------------------------------------------------ M-c: switching the AI, and the final plan
 
 def test_switching_the_ai_address_asks_for_the_key_again(mk):

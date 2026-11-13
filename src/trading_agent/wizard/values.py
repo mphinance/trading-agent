@@ -148,8 +148,11 @@ class ValueMixin:
             self._grant(c, name, "same")
             return True
         if a == "different":
-            self._drop_name(name)       # one value per name: the others must be asked about the new one
-            return self._paste(c, name) if secret else (self._plain(c, name) or True)
+            # one value per name: once a new one is in, the others must be asked about it. The old value is only
+            # dropped AFTER a non-empty value arrives; an empty entry leaves it with its holders and leaves C out.
+            if secret:
+                return self._paste(c, name, replacing=True)
+            return self._plain(c, name, replacing=True)
         self.refuse(c, name)
         return False
 
@@ -203,37 +206,49 @@ class ValueMixin:
                     self._ask_share(c, name, spec.secret)
         return asked
 
-    def _paste(self, c: Consumer, name: str) -> bool:
-        """Ask for a secret with no echo. True if a value was stored; empty input skips."""
+    def _paste(self, c: Consumer, name: str, *, replacing: bool = False) -> bool:
+        """Ask for a secret with no echo. True if a value was stored; empty input skips.
+        ``replacing``: NAME already has a value for others; empty input refuses C and changes nothing else."""
         while True:
             v = self.io.secret(S.PASTE_PROMPT.format(who=c.who, name=name))
             if v == "":
-                self._mark(c, name, "skip")
+                if replacing:
+                    self.refuse(c, name)
+                else:
+                    self._mark(c, name, "skip")
                 return False
             try:
                 check_secret(name, v)
             except ValueError:
                 self.say(S.BAD_VALUE)
                 continue
+            if replacing:
+                self._drop_name(name)
             self._values[name] = v
             self._grant(c, name, "paste")
             return True
 
-    def _plain(self, c: Consumer, name: str) -> None:
-        """A mode switch, typed in plain, from a short allowlist. ``<`` goes back."""
+    def _plain(self, c: Consumer, name: str, *, replacing: bool = False) -> bool:
+        """A mode switch, typed in plain, from a short allowlist. ``<`` goes back. True if C ends up with a value
+        (``replacing`` as in _paste: empty input refuses C and leaves the existing value alone)."""
         while True:
             v = self.io.ask(S.PLAIN_PROMPT.format(who=c.who, name=name)).strip()
             if v == BACK_INPUT:
                 raise BackSignal
             if v == "":
-                self._mark(c, name, "skip")
-                return
+                if replacing:
+                    self.refuse(c, name)
+                else:
+                    self._mark(c, name, "skip")
+                return False
             if v.lower() not in MODE_VALUES:
                 self.say(S.MODE_NOT_OK)
                 continue
+            if replacing:
+                self._drop_name(name)
             self._values[name] = v.lower()
             self._grant(c, name, "plain")
-            return
+            return True
 
     def _live_finding(self, c: Consumer, name: str) -> Finding | None:
         for f in self.findings():
