@@ -129,6 +129,7 @@ def test_undo_says_plainly_that_it_deletes_the_whole_profile(world, monkeypatch,
             "and the trader command Hermes added") in out
     assert "ALPACA_API_KEY, ALPACA_SECRET_KEY" in out and "Remove it? [y/N]" in out
     assert "Nothing outside that profile" not in out and "that setup created" not in out
+    assert "Nothing else is touched apart from the setup receipt." in out   # undo also removes the receipt, which lives outside
 
 
 @pytest.mark.parametrize("answer", [[""], ["n"], ["no"]])

@@ -35,7 +35,7 @@ BAD_RECEIPT = "The setup receipt for {name} could not be read, so I removed noth
 WHICH = "More than one setup receipt exists. Which profile should I undo?"
 UNDO_PLAN = ("This deletes the whole profile {name}: its memories, chats, skills and every key in its .env, "
              "and the {name} command Hermes added, if any.{env}\n"
-             "Nothing else is touched.")
+             "Nothing else is touched apart from the setup receipt.")
 UNDO_ENV = " The keys setup put in that .env: {names}."
 UNDO_CONFIRM = "Remove it?"
 UNDO_NO = "Nothing was removed."
