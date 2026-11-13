@@ -263,7 +263,7 @@ def test_the_style_guide_example_diagram_is_valid_mermaid_too():
 # ------------------------------------------------------------------------------------------ template
 
 def template_pages() -> list[Path]:
-    return [p for p in MD if DOCS in p.parents and "spike" not in p.relative_to(DOCS).parts] + [ROOT / "README.md"]
+    return [p for p in MD if DOCS in p.parents and "spike" not in p.relative_to(DOCS).parts] + [ROOT / "README.md", ROOT / "THIRD_PARTY.md"]
 
 
 @pytest.mark.parametrize("path", template_pages(), ids=[str(p.relative_to(ROOT)) for p in template_pages()])

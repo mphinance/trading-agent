@@ -110,17 +110,15 @@ flowchart LR
     F --> G["Review, then write"]
 ```
 
-Read the boxes left to right; nothing is written to disk before the last box, and only after you confirm it.
+Read the boxes left to right; nothing is written to disk before the last box, and only after you confirm it. The list below says what each box does.
 
-| Screen | What it does |
-|---|---|
-| Check Hermes | Finds `hermes`, reads its version, checks it against `>=0.23.0`. If missing or too old, it prints the install or update hint and offers "Check again". |
-| Scan | Looks for AI tools, saved key names, other apps' MCP settings and local model ports. Reports presence by name only, never a value. Nothing is used yet. |
-| AI for the brain | Choose none, OpenRouter, a custom OpenAI-compatible service (Venice included), Ollama, or LM Studio. A signed-in AI CLI that the scan found cannot power the agent in this version; the wizard says so and leaves that sign-in untouched. A "keep it private" choice shows only a local model or Venice. |
-| Broker | Pick a broker MCP or "No broker, research only". The ten curated names are listed first, the full catalog is searchable. Only Alpaca and Tradier can be installed here; other entries show "setup details not curated yet" and where to set them up yourself. |
-| Skill libraries | Pick any or none. In this version the choice is recorded by name; nothing is downloaded. |
-| Data keys | Optional keys that your picks mention. Skip is fine. |
-| Review | A plain list of exactly what will happen: create the profile, write these key names into the private `.env`, record these picks, change nothing in any other app or profile. Your answer defaults to No. |
+- **Check Hermes.** Finds `hermes`, reads its version, checks it against `>=0.23.0`. If missing or too old, it prints the install or update hint and offers "Check again".
+- **Scan.** Looks for AI tools, saved key names, other apps' MCP settings and local model ports. Reports presence by name only, never a value. Nothing is used yet.
+- **AI for the brain.** Choose none, OpenRouter, a custom OpenAI-compatible service (Venice included), Ollama, or LM Studio. A signed-in AI CLI that the scan found cannot power the agent in this version; the wizard says so and leaves that sign-in untouched. A "keep it private" choice shows only a local model or Venice.
+- **Broker.** Pick a broker MCP or "No broker, research only". The ten curated names are listed first, the full catalog is searchable. Only Alpaca and Tradier can be installed here; other entries show "setup details not curated yet" and where to set them up yourself.
+- **Skill libraries.** Pick any or none. In this version the choice is recorded by name; nothing is downloaded.
+- **Data keys.** Optional keys that your picks mention. Skip is fine.
+- **Review.** A plain list of exactly what will happen: create the profile, write these key names into the private `.env`, record these picks, change nothing in any other app or profile. Your answer defaults to No.
 
 Keys: when the wizard needs a key it asks for it with a hidden prompt, or offers to copy one it found by name in your environment, one use at a time, and only if you say yes. See [KEYS](KEYS.md).
 

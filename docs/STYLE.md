@@ -5,7 +5,15 @@
 
 **Goal:** a page a stranger can skim in 30 seconds and trust in 5 minutes. Beautiful on GitHub, readable in a terminal, honest about what is and is not built.
 
-## In this guide
+## At a glance
+
+- Every page: title, status callout, bold one-sentence purpose, body, Related docs.
+- Over 100 lines: add At a glance. Over 150 lines: add `## In this doc`.
+- Callouts sparingly; Mermaid for flows; every code block names a language.
+- No em or en dashes, no private paths, hosts or keys, no filler.
+- Each page gets six review passes, one lens each.
+
+## In this doc
 
 - [Page template](#page-template)
 - [Callouts](#callouts)

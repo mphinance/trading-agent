@@ -1,8 +1,24 @@
 # Third-party libraries and attribution
 
-This project ships pointer entries only. Nothing below is vendored, copied or enabled by default. The user picks a library in the setup wizard, and it is installed from the library's own source under the library's own license. Source of all facts here: the design notes in SKILLS_AND_TOOLS.md. Anything marked UNVERIFIED has not been confirmed.
+> [!NOTE]
+> Status: pointer entries only; one lineage question is unresolved. Nothing below is vendored, copied or enabled by default.
 
+**What this project points at, under which license, and what still needs checking before anything is listed.**
+
+The user picks a library in the setup wizard, and it is installed from the library's own source under the library's own license. Source of all facts here: the design notes in SKILLS_AND_TOOLS.md. Anything marked UNVERIFIED has not been confirmed.
+
+> [!WARNING]
 > **alpha-skills lineage: unresolved.** alpha-skills is catalogued but not listed (`listed: false`) and is never offered in the wizard until the lineage below is checked.
+
+## At a glance
+
+| Entry | License | Offered in the wizard? |
+|---|---|---|
+| [alpha-skills](#alpha-skills-trading-subset) | MIT (lineage unresolved) | No, `listed: false` |
+| [broker-skill-docs](#broker-skill-docs) | CC0 for the catalog text; each broker's repo has its own | Yes, license shown before install |
+| [momentum-mcp](#momentum-mcp) | Apache-2.0 | Optional |
+| [awesome-broker-mcp](#awesome-broker-mcp-catalog-generator-input) | CC0 1.0 | Input to the catalog generator only |
+| [Hermes](#hermes-runtime-dependency) | MIT | Runtime dependency, installed separately |
 
 ## alpha-skills (trading subset)
 
@@ -39,3 +55,9 @@ The catalog generator reads the awesome-broker-mcp catalog, licensed CC0 1.0. Br
 ## Hermes (runtime dependency)
 
 Hermes agent, by Nous Research, is MIT licensed. It is a runtime dependency the user installs separately; it is not vendored here.
+
+## Related docs
+
+- [Publish checklist](docs/PUBLISH_CHECKLIST.md): the open items that close the lineage question.
+- [Docs index](docs/README.md): all pages.
+- [README](README.md): what the tool is and what it does not include.

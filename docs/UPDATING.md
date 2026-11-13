@@ -38,6 +38,8 @@ Two cases are different:
   Edit that one line to `source: <repo-url>` in a text editor, then run `hermes profile update <profile>`. Update re-records the source it used, so you do this once.
 - **A checkout.** Running from a working copy is not supported for setup (see [SETUP](SETUP.md#why-not-run-it-from-a-checkout)). If you installed from a clean clone anyway, the recorded source is that clone's folder; keep it where it is, or set the source to the repository address as above.
 
+A successful update prints:
+
 ```text
 ✓ Updated '<profile>' → v<version>
 ```

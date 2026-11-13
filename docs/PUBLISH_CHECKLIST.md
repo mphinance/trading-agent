@@ -8,7 +8,7 @@
 ## At a glance
 
 - 12 open items need a human decision (lineage, license, images, contact, name).
-- 4 checks are commands you run and read: local paths, dashes, secret shapes, tests.
+- 5 checks are run and read: local paths, dashes, secret shapes, tests, and a command check.
 - Nothing here is run by automation. Tick a box only after you looked.
 
 ## In this doc
@@ -19,6 +19,10 @@
 
 ## Open decisions
 
+Tick a box only after the maintainer decided it.
+
+### Licensing and attribution
+
 - [ ] **License confirmed by the maintainer.** MIT is provisional (`LICENSE`, `distribution.yaml`, `pyproject.toml`). Confirm or change in all three.
 - [ ] **alpha-skills lineage resolved.** `THIRD_PARTY.md` says the README credits "TraderMonty" and several skills name it directly; the upstream, its license and which skills are copies are unverified. Until resolved, alpha-skills stays `listed: false` and is never offered in the wizard.
 - [ ] **`THIRD_PARTY.md` complete.** Every library the wizard can point at has an entry with source, license and attribution; the lineage entry above is added.
@@ -26,8 +30,14 @@
 - [ ] **Image provenance checked.** About 3.3 MB of bundled images in the skills packs (for example in `sector-analyst` and `breadth-chart-analyst`) have no recorded origin. Nothing is shipped here, but any listed library that carries them needs an answer.
 - [ ] **Promo-text note.** Free-tier output from momentum-mcp may carry vendor promotional text (exact output unverified). Confirm what it prints, or keep the note in `THIRD_PARTY.md` and in the library's wizard entry.
 - [ ] **EDGAR client origin.** momentum-mcp's EDGAR client says it was ported from another repository; the origin license is unverified.
+
+### Repository and contact
+
 - [ ] **`SECURITY.md` contact channel.** Add a real reporting address or private advisory link; none is in the repository yet.
 - [ ] **Name and repository settings.** Confirm the project name, the repository address used in `<repo-url>` in the docs, description, topics, default branch, branch protection and issue settings.
+
+### Product scope
+
 - [ ] **More brokers curated.** Only Alpaca and Tradier are installable. Decide whether to curate more overlay entries before launch or ship as is.
 - [ ] **CLI-powered brain follow-up.** A found signed-in AI CLI cannot power the Hermes brain in this version. Decide whether to document it as a known limit or schedule the follow-up.
 - [ ] **Outside-user pass.** Someone who has not seen the project follows [SETUP](SETUP.md) on a clean machine and reports where it broke. Until then the README status line stays "not yet used by outside users".
