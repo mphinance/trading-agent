@@ -98,11 +98,27 @@ def main(argv: list[str]) -> int:
             print(f"Error: Profile '{name}' does not exist.")
             return 1
 
+        # Hermes 0.23 also redacts secret-looking text inside exported files (VERIFIED:
+        # "WEBHOOK_SECRET=your-webhook-secret-here" comes out as "WEBHOOK_SECRET=your-w...here").
+        import io
+        import re
+        redact = re.compile(rb"(SECRET=)(\S{6})\S+(\S{4})")
+
         def skip(info):
             rel = info.name.split("/", 1)[1] if "/" in info.name else ""
             return None if rel in (".env", "auth.json") else info
         with tarfile.open(out, "w:gz") as tar:
-            tar.add(target, arcname=name, filter=skip)
+            for p in [target, *sorted(target.rglob("*"))]:
+                arc = name if p == target else f"{name}/{p.relative_to(target).as_posix()}"
+                info = skip(tar.gettarinfo(str(p), arcname=arc))
+                if info is None:
+                    continue
+                if info.isreg():
+                    data = redact.sub(rb"\1\2...\3", p.read_bytes())
+                    info.size = len(data)
+                    tar.addfile(info, io.BytesIO(data))
+                else:
+                    tar.addfile(info)
         print(f"✓ Exported '{name}' to {out}")
         return 0
 

@@ -94,6 +94,7 @@ class ScriptedIO:
         self.prompts: list[tuple[str, str, list[tuple[str, str]]]] = []
         self.details: list[str] = []
         self.on_prompt = on_prompt
+        self.confirm_defaults: list = []
 
     def say(self, text: str) -> None:
         self.said.append(text)
@@ -113,7 +114,8 @@ class ScriptedIO:
         assert a in ids, f"scripted answer {a!r} not offered; offered {ids}; prompt {prompt[:80]!r}"
         return a
 
-    def confirm(self, prompt):
+    def confirm(self, prompt, default=None):
+        self.confirm_defaults.append(default)
         a = self._next("confirm", prompt)
         assert isinstance(a, bool), f"confirm needs a bool, got {a!r}; prompt {prompt[:80]!r}"
         return a
