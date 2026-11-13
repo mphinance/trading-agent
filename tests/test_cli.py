@@ -476,7 +476,9 @@ def test_catalog_build_unwritable_out_gives_one_error_line(tmp_path, capsys):
     ro.mkdir()
     ro.chmod(0o500)
     try:
-        for out in (tmp_path / "adir", ro / "o.json", tmp_path / "afile" / "o.json"):
+        # root writes into a 0500 folder anyway, so that one case only runs for an ordinary user
+        outs = [tmp_path / "adir", tmp_path / "afile" / "o.json"] + ([] if os.geteuid() == 0 else [ro / "o.json"])
+        for out in outs:
             (tmp_path / "afile").write_text("x")
             rc = cli.main(["catalog", "build", "--catalog-root", str(FIXTURE_CATALOG), "--out", str(out),
                            "--overlay", str(overlay)])
