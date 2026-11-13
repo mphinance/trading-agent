@@ -1,6 +1,6 @@
 """All wizard copy and fixed values, as constants. No logic here.
 
-Plain English, one line per option, the rebull provider-card tone. START, the PRECHECK rows, REVIEW
+Plain English, one line per option, the provider-card tone. START, the PRECHECK rows, REVIEW
 and DONE follow FIRST_RUN.md section 4; where v1 differs (no logged-in CLI as a provider, no OpenRouter
 sign-in, library names are recorded not loaded) the v1 wording wins. No em or en dashes anywhere.
 """

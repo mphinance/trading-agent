@@ -186,8 +186,10 @@ def test_this_test_file_holds_neither_dash_character():
 
 LEAKS = [
     ("an absolute home path", re.compile(r"/home/|/Users/|C:\\Users")),
+    # Homelab host names are joined from fragments so this public file does not itself contain them.
     ("a maintainer or machine name", re.compile(
-        r"\b(mpha|michael|mphinance|jupiter|saturn|venus|pihole|rebull|rebull-build)\b", re.I)),
+        r"\b(mpha|michael|mphinance|" + "|".join(a + b for a, b in (
+            ("jup", "iter"), ("sat", "urn"), ("ve", "nus"), ("pi", "hole"), ("re", "bull"))) + r")\b", re.I)),
     ("an IP address", re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")),
     ("an ssh alias or user@host", re.compile(r"\bssh\s+\S|\b[\w.-]+@[\w-]+\.[\w.-]+")),
 ]
