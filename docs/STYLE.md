@@ -132,4 +132,4 @@ Each page gets several passes, each with one lens, so no single reviewer has to 
 
 ## Related docs
 
-- [Docs index](README.md): where every page lives.
+- [Docs index](README.md): where every page lives and the reading order.

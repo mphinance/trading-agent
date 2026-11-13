@@ -3,11 +3,11 @@
 > [!NOTE]
 > Status: built and tested against a Hermes shim and against Hermes 0.23.1 on Linux. Not yet used by anyone outside the maintainer's testing. Treat it as an early release and read the output before you answer yes.
 
-**A setup tool that builds a [Hermes](https://hermes-agent.nousresearch.com) agent profile for trading research from the AI access and broker tools you already have, and exports it to a new computer as one file that does not contain your keys.**
+**A setup tool for [Hermes](https://hermes-agent.nousresearch.com) (an open-source AI agent runner). It builds an agent profile for trading research from the AI access and broker tools you already have, and exports it to a new computer as one file that holds no keys.**
 
-The wizard's broker list is generated from [awesome-broker-mcp](https://github.com/mphinance/awesome-broker-mcp), a CC0 community list of broker MCP servers (76 broker entries, 14 aggregators and 4 readme-only, 94 in all). Browse it to see every broker it knows. Today the wizard can install only Alpaca and Tradier itself (curated entries); the rest are searchable and show "setup details not curated yet". To add or fix a broker entry, change it in that catalog repository.
+**Who it is for:** someone who wants a trading-research agent without hand-editing config files, and who is fine reading each prompt before answering yes.
 
-It creates one new Hermes profile (a folder with its own settings, memories and `.env` key file), asks before it uses anything it finds, and does not print key values. It also ships the three small profile files Hermes installs: `distribution.yaml`, `SOUL.md` and `config.yaml`.
+**What you get in five minutes:** one new Hermes profile (a folder with its own settings, memories and `.env` key file), made by a wizard that looks first, asks before it uses anything it finds, and never prints a key value. It also ships the three small profile files Hermes installs: `distribution.yaml`, `SOUL.md` and `config.yaml`.
 
 > [!WARNING]
 > Trading involves risk of loss and nothing here is financial advice. The tool only wires an AI to a broker connector you choose. It adds no trading rules and no risk controls, and a broker connector can place real orders if you connect a live account.
@@ -25,14 +25,14 @@ It creates one new Hermes profile (a folder with its own settings, memories and 
 
 ## Five-minute start
 
-1. Install Hermes. The tool never installs it for you and never runs this command; you do:
+1. Install Hermes. You run this; the tool never does:
 
    ```bash
    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
    hermes --version
    ```
 
-2. Install this tool from this repository's `portable-agent` branch (the default branch still holds the older project until the maintainer finishes the [swap](docs/SWAP.md)). Install the packaged tool, not a working copy; the reason is in [SETUP](docs/SETUP.md#why-not-run-it-from-a-checkout).
+2. Install this tool from this repository's `portable-agent` branch (the default branch still holds the older project until the maintainer finishes the swap, see [Swap](docs/SWAP.md)). Install the packaged tool, not a working copy; the reason is in [Setup](docs/SETUP.md#why-not-run-it-from-a-checkout).
 
    ```bash
    uv tool install "git+https://github.com/mphinance/trading-agent.git@portable-agent"
@@ -64,7 +64,7 @@ It creates one new Hermes profile (a folder with its own settings, memories and 
    trading-agent undo --profile <profile>
    ```
 
-Step-by-step with what each screen asks: [SETUP](docs/SETUP.md).
+Next: [Setup](docs/SETUP.md) walks through each screen.
 
 ## How it fits together
 
@@ -78,14 +78,18 @@ flowchart LR
     Profile --> MCP["Broker MCP server"]
 ```
 
-Look at the keys arrow: the tool writes keys to one file in the new profile and nowhere else. Once you use the agent, Hermes and the connectors you picked read that file and talk to the AI and broker services; this tool is not part of that path.
+The keys arrow is the one to check: the tool writes keys to one file in the new profile and nowhere else. Once you use the agent, Hermes and the connectors you picked read that file and talk to the AI and broker services; this tool is not part of that path.
+
+## Which brokers
+
+The broker list comes from [awesome-broker-mcp](https://github.com/mphinance/awesome-broker-mcp), a CC0 community catalog of broker MCP servers (76 broker entries + 14 aggregators + 4 readme-only = 94 in all). An MCP server is a program that gives the agent a set of tools. Today the wizard installs only Alpaca and Tradier itself (curated entries); the rest are searchable and show "setup details not curated yet". To add or fix an entry, change it in the catalog repository.
 
 ## What stays on your machine
 
-- **Keys** are written by this tool into the new profile's `.env` file (mode 0600) and nowhere else. `config.yaml` holds only `${NAME}` references. Mode 0600 stops other user accounts, not the agent: Hermes loads that file, the agent runs as you, and the broker connector you pick receives the keys you list for it. Details and removal: [KEYS](docs/KEYS.md).
-- **Detection is by name.** Setup reports that something exists (a CLI, a key called `OPENROUTER_API_KEY`), never its value. A key it finds is not used until you say yes for that one use. To look, `scan` starts your login shell (which runs your shell startup files), runs `--version` on AI CLIs it finds, reads the MCP config files of Claude Code, Claude Desktop and other apps for server and variable names, and connects to a few loopback ports. It sends nothing over the network.
+- **Keys** are written by this tool into the new profile's `.env` file (mode 0600) and nowhere else. `config.yaml` holds only `${NAME}` references. Mode 0600 stops other user accounts, not the agent: Hermes loads that file, the agent runs as you, and the broker connector you pick receives the keys you list for it. Details and removal: [Keys](docs/KEYS.md).
+- **Detection is by name.** Setup reports that something exists (a CLI, a key called `OPENROUTER_API_KEY`), never its value. Setup uses a key it finds only after you say yes for that one use. To look, `scan` starts your login shell (which runs your shell startup files), runs `--version` on AI CLIs it finds, reads the MCP config files of Claude Code, Claude Desktop and other apps for server and variable names, and connects to a few loopback ports. It sends nothing over the network.
 - **Setup works offline.** A check that needs the internet says "Needs internet" and is listed under "Left to finish later". Once you use the agent, Hermes talks to the AI and broker services you picked, and a broker connector that runs through `uvx` or `npx` may download its code from the network.
-- **Export and import do not carry keys on purpose, and the check is best effort.** A bundle is a file you move yourself; it is not encrypted, and a key hidden in a memory in an unusual form can still ship. Read what you export. See [MOVING](docs/MOVING.md).
+- **Export and import do not carry keys on purpose, and the check is best effort.** A bundle is a file you move yourself; it is not encrypted, and a key hidden in a memory in an unusual form can still ship. Read what you export. See [Moving](docs/MOVING.md).
 - **A profile is not a security sandbox.** It separates settings and data. The agent runs with your user account's file access, so it can read the profile's `.env` and any other file you can.
 
 ## What is not included
@@ -99,26 +103,27 @@ Look at the keys arrow: the tool writes keys to one file in the new profile and 
 - `SOUL.md` is four plain lines for the model: be direct and concise, say when unsure, do not invent data, use only the chosen tools, do not print secrets. It is an instruction to a language model, not an enforced rule.
 - Only brokers with a curated overlay (Alpaca and Tradier) are installable from the wizard in this version. The rest of the catalog is searchable and shows "setup details not curated yet".
 - A signed-in AI CLI (Claude Code, Codex and similar) cannot power the Hermes brain in this version. The wizard says so; pick a local model or an API key. Detection of those CLIs is detect-only: this tool does not read or copy their sign-ins.
-- The broker catalog is a snapshot (each entry shows a last-checked date) and brokers change. Skill libraries you pick are recorded by name only; each has its own license, see [THIRD_PARTY](THIRD_PARTY.md).
+- The broker catalog is a snapshot (each entry shows a last-checked date) and brokers change. Skill libraries you pick are recorded by name only; each has its own license, see [Third-party notices](THIRD_PARTY.md).
 
 ## Docs
 
-The full index is [docs/README.md](docs/README.md).
+Read in this order. The full index is [Docs index](docs/README.md).
 
-| Page | Read it for |
-|---|---|
-| [SETUP](docs/SETUP.md) | Install and first run, screen by screen |
-| [KEYS](docs/KEYS.md) | Where keys live and how to remove them |
-| [UPDATING](docs/UPDATING.md) | Updating the profile, and what is kept |
-| [MOVING](docs/MOVING.md) | Export and import to a new computer |
-| [THIRD_PARTY](THIRD_PARTY.md) | Licenses and attribution |
+| Order | Page | Read it for |
+|---|---|---|
+| 1 | [Setup](docs/SETUP.md) | Install and first run, screen by screen |
+| 2 | [Keys](docs/KEYS.md) | Where keys live and how to remove them |
+| 3 | [Moving](docs/MOVING.md) | Export and import to a new computer |
+| 4 | [Updating](docs/UPDATING.md) | Updating the profile, and what is kept |
+| Reference | [Third-party notices](THIRD_PARTY.md) | Licenses and attribution |
+| Maintainer | [Publish checklist](docs/PUBLISH_CHECKLIST.md), [Swap](docs/SWAP.md) | Pages for the repository owner, not for users |
 
 ## License
 
-MIT, provisional: the maintainer has not confirmed it, and it may change before the repository is public. See [LICENSE](LICENSE) and the open items in [PUBLISH_CHECKLIST](docs/PUBLISH_CHECKLIST.md).
+MIT, provisional: the maintainer has not confirmed it, and it may change before the repository is public. See [LICENSE](LICENSE) and the open items in [Publish checklist](docs/PUBLISH_CHECKLIST.md).
 
 ## Related docs
 
+- [Setup](docs/SETUP.md): read this next; install and the first run.
 - [Docs index](docs/README.md): every page with one line each.
-- [Setup](docs/SETUP.md): the first thing to read after this page.
 - [Third-party notices](THIRD_PARTY.md): what is referenced and under which license.

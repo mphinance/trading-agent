@@ -1,7 +1,7 @@
 # Swap procedure
 
 > [!NOTE]
-> Status: not run. Maintainer only.
+> Status: not run. Maintainer page: users can skip it.
 
 **How to replace the old `trading-agent` folder and repository with this project without losing the old untracked work, the old `.env`, or the three local MCP servers that still run from the old folder.**
 

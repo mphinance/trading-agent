@@ -61,5 +61,5 @@ Hermes agent, by Nous Research, is MIT licensed. It is a runtime dependency the 
 ## Related docs
 
 - [Publish checklist](docs/PUBLISH_CHECKLIST.md): the open items that close the lineage question.
-- [Docs index](docs/README.md): all pages.
 - [README](README.md): what the tool is and what it does not include.
+- [Docs index](docs/README.md): all pages.

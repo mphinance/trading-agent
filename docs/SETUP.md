@@ -127,7 +127,7 @@ Read the boxes left to right; no profile and no key is written before the last b
 
 Menu numbers shift with what the scan found (for example the OpenRouter "Key found" entry only appears when that key exists), so read the label, not the number you saw in the transcript.
 
-Keys: when the wizard needs a key it asks for it with a hidden prompt, or offers to copy one it found by name in your environment, one use at a time, and only if you say yes. See [KEYS](KEYS.md).
+Keys: when the wizard needs a key it asks for it with a hidden prompt, or offers to copy one it found by name in your environment, one use at a time, and only if you say yes. See [Keys](KEYS.md).
 
 When it finishes, setup lists what was created, a "Left to finish later" list (for example "Pick an AI" or "Sign in to a broker on its own site"), who can read each key in the private `.env`, and the exact undo command. The setup receipt (names and locations only, never a value) is saved under your config folder, by default `~/.config/trading-agent/receipts/<profile>.json`.
 
@@ -137,7 +137,7 @@ When it finishes, setup lists what was created, a "Left to finish later" list (f
 trading-agent undo --profile <profile>
 ```
 
-`--profile` can be left out when exactly one profile has a receipt. Undo shows what it will remove and asks `Remove it? [y/N]` (default No). It removes what setup created, by the receipt, and only a profile folder that carries this tool's ownership marker (a hidden `.trading-agent-run` file whose id matches the receipt). That deletes the whole profile folder, memories included, and the `~/.local/bin/<profile>` command shortcut if Hermes made one (import makes one; a test run of `setup` on Hermes 0.23.1 made none). A profile you made yourself is left alone; when nothing is removed the exit status is 1. Details on keys: [KEYS](KEYS.md#removing-keys). A real run is in [undo.txt](transcripts/undo.txt).
+`--profile` can be left out when exactly one profile has a receipt. Undo shows what it will remove and asks `Remove it? [y/N]` (default No). It removes what setup created, by the receipt, and only a profile folder that carries this tool's ownership marker (a hidden `.trading-agent-run` file whose id matches the receipt). That deletes the whole profile folder, memories included, and the `~/.local/bin/<profile>` command shortcut if Hermes made one (import makes one; a test run of `setup` on Hermes 0.23.1 made none). A profile you made yourself is left alone; when nothing is removed the exit status is 1. Details on keys: [Keys](KEYS.md#removing-keys). A real run is in [undo.txt](transcripts/undo.txt).
 
 ## If something goes wrong
 
@@ -150,8 +150,8 @@ trading-agent undo --profile <profile>
 
 ## Related docs
 
+- [Keys](KEYS.md): read this next; where keys live and how to remove them.
 - [README](../README.md): what the tool is and what it does not include.
-- [KEYS](KEYS.md): where keys live and how to remove them.
-- [UPDATING](UPDATING.md): keeping the profile current.
-- [MOVING](MOVING.md): carry the agent to a new computer.
+- [Moving](MOVING.md): carry the agent to a new computer.
+- [Updating](UPDATING.md): keeping the profile current.
 - [T0 spike results](spike/T0-results.md): verified Hermes facts (install command, version pin).

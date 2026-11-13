@@ -41,7 +41,7 @@ Tick a box only after the maintainer decided it.
 - [ ] **Risk and terms wording reviewed.** The README, SETUP and KEYS pages carry plain warnings: no trading rules or risk controls, a broker connector can place live orders, not financial advice, the profile `.env` is readable by the agent, bundles are unencrypted. Confirm the wording, and decide whether broker and AI service names in the catalog and wizard need a trademark or terms-of-service review. Detection of signed-in CLIs is detect-only by design; no vendor terms were checked, so that remains [UNVERIFIED].
 - [ ] **More brokers curated.** Only Alpaca and Tradier are installable. Decide whether to curate more overlay entries before launch or ship as is.
 - [ ] **CLI-powered brain follow-up.** A found signed-in AI CLI cannot power the Hermes brain in this version. Decide whether to document it as a known limit or schedule the follow-up.
-- [ ] **Outside-user pass.** Someone who has not seen the project follows [SETUP](SETUP.md) on a clean machine and reports where it broke. Until then the README status line stays "not yet used by outside users".
+- [ ] **Outside-user pass.** Someone who has not seen the project follows [Setup](SETUP.md) on a clean machine and reports where it broke. Until then the README status line stays "not yet used by outside users".
 
 ## Checks to run
 
@@ -120,6 +120,6 @@ uv run pytest -q
 
 ## Related docs
 
-- [Swap procedure](SWAP.md): replacing the old repository and folder.
-- [Third-party notices](../THIRD_PARTY.md): lineage and licenses.
+- [Swap](SWAP.md): the next maintainer step once this list is clear.
+- [Third-party notices](../THIRD_PARTY.md): lineage and licenses to confirm.
 - [Docs index](README.md): all pages.

@@ -215,9 +215,8 @@ A bundle from anyone else is untrusted input. These checks guard against a malfo
 
 ## Related docs
 
-- [README](../README.md): what the tool is and the five-minute start.
+- [Updating](UPDATING.md): read this next; why an imported profile cannot use `hermes profile update`.
 - [Setup](SETUP.md): install Hermes and the tool before you import.
 - [Keys](KEYS.md): where keys live and how to remove them.
-- [Updating](UPDATING.md): why an imported profile cannot use `hermes profile update`.
-- [Docs index](README.md): all pages.
 - [T0 spike results](spike/T0-results.md): verified Hermes behavior the tool relies on.
+- [README](../README.md): what the tool is and the five-minute start.

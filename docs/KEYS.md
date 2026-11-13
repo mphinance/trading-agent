@@ -58,11 +58,11 @@ trading-agent undo --profile <profile>
 Undo uses the setup receipt and an ownership marker inside the profile. It asks `Remove it? [y/N]` (default No), then deletes the whole profile it created: its memories, chats, skills and every key in its `.env`, and the command shortcut Hermes made for it, if any. If it cannot prove it made a path, it leaves that path alone and says so.
 
 > [!CAUTION]
-> Undo deletes the profile's memories along with its keys. Export first if you want to keep them: [MOVING](MOVING.md).
+> Undo deletes the profile's memories along with its keys. Export first if you want to keep them: [Moving](MOVING.md).
 
 ## Export and import
 
-Neither carries a key. The export refuses a file in the profile that matches a value from your `.env` or a common key shape, and the import asks for each key by name. The scan is best effort and cannot catch every way to write a secret; read your memories before you share a bundle. The exact rules are in [MOVING](MOVING.md#step-1-export).
+Neither carries a key. The export refuses a file in the profile that matches a value from your `.env` or a common key shape, and the import asks for each key by name. The scan is best effort and cannot catch every way to write a secret; read your memories before you share a bundle. The exact rules are in [Moving](MOVING.md#step-1-export).
 
 ## Detection never reads values for display
 
@@ -71,5 +71,5 @@ The scan reports that a variable, file or port exists. Only names and presence a
 ## Related docs
 
 - [Setup](SETUP.md): the wizard that asks for keys.
-- [Moving](MOVING.md): what export and import check, and the limits.
-- [README](../README.md): what stays on your machine.
+- [Moving](MOVING.md): read this next; what export and import check, and their limits.
+- [README](../README.md): what stays on your machine, in one list.

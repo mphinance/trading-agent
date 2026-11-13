@@ -36,7 +36,7 @@ Two cases are different:
   ```
 
   Edit that one line to `source: github.com/mphinance/trading-agent` in a text editor, then run `hermes profile update <profile>`. Update re-records the source it used, so you do this once. Hermes accepts a git URL such as `github.com/user/repo` there (its own error message says so); whether it can take a branch in `source:` is [UNVERIFIED], so until the maintainer makes `portable-agent` the default branch, this address resolves to the older project: use a local folder holding the new version instead, or wait for the swap. To check, run `hermes profile update` in a scratch `HERMES_HOME`.
-- **A checkout.** Running from a working copy is not supported for setup (see [SETUP](SETUP.md#why-not-run-it-from-a-checkout)). If you installed from a clean clone anyway, the recorded source is that clone's folder; keep it where it is, or set the source to the repository address as above.
+- **A checkout.** Running from a working copy is not supported for setup (see [Setup](SETUP.md#why-not-run-it-from-a-checkout)). If you installed from a clean clone anyway, the recorded source is that clone's folder; keep it where it is, or set the source to the repository address as above.
 
 Hermes first prints where it will update from and asks `Proceed? [y/N]`; the default is No, so pressing Enter cancels with `Update cancelled.`. Answer `y`, or pass `-y` to skip the question: `hermes profile update <profile> -y`. A wrong or imported profile name gives `Profile '<name>' is not a distribution (no distribution.yaml)`. A successful update prints:
 
@@ -44,12 +44,12 @@ Hermes first prints where it will update from and asks `Proceed? [y/N]`; the def
 ✓ Updated '<profile>' → v<version>
 ```
 
-A profile made by `trading-agent import` has no `distribution.yaml` at all, so `hermes profile update` does not apply to it (see [MOVING](MOVING.md#honest-limits)).
+A profile made by `trading-agent import` has no `distribution.yaml` at all, so `hermes profile update` does not apply to it (see [Moving](MOVING.md#honest-limits)).
 
 ## What not to do
 
 - Do not use `hermes profile install <source> --name <profile> --force` to update. Its effect on `config.yaml` is [UNVERIFIED] here: the spike notes say `--force` preserves user data, while an earlier scratch test reportedly reset `config.yaml` to the shipped defaults, which would wipe your provider and broker settings. To check, try it in a scratch `HERMES_HOME`. `hermes profile update` is the path that was verified.
-- Do not point `hermes profile install` or `update` at a development checkout. It holds `.venv` symlinks and Hermes refuses them (see [SETUP](SETUP.md#why-not-run-it-from-a-checkout)).
+- Do not point `hermes profile install` or `update` at a development checkout. It holds `.venv` symlinks and Hermes refuses them (see [Setup](SETUP.md#why-not-run-it-from-a-checkout)).
 - Do not put hand edits you care about in `SOUL.md`; update overwrites it. Keep them in `config.yaml` personalities, or in a skill.
 
 ## Updating the tool
@@ -69,4 +69,4 @@ Hermes >= 0.23.0 is required. `hermes update` upgrades a normal install; the too
 - [Setup](SETUP.md): first install.
 - [Moving](MOVING.md): why an imported profile cannot be updated this way.
 - [T0 spike results](spike/T0-results.md): the verified update behavior.
-- [README](../README.md): front door.
+- [Docs index](README.md): all pages, in reading order.
