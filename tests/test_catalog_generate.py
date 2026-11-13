@@ -16,7 +16,7 @@ from trading_agent.catalog.merge import BANNER, merge_overlay
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog"
 TODAY = date(2026, 11, 12)
-SEED_OVERLAY = Path(__file__).parents[1] / "catalog" / "overlay.json"
+SEED_OVERLAY = Path(__file__).parents[1] / "src" / "trading_agent" / "data" / "overlay.json"
 
 
 def by_slug(entries):

@@ -18,7 +18,7 @@ from trading_agent.wizard.flow import Deps, Detectors, run_wizard
 from trading_agent.wizard.state import State, WizardState
 
 S1, S2, S3 = K1, K2, K3
-REAL_OVERLAY = json.loads((Path(__file__).parents[1] / "catalog" / "overlay.json").read_text())
+REAL_OVERLAY = json.loads((Path(__file__).parents[1] / "src" / "trading_agent" / "data" / "overlay.json").read_text())
 REAL_TRADIER = REAL_OVERLAY["tradier"]["routes"]    # the real catalog entry, not a fixture that masks its gaps
 TOP = ["start", "", "scan"]
 OLLAMA = [port_finding("ollama")]

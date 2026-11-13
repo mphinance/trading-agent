@@ -211,7 +211,7 @@ DONE_BODY = "AI: {ai}. Broker: {broker}. Skills: {n} picked."
 DONE_BROKER = "The {name} connection {dest}."
 DONE_KEYS = "Who can read each key or setting in the profile's private .env file:"
 DONE_UNDO = ("What was created is listed in the setup receipt: {receipt}\n"
-             "To remove it all, run: hermes profile delete {name}")
+             "To remove it all, run: trading-agent undo --profile {name}")
 STATE_NOT_SAVED = "I could not save your progress here, so setup cannot resume if it is interrupted. Carrying on."
 STATE_DROPPED = "Some saved answers no longer fit, so I ignored them. I will ask those again."
 INVALID_CHOICE = "That choice is not one I know. Pick from the list."

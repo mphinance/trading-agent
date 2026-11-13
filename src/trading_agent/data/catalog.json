@@ -1,0 +1,2279 @@
+{
+  "generated_at": "2026-11-12T23:57:15+00:00",
+  "catalog_commit": "275834f0469cb7750bf10892cf809288f3c3fcd8",
+  "entries": [
+    {
+      "slug": "5paisa",
+      "name": "5paisa",
+      "directory": "brokers",
+      "page_path": "brokers/5paisa.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://5paisa.com/technology/mcp-ai-trading-assistant",
+      "last_verified": "2026-11-11",
+      "region_raw": "India",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "ally-invest",
+      "name": "Ally Invest",
+      "directory": "readme-only",
+      "page_path": "",
+      "source": "readme-only",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "alpaca",
+      "name": "Alpaca",
+      "directory": "brokers",
+      "page_path": "brokers/alpaca.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (official hosted OAuth MCP) and local (uvx alpaca-mcp-server)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://alpaca.markets/mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [
+        {
+          "route_id": "local",
+          "kind": "local-command",
+          "maintainer": "official",
+          "install": {
+            "method": "uvx",
+            "command_text": "uvx alpaca-mcp-server",
+            "needs": [
+              "python>=3.10",
+              "uv"
+            ]
+          },
+          "auth": {
+            "type": "api-key-plus-secret",
+            "env_vars": [
+              {
+                "name": "ALPACA_API_KEY",
+                "role": "key-id",
+                "required": true,
+                "secret": true
+              },
+              {
+                "name": "ALPACA_SECRET_KEY",
+                "role": "secret",
+                "required": true,
+                "secret": true
+              },
+              {
+                "name": "ALPACA_PAPER_TRADE",
+                "role": "mode-switch",
+                "required": false,
+                "secret": false
+              }
+            ]
+          },
+          "paper": {
+            "supported": "yes",
+            "default": "paper",
+            "how_to_enable": "ALPACA_PAPER_TRADE (default true on the local server)",
+            "enforced_by": "env-or-flag"
+          },
+          "read_only": {
+            "available": true,
+            "how": "ALPACA_TOOLSETS restricts which tool groups are exposed"
+          },
+          "submit": {
+            "can_submit_order": "yes",
+            "confirmation": "client-prompt-only",
+            "confirmation_is_agent_callable": false
+          }
+        },
+        {
+          "route_id": "hosted-paper",
+          "kind": "remote-url",
+          "maintainer": "official",
+          "url": "https://paper-api.alpaca.markets/mcp",
+          "auth": {
+            "type": "oauth-browser",
+            "env_vars": []
+          },
+          "paper": {
+            "supported": "yes",
+            "default": "separate-endpoint",
+            "how_to_enable": "connect the paper URL, not the live one",
+            "enforced_by": "server"
+          }
+        }
+      ],
+      "wizard": {
+        "selectable": true
+      }
+    },
+    {
+      "slug": "amp-futures-rithmic",
+      "name": "AMP Futures (Rithmic)",
+      "directory": "brokers",
+      "page_path": "brokers/amp-futures-rithmic.md",
+      "source": "front-matter",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "none found",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "angel-one",
+      "name": "Angel One (SmartAPI)",
+      "directory": "brokers",
+      "page_path": "brokers/angel-one.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local (stdio, self-run Python)",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/bhavesh0009/angel-one-mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "India",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "axi",
+      "name": "Axi",
+      "directory": "brokers",
+      "page_path": "brokers/axi.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://www.axi.com/int/trading-platforms/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (not intended for Australian and New Zealand residents per the page)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "axiory",
+      "name": "Axiory (Axiory.ai)",
+      "directory": "brokers",
+      "page_path": "brokers/axiory.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (endpoint not published)",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://axiory.com/who-we-are/company-news/it-s-not-impossible-axiory-ai-bridges-the-gap",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global; excludes the US, Canada, EU/EEA and Belize per the Axiory page",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "b2trader",
+      "name": "B2Trader (B2Broker)",
+      "directory": "aggregators",
+      "page_path": "aggregators/b2trader.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://docs.b2broker.com/b2trader/terminal/connect-your-ai-agent/overview",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (white-label platform; availability set by each broker)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "betterment",
+      "name": "Betterment",
+      "directory": "brokers",
+      "page_path": "brokers/betterment.md",
+      "source": "front-matter",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "none found",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "binance",
+      "name": "Binance",
+      "directory": "brokers",
+      "page_path": "brokers/binance.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/TermiX-official/binance-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (Binance.com; Binance.US is a separate entity)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "bingx",
+      "name": "BingX",
+      "directory": "brokers",
+      "page_path": "brokers/bingx.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "https://github.com/BingX-API/api-ai-skills",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "bitget",
+      "name": "Bitget",
+      "directory": "brokers",
+      "page_path": "brokers/bitget.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/Bitget-AI/agent-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "bybit",
+      "name": "Bybit",
+      "directory": "brokers",
+      "page_path": "brokers/bybit.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/bybit-exchange/trading-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (not available to US retail)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "capital-com",
+      "name": "Capital.com",
+      "directory": "brokers",
+      "page_path": "brokers/capital-com.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/capital-com-sv/capital-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global CFD broker (MENA release 2026-06-08; availability by entity and region)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "coinbase",
+      "name": "Coinbase",
+      "directory": "brokers",
+      "page_path": "brokers/coinbase.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote + local",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://docs.cdp.coinbase.com/ai-agents/coinbase-for-agents/coinbase-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (crypto)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "connecttrade",
+      "name": "ConnectTrade",
+      "directory": "aggregators",
+      "page_path": "aggregators/connecttrade.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://connecttrade.com/docs/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "crypto-com",
+      "name": "Crypto.com",
+      "directory": "brokers",
+      "page_path": "brokers/crypto-com.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (hosted market-data server, read-only) and local (cdcx-cli MCP server, can trade)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://mcp.crypto.com/docs/getting-started",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "ctrader-spotware",
+      "name": "cTrader (Spotware)",
+      "directory": "brokers",
+      "page_path": "brokers/ctrader-spotware.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (hosted, for cTrader Web) + local (stdio, for cTrader Windows/Mac)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://help.ctrader.com/ctrader-ai-agent-connect/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (Spotware, Cyprus \u2014 platform vendor used by many FX/CFD brokers)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "degiro",
+      "name": "DEGIRO",
+      "directory": "brokers",
+      "page_path": "brokers/degiro.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/jaenster/degiro-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "EU (Netherlands)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "deriv",
+      "name": "Deriv",
+      "directory": "brokers",
+      "page_path": "brokers/deriv.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote (docs/schema server); the community repo is local (stdio)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://tradersview.deriv.com/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (ex-US) \u2014 Malta / Cyprus",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "dhan",
+      "name": "Dhan",
+      "directory": "brokers",
+      "page_path": "brokers/dhan.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://mcp.dhan.co/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "India",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "dukascopy",
+      "name": "Dukascopy",
+      "directory": "brokers",
+      "page_path": "brokers/dukascopy.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://ai.dukascopy.com/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Switzerland (site excludes Belgium, Israel, Russia, Turkey, Canada and the UK from solicitation)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "etoro",
+      "name": "eToro",
+      "directory": "brokers",
+      "page_path": "brokers/etoro.md",
+      "source": "front-matter",
+      "status": [
+        "official",
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (official, hosted) / local (community)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://builders.etoro.com/tools/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "International (not available to US retail)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "etrade",
+      "name": "E*TRADE",
+      "directory": "brokers",
+      "page_path": "brokers/etrade.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "false",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/davdunc/mcp_etrade",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "fidelity",
+      "name": "Fidelity",
+      "directory": "brokers",
+      "page_path": "brokers/fidelity.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/tylerflar/claude-fidelity-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "fineco",
+      "name": "Fineco",
+      "directory": "brokers",
+      "page_path": "brokers/fineco.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "false",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/morettimarco/fineco-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "EU (Italy)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "forex-com-stonex",
+      "name": "FOREX.com (StoneX)",
+      "directory": "brokers",
+      "page_path": "brokers/forex-com-stonex.md",
+      "source": "front-matter",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "none found",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (US / UK / EU / CA / APAC) \u2014 GAIN Capital / StoneX",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "fortex",
+      "name": "Fortex 7 (Fortex)",
+      "directory": "aggregators",
+      "page_path": "aggregators/fortex.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "https://fortex.com/en/news/agentic-ai-trading-workflows-for-brokerages/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global; vendor sells to brokerages (no retail access)",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "freedom24",
+      "name": "Freedom24 (Tradernet)",
+      "directory": "brokers",
+      "page_path": "brokers/freedom24.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://github.com/tradernet-api/tradernet-mcp-claude",
+      "last_verified": "2026-11-11",
+      "region_raw": "Freedom24 / Tradernet customers (country availability not checked)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "fundednext",
+      "name": "FundedNext",
+      "directory": "brokers",
+      "page_path": "brokers/fundednext.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://fundednext.com/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global online prop firm (UAE-registered operator per its footer)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "fyers",
+      "name": "FYERS",
+      "directory": "brokers",
+      "page_path": "brokers/fyers.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://support.fyers.in/portal/en/kb/articles/what-connections-are-available-with-fyers-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "India",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "gate-io",
+      "name": "Gate (Gate.io)",
+      "directory": "brokers",
+      "page_path": "brokers/gate-io.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://github.com/gate/gate-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "gemini",
+      "name": "Gemini",
+      "directory": "brokers",
+      "page_path": "brokers/gemini.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local (first-party repo server, can trade) and remote (hosted endpoint, read-only per its own instructions)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://developer.gemini.com/agentic/agentic",
+      "last_verified": "2026-11-11",
+      "region_raw": "US (regulated US exchange)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "groww",
+      "name": "Groww",
+      "directory": "brokers",
+      "page_path": "brokers/groww.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://groww.in/updates/groww-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "India",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "hargreaves-lansdown",
+      "name": "Hargreaves Lansdown",
+      "directory": "brokers",
+      "page_path": "brokers/hargreaves-lansdown.md",
+      "source": "front-matter",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "none found",
+      "last_verified": "2026-11-11",
+      "region_raw": "UK",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "htx",
+      "name": "HTX",
+      "directory": "brokers",
+      "page_path": "brokers/htx.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "https://github.com/htx-exchange/htx-skills-hub",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "hyperliquid",
+      "name": "Hyperliquid",
+      "directory": "brokers",
+      "page_path": "brokers/hyperliquid.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/Impa-Ventures/hyperliquid-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global / onchain (decentralized perps DEX)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "ig",
+      "name": "IG",
+      "directory": "brokers",
+      "page_path": "brokers/ig.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote (hosted; ChatGPT app only, no client-configurable URL)",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://www.ig.com/au/trading-platforms/ai-assistant",
+      "last_verified": "2026-11-11",
+      "region_raw": "UK / global broker \u2014 but the MCP server is live in Australia only",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "interactive-brokers",
+      "name": "Interactive Brokers",
+      "directory": "brokers",
+      "page_path": "brokers/interactive-brokers.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "draft-only",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://claude.com/connectors/interactive-brokers",
+      "last_verified": "2026-11-11",
+      "region_raw": "US / International",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "jp-morgan-chase",
+      "name": "JP Morgan / Chase",
+      "directory": "readme-only",
+      "page_path": "",
+      "source": "readme-only",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "kalshi",
+      "name": "Kalshi",
+      "directory": "brokers",
+      "page_path": "brokers/kalshi.md",
+      "source": "front-matter",
+      "status": [
+        "official",
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (official, read-only) or local community",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://docs.kalshi.com/getting_started/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "korea-investment",
+      "name": "Korea Investment & Securities (KIS)",
+      "directory": "brokers",
+      "page_path": "brokers/korea-investment.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/koreainvestment/open-trading-api/tree/main/MCP/Kis%20Trading%20MCP",
+      "last_verified": "2026-11-11",
+      "region_raw": "South Korea (domestic stocks, futures/options, bonds; overseas stocks and futures/options via a KIS account)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "kotak-neo",
+      "name": "Kotak Neo",
+      "directory": "brokers",
+      "page_path": "brokers/kotak-neo.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://www.kotakneo.com/platform/kotak-neo-mcp/",
+      "last_verified": "2026-11-11",
+      "region_raw": "India",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "kraken",
+      "name": "Kraken",
+      "directory": "brokers",
+      "page_path": "brokers/kraken.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://docs.kraken.com/home/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US / Global",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "leverate",
+      "name": "Leverate",
+      "directory": "aggregators",
+      "page_path": "aggregators/leverate.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (endpoint not published)",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://leverate.com/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global; vendor sells to CFD brokers and prop firms",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "lightspeed",
+      "name": "Lightspeed",
+      "directory": "brokers",
+      "page_path": "brokers/lightspeed.md",
+      "source": "front-matter",
+      "status": [
+        "aggregator-only"
+      ],
+      "trading": "true",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "https://lightspeed.com/trading/api-trading",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "longbridge",
+      "name": "Longbridge",
+      "directory": "brokers",
+      "page_path": "brokers/longbridge.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (hosted)",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://open.longbridge.com/docs/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Asia (Hong Kong/Singapore) \u2014 US & HK markets",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "luno",
+      "name": "Luno",
+      "directory": "brokers",
+      "page_path": "brokers/luno.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/luno/luno-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (crypto exchange; Africa, UK and parts of Europe, Asia)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "m1-finance",
+      "name": "M1 Finance",
+      "directory": "brokers",
+      "page_path": "brokers/m1-finance.md",
+      "source": "front-matter",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "none found",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "match-trader",
+      "name": "Match-Trader (Match-Trade Technologies)",
+      "directory": "aggregators",
+      "page_path": "aggregators/match-trader.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://match-trader.com/mcp-for-traders/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global; vendor sells to brokers and prop firms (corporate customers only)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "merrill-bank-of-america",
+      "name": "Merrill (Bank of America)",
+      "directory": "readme-only",
+      "page_path": "",
+      "source": "readme-only",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "metaquotes-metatrader-5",
+      "name": "MetaTrader 5 (MetaQuotes)",
+      "directory": "aggregators",
+      "page_path": "aggregators/metaquotes-metatrader-5.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://www.metatrader5.com/en/terminal/help/mcp_and_ai",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global; MT5 is vendor software, access via your broker's MT5 account",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "mexc",
+      "name": "MEXC",
+      "directory": "brokers",
+      "page_path": "brokers/mexc.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/mexcdevelop/mexc-cli",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "moomoo",
+      "name": "moomoo / Futu",
+      "directory": "brokers",
+      "page_path": "brokers/moomoo.md",
+      "source": "front-matter",
+      "status": [
+        "official",
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (official hosted MCP at mcp.moomoo.com/mcp) and local (official Agent Skills via the moomoo CLI; community MCP server via OpenD)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://github.com/MoomooOpen/moomoo-agent-hub",
+      "last_verified": "2026-11-11",
+      "region_raw": "HK, US, CN, SG, JP (varies by Futu entity)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "mx",
+      "name": "MX",
+      "directory": "aggregators",
+      "page_path": "aggregators/mx.md",
+      "source": "front-matter",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "none found",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "ninjatrader",
+      "name": "NinjaTrader",
+      "directory": "brokers",
+      "page_path": "brokers/ninjatrader.md",
+      "source": "front-matter",
+      "status": [
+        "official",
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (official, hosted by NinjaTrader), plus local community servers and a third-party hosted option (CrossTrade)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://docs.ninjatrader.com/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "oanda",
+      "name": "OANDA",
+      "directory": "brokers",
+      "page_path": "brokers/oanda.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "false",
+      "server_type_raw": "local (stdio)",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://developer.oanda.com/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (US / UK / EU / APAC)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "okx",
+      "name": "OKX",
+      "directory": "brokers",
+      "page_path": "brokers/okx.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/okx/agent-trade-kit",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (OKX US is a separate entity)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "parlay",
+      "name": "Parlay",
+      "directory": "aggregators",
+      "page_path": "aggregators/parlay.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://github.com/parlay-run/parlay-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (prediction-market venues)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "plaid",
+      "name": "Plaid",
+      "directory": "aggregators",
+      "page_path": "aggregators/plaid.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://plaid.com/docs/resources/mcp/",
+      "last_verified": "2026-11-11",
+      "region_raw": "US / Canada / Europe",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "polymarket",
+      "name": "Polymarket",
+      "directory": "brokers",
+      "page_path": "brokers/polymarket.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/BrainDAO/mcp-polymarket",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "public",
+      "name": "Public.com",
+      "directory": "brokers",
+      "page_path": "brokers/public.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://public.com/api/docs/templates/hosted-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "questrade",
+      "name": "Questrade",
+      "directory": "brokers",
+      "page_path": "brokers/questrade.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "false",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/zachmelin/QuestradeMCP",
+      "last_verified": "2026-11-11",
+      "region_raw": "Canada",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "revolut-x",
+      "name": "Revolut X",
+      "directory": "brokers",
+      "page_path": "brokers/revolut-x.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "https://github.com/revolut-engineering/revolut-agent-skills",
+      "last_verified": "2026-11-11",
+      "region_raw": "UK / EEA (Revolut's crypto exchange)",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "robinhood",
+      "name": "Robinhood",
+      "directory": "brokers",
+      "page_path": "brokers/robinhood.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://robinhood.com/us/en/support/articles/onboarding-an-external-agent/",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "saxo-bank",
+      "name": "Saxo Bank",
+      "directory": "brokers",
+      "page_path": "brokers/saxo-bank.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://www.developer.saxo/",
+      "last_verified": "2026-11-11",
+      "region_raw": "EU (Denmark) / global",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "schwab",
+      "name": "Charles Schwab",
+      "directory": "brokers",
+      "page_path": "brokers/schwab.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/jkoelker/schwab-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "snaptrade",
+      "name": "SnapTrade",
+      "directory": "aggregators",
+      "page_path": "aggregators/snaptrade.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://docs.snaptrade.com/docs/mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "US (broker coverage varies)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "sofi",
+      "name": "SoFi",
+      "directory": "readme-only",
+      "page_path": "",
+      "source": "readme-only",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "stash",
+      "name": "Stash",
+      "directory": "brokers",
+      "page_path": "brokers/stash.md",
+      "source": "front-matter",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "none found",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "tastytrade",
+      "name": "tastytrade",
+      "directory": "brokers",
+      "page_path": "brokers/tastytrade.md",
+      "source": "front-matter",
+      "status": [
+        "official",
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/tastytrade/tastytrade-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "teller",
+      "name": "Teller",
+      "directory": "aggregators",
+      "page_path": "aggregators/teller.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "false",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/elcukro/bank-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "the5ers",
+      "name": "The5ers",
+      "directory": "brokers",
+      "page_path": "brokers/the5ers.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://the5ers.com/the5ers-mcp/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global online prop firm (eligibility not checked)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "thinkmarkets",
+      "name": "ThinkMarkets",
+      "directory": "brokers",
+      "page_path": "brokers/thinkmarkets.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (hosted, per-user generated URL)",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://www.thinkmarkets.com/en/ai-trading/chelsea-ai/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Australia / UK (global client base)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "tiger-brokers",
+      "name": "Tiger Brokers",
+      "directory": "brokers",
+      "page_path": "brokers/tiger-brokers.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local (stdio, uvx)",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://docs.itigerup.com/docs/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Asia (Singapore/HK/China) \u2014 multi-market",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "trade-agent",
+      "name": "Trade It (formerly Trade Agent)",
+      "directory": "aggregators",
+      "page_path": "aggregators/trade-agent.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://docs.tradeit.app/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US (broker coverage) + crypto",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "trade-republic",
+      "name": "Trade Republic",
+      "directory": "brokers",
+      "page_path": "brokers/trade-republic.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "false",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/visusnet/trade-republic-mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "EU (Germany)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "traderevolution",
+      "name": "TraderEvolution",
+      "directory": "brokers",
+      "page_path": "brokers/traderevolution.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "unknown",
+      "route_kinds": [
+        "unknown"
+      ],
+      "source_url": "https://traderevolution.com/platform/mcp-server/",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (Dublin \u2014 B2B platform vendor licensed to brokers, banks, prop firms)",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "tradestation",
+      "name": "TradeStation",
+      "directory": "brokers",
+      "page_path": "brokers/tradestation.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://www.tradestation.com/platforms-and-tools/mcp/",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "tradezero",
+      "name": "TradeZero",
+      "directory": "brokers",
+      "page_path": "brokers/tradezero.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://developer.tradezero.com/docs/documentation/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "tradier",
+      "name": "Tradier",
+      "directory": "brokers",
+      "page_path": "brokers/tradier.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://docs.tradier.com/docs/tradier-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [
+        {
+          "route_id": "hosted",
+          "kind": "remote-url",
+          "maintainer": "official",
+          "url": "https://mcp.tradier.com/mcp",
+          "auth": {
+            "type": "bearer-token",
+            "env_vars": [
+              {
+                "name": "TRADIER_PAPER_TRADING",
+                "role": "mode-switch",
+                "required": false,
+                "secret": false
+              }
+            ],
+            "headers": [
+              "API_KEY",
+              "PAPER_TRADING"
+            ],
+            "key_scope_advice": "Use a paper token with PAPER_TRADING true first.",
+            "header_env": {
+              "API_KEY": "TRADIER_API_KEY",
+              "PAPER_TRADING": "TRADIER_PAPER_TRADING"
+            }
+          },
+          "paper": {
+            "supported": "yes",
+            "default": "unconfirmed",
+            "how_to_enable": "set the PAPER_TRADING header to true with a paper token",
+            "enforced_by": "env-or-flag"
+          },
+          "submit": {
+            "can_submit_order": "yes",
+            "confirmation": "none-documented",
+            "confirmation_is_agent_callable": false
+          }
+        }
+      ],
+      "wizard": {
+        "selectable": true
+      }
+    },
+    {
+      "slug": "trading212",
+      "name": "Trading 212",
+      "directory": "brokers",
+      "page_path": "brokers/trading212.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/RohanAnandPandit/trading212-mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "UK / EU",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "tradovate",
+      "name": "Tradovate",
+      "directory": "brokers",
+      "page_path": "brokers/tradovate.md",
+      "source": "front-matter",
+      "status": [
+        "official",
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (official, shared with NinjaTrader) or local community (stdio; Go binary or Node)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://docs.ninjatrader.com/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "truthifi",
+      "name": "Truthifi",
+      "directory": "aggregators",
+      "page_path": "aggregators/truthifi.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://truthifi.com/mcp-tools",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "upstox",
+      "name": "Upstox",
+      "directory": "brokers",
+      "page_path": "brokers/upstox.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote (hosted)",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://upstox.com/developer/api-documentation/mcp-integration/",
+      "last_verified": "2026-11-11",
+      "region_raw": "India",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "vanguard",
+      "name": "Vanguard",
+      "directory": "brokers",
+      "page_path": "brokers/vanguard.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://advisors.vanguard.com/docs/vanguard-advisor-tools-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "wealthfront",
+      "name": "Wealthfront",
+      "directory": "brokers",
+      "page_path": "brokers/wealthfront.md",
+      "source": "front-matter",
+      "status": [
+        "none"
+      ],
+      "trading": "false",
+      "server_type_raw": "n/a",
+      "route_kinds": [
+        "none"
+      ],
+      "source_url": "none found",
+      "last_verified": "2026-11-11",
+      "region_raw": "US",
+      "routes": [],
+      "wizard": {
+        "selectable": false,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "wealthsimple",
+      "name": "Wealthsimple",
+      "directory": "brokers",
+      "page_path": "brokers/wealthsimple.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "false",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://github.com/lwsinclair/wealthsimple-mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "Canada",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "webull",
+      "name": "Webull",
+      "directory": "brokers",
+      "page_path": "brokers/webull.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (Cloud MCP) + local (OpenAPI MCP)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://github.com/webull-inc",
+      "last_verified": "2026-11-11",
+      "region_raw": "US (+ HK, JP, SG, TH, MY, UK, MX, BR, EU, ZA, AU per-product)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "woodstock",
+      "name": "Woodstock",
+      "directory": "brokers",
+      "page_path": "brokers/woodstock.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote",
+      "route_kinds": [
+        "remote"
+      ],
+      "source_url": "https://www.woodstock.club/ja/mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Japan",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "xbtfx",
+      "name": "XBTFX",
+      "directory": "brokers",
+      "page_path": "brokers/xbtfx.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/xbtfx/xbtfx-mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "Antigua and Barbuda entity (global client base)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "xtb",
+      "name": "XTB",
+      "directory": "brokers",
+      "page_path": "brokers/xtb.md",
+      "source": "front-matter",
+      "status": [
+        "community"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/mcp-research/sharplygroup__xtb-mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "EU (Poland) / UK",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "yourbourse",
+      "name": "YourBourse Trade Server",
+      "directory": "aggregators",
+      "page_path": "aggregators/yourbourse.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "local",
+      "route_kinds": [
+        "local"
+      ],
+      "source_url": "https://github.com/yourbourse/trade-server-mcp",
+      "last_verified": "2026-11-11",
+      "region_raw": "Global (broker-side platform for MT4, MT5 and crypto brokers)",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    },
+    {
+      "slug": "zerodha-kite-connect",
+      "name": "Zerodha (Kite Connect)",
+      "directory": "brokers",
+      "page_path": "brokers/zerodha-kite-connect.md",
+      "source": "front-matter",
+      "status": [
+        "official"
+      ],
+      "trading": "true",
+      "server_type_raw": "remote (hosted) + local (self-host Go binary)",
+      "route_kinds": [
+        "remote",
+        "local"
+      ],
+      "source_url": "https://github.com/zerodha/kite-mcp-server",
+      "last_verified": "2026-11-11",
+      "region_raw": "India",
+      "routes": [],
+      "wizard": {
+        "selectable": true,
+        "banner": "setup details not curated yet"
+      }
+    }
+  ]
+}

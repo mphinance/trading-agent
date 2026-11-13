@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from datetime import date, datetime, timezone
+from importlib import resources
 from pathlib import Path
 
 from . import CatalogError
@@ -21,7 +22,21 @@ _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _NOROUTE_SECTION = re.compile(
     r"<details>\s*<summary><b>\d+ brokers with no MCP route[\s\S]*?</details>"
 )
-DEFAULT_OVERLAY = Path(__file__).resolve().parents[3] / "catalog" / "overlay.json"
+
+
+def _packaged_overlay():
+    """The overlay that ships inside the package (works from a wheel as well as a source checkout)."""
+    return resources.files("trading_agent").joinpath("data").joinpath("overlay.json")
+
+
+def default_overlay_text() -> str | None:
+    """The packaged overlay's text, or None (with a one-line warning) when it is missing."""
+    try:
+        return _packaged_overlay().read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        print("warning: the curated overlay file is missing, so no broker will be marked selectable.",
+              file=sys.stderr)
+        return None
 
 
 def _route_kinds(server_type: str) -> list[str]:
@@ -186,11 +201,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--catalog-root", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--overlay", type=Path, default=None,
-                    help="overlay JSON keyed by slug (default: catalog/overlay.json of this repo)")
+                    help="overlay JSON keyed by slug (default: the overlay packaged with this tool)")
     args = ap.parse_args(argv)
     try:
-        overlay_path = args.overlay or (DEFAULT_OVERLAY if DEFAULT_OVERLAY.is_file() else None)
-        overlay = json.loads(overlay_path.read_text(encoding="utf-8")) if overlay_path else {}
+        text = args.overlay.read_text(encoding="utf-8") if args.overlay else default_overlay_text()
+        overlay = json.loads(text) if text else {}
         entries = build_catalog(args.catalog_root, overlay)
     except (CatalogError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

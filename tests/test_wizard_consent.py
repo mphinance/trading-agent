@@ -490,7 +490,7 @@ def test_route_labels_and_orders_are_in_plain_words_never_raw_catalog_tokens(mk)
 def test_the_header_mapping_is_explained_once_in_plain_words(mk):
     import json as _j
     from pathlib import Path
-    real = _j.loads((Path(__file__).parents[1] / "catalog" / "overlay.json").read_text())["tradier"]["routes"]
+    real = _j.loads((Path(__file__).parents[1] / "src" / "trading_agent" / "data" / "overlay.json").read_text())["tradier"]["routes"]
     w = mk(findings=OLLAMA, catalog=[entry("tradier", "Tradier", real)])
     receipt, io = w.run([*TOP, *AI_OLLAMA, "pick:tradier", "continue", "true", "skip", "done", "do"])
     said = "\n".join(io.said)
