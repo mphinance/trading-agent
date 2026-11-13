@@ -529,3 +529,50 @@ def test_an_ambiguous_version_output_asks_instead_of_picking_one(mk):
     with pytest.raises(ScriptExhausted):
         run_wizard(io, w.deps)
     assert io.option_ids() == ["continue", "again", "stop", "back"]
+
+
+# ------------------------------------------------------------------ N2: share questions terminate and never follow "Do it"
+
+class AlwaysDifferentIO(ScriptedIO):
+    """Answers "Enter a different value" at every share prompt, pasting a fresh key each time; the rest is scripted."""
+
+    def __init__(self, answers):
+        super().__init__(answers)
+        self._pastes = 0
+        self._paste_next = False
+
+    def choose(self, prompt, options):
+        if "will be able to read" in prompt:
+            self.prompts.append(("choose", prompt, [(o.id, o.label) for o in options]))
+            self._paste_next = True
+            return "different"
+        return super().choose(prompt, options)
+
+    def secret(self, prompt):
+        if self._paste_next:
+            self._paste_next = False
+            self.prompts.append(("secret", prompt, []))
+            self._pastes += 1
+            return (K2, K3)[self._pastes % 2]
+        return super().secret(prompt)
+
+
+def test_always_a_different_value_terminates_and_nothing_is_asked_after_do_it(mk):
+    w = mk(environ={ORKEY: K1}, findings=[OR_FINDING], catalog=SHARED_CATALOG)
+    io = AlwaysDifferentIO([*AI_THEN_BROKER, "done", "do", "do", "do"])
+    run_wizard(io, w.deps)
+    shares = [i for i, (k, p, _) in enumerate(io.prompts) if k == "choose" and "will be able to read" in p]
+    assert 0 < len(shares) <= 12                                          # bounded, not 27
+    reviews = [i for i, (k, p, _) in enumerate(io.prompts) if "Here is exactly what I will do" in p]
+    last_review = reviews[-1]
+    assert all(i < last_review for i in shares)                          # nothing asked after the final "Do it"
+    for r, nxt in zip(reviews, reviews[1:]):                              # any question after a "Do it" got a fresh REVIEW
+        assert nxt > r
+    plan = w.writes[0].plan
+    values = dict(w.writes[0].values)
+    ai_on = plan.ai != AiChoice("none")
+    assert ai_on != (plan.broker is not None)                            # exactly one consumer kept, the other refused
+    assert ORKEY in values                                                # the kept consumer has its grant
+    review = io.prompts[last_review][1]
+    assert "left out" in review.lower()
+    assert_no_leak(io.everything() + w.state_text(), K1, K2, K3)

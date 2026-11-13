@@ -16,6 +16,7 @@ from trading_agent.profile.receipt import Receipt
 from trading_agent.profile.writer import AiChoice, WriteError
 from trading_agent.wizard import screens
 from trading_agent.wizard.flow import _Wizard, run_wizard
+from trading_agent.wizard.state import State
 
 TWO_BROKERS = [entry("kraken", "Third Party", [COMMUNITY_ROUTE]), entry("alpaca", "Alpaca", [LOCAL_ROUTE])]
 TO_REFUSAL = [*TOP, "paste-openrouter", K1, "continue", "pick:kraken", "continue", "refuse"]
@@ -224,6 +225,8 @@ def test_the_final_plan_resolution_drops_a_consumer_added_after_the_grants_were_
     wiz._labels["ai"] = "the OpenRouter AI connection"
     wiz.decide("broker.slug", "kraken")                         # ...then a consumer of the same NAME appears
     wiz.decide("broker.route", "community")
+    assert wiz._st_write() is State.REVIEW                       # asked at WRITE time: back to a fresh REVIEW, no write
+    assert w.writes == []
     plan = wiz._build_plan()
     assert plan.broker is None and dict(plan.env_values) == {ORKEY: K1} and plan.ai == AiChoice("openrouter")
     assert io.prompts and "will be able to read" in io.prompts[0][1]

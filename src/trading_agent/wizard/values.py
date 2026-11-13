@@ -17,6 +17,7 @@ from trading_agent.wizard.io import BACK_INPUT, Option
 
 _LOGIN_SHELL_WHERE = "login shell environment"  # detect/env.py: present in the login shell only, value unreachable
 _PERSISTED_MODES = ("skip", "keep-existing")
+_SHARE_PASSES = 3    # each pass may ask once per consumer; after that an unresolved consumer is refused
 MODE_VALUES = frozenset({"true", "false", "paper", "live", "0", "1"})
 
 
@@ -166,12 +167,27 @@ class ValueMixin:
         self._ask_share(c, name, secret)
         return True
 
-    def resolve_sharing(self) -> None:
+    def resolve_sharing(self) -> bool:
         """Run before REVIEW and again before WRITE: every consumer that references a NAME whose value exists
-        needs its own grant, whichever order the values were given in. Repeats while an answer changed a value."""
-        for _ in range(6):
+        needs its own grant, whichever order the values were given in. Repeats while an answer changed a value,
+        at most _SHARE_PASSES times; then every consumer still without a grant or an explicit skip is refused, so
+        nothing is ever configured with a ${NAME} it was not given. True if anything was asked or refused."""
+        changed = False
+        for _ in range(_SHARE_PASSES):
             if not self._resolve_pass():
-                return
+                break
+            changed = True
+        return self._refuse_ungranted() or changed
+
+    def _refuse_ungranted(self) -> bool:
+        refused = False
+        for c, specs in self._consumers():
+            for spec in specs:
+                if c.key in self.refused or self._decided(c, spec.name):
+                    continue
+                self.refuse(c, spec.name)
+                refused = True
+        return refused
 
     def _resolve_pass(self) -> bool:
         asked = False

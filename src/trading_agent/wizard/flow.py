@@ -1006,13 +1006,14 @@ class _Wizard(ValueMixin):
     # ---- WRITE
 
     def _build_plan(self) -> WritePlan:
-        self.resolve_sharing()   # again, immediately before the write
         route = self._plan_route()
         broker = BrokerChoice(slug=self.dec("broker.slug"), route_id=self.dec("broker.route"), entry=route) if route else None
         return WritePlan(profile_name=self.dec("profile_name"), ai=self._plan_ai(), broker=broker,
                          skills=[lib.id for lib in self._plan_libs()], env_values=self._plan_values())
 
     def _st_write(self) -> State:
+        if self.resolve_sharing():   # again, immediately before the write: anything asked or refused here was not
+            return State.REVIEW      # in the REVIEW the user agreed to, so they see a fresh one first
         plan = self._build_plan()
         env = plan.env_values   # the dict this module built: emptied below so no value outlives WRITE
         try:
