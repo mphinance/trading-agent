@@ -15,7 +15,7 @@ import pytest
 from fakes import ScriptedIO
 from test_cli import no_window, random_secret
 from test_profile_writer import TmpPlatform
-from test_real_hermes_install import _clean_checkout
+from test_real_hermes_install import _clean_checkout, ready_scratch_hermes
 from trading_agent import bundle as B
 from trading_agent.profile.hermes_cli import HermesCli
 from trading_agent.profile.receipt import Receipt
@@ -35,6 +35,7 @@ def test_real_export_delete_import_round_trip(tmp_path):
     home, hermes_home, config = tmp_path / "home", tmp_path / "hermes", tmp_path / "config"
     for d in (home, hermes_home, config):
         d.mkdir()
+    ready_scratch_hermes(home, hermes_home)
     platform = TmpPlatform(home, config, {
         "PATH": os.environ.get("PATH", ""), "HOME": str(home), "HERMES_HOME": str(hermes_home),
         "XDG_CONFIG_HOME": str(config)})
@@ -60,6 +61,7 @@ def test_real_export_delete_import_round_trip(tmp_path):
     (pdir / "skills" / "my-own").mkdir()
     (pdir / "skills" / "my-own" / "SKILL.md").write_text("---\nname: my-own\n---\n# mine\n")
 
+    original_config = B._load_config((pdir / "config.yaml").read_bytes())
     out = tmp_path / "out" / "tabundle.tgz"
     out.parent.mkdir()
     path, manifest = B.export("tabundle", out, hermes=hermes, receipt=receipt)
@@ -83,6 +85,9 @@ def test_real_export_delete_import_round_trip(tmp_path):
     io = ScriptedIO([True, ""])                       # import it, skip the key
     imported = B.import_bundle(path, hermes=hermes, name=None, io=io, store_factory=store)
     assert imported is not None and imported.profile_name == "tabundle"
+    # a wizard-made profile, written by real Hermes, round trips with nothing dropped (comments may go)
+    assert not any(line.startswith(B.NOT_IMPORTED_HEAD) for line in io.said), io.said
+    assert B._load_config((pdir / "config.yaml").read_bytes()) == original_config
     assert (pdir / "memories" / "MEMORY.md").read_text() == "remember: the round trip worked\n"
     assert (pdir / "skills" / "my-own" / "SKILL.md").is_file()
     env_file = pdir / ".env"
@@ -108,6 +113,7 @@ def test_real_secrets_command_bundle_is_refused_and_never_runs(tmp_path):
     home, hermes_home, config = tmp_path / "home", tmp_path / "hermes", tmp_path / "config"
     for d in (home, hermes_home, config):
         d.mkdir()
+    ready_scratch_hermes(home, hermes_home)
     platform = TmpPlatform(home, config, {
         "PATH": os.environ.get("PATH", ""), "HOME": str(home), "HERMES_HOME": str(hermes_home),
         "XDG_CONFIG_HOME": str(config)})
@@ -137,3 +143,40 @@ def test_real_secrets_command_bundle_is_refused_and_never_runs(tmp_path):
     assert not hermes.profile_dir("evilimport").exists()
     hermes.run(["profile", "list"], timeout=120)
     assert not marker.exists()
+
+
+def test_real_context_engine_path_is_dropped_and_hermes_still_reads_the_profile(tmp_path):
+    """Hermes resolves context.engine as plugins/context_engine/<name> and imports its __init__.py. A bundle that
+    points it into its own skills folder arrives without the setting, and Hermes still reads the profile."""
+    from test_bundle import GOOD_INNER, manifest, tinfo, write_bundle
+    if shutil.which("hermes") is None:
+        pytest.skip("hermes is not installed")
+    home, hermes_home, config = tmp_path / "home", tmp_path / "hermes", tmp_path / "config"
+    for d in (home, hermes_home, config):
+        d.mkdir()
+    ready_scratch_hermes(home, hermes_home)
+    platform = TmpPlatform(home, config, {
+        "PATH": os.environ.get("PATH", ""), "HOME": str(home), "HERMES_HOME": str(hermes_home),
+        "XDG_CONFIG_HOME": str(config)})
+    hermes = HermesCli(platform)
+    store = lambda d: choose_store(platform, d)  # noqa: E731
+    marker = tmp_path / "engine-ran"
+    evil = f"open({str(marker)!r}, 'w').write('ran')\n".encode()
+    cfg = (b"context:\n  engine: ../../../profiles/x/skills/evil\n  memory_trim:\n    enabled: true\n"
+           b"model:\n  provider: openrouter\n")
+    bundle = write_bundle(tmp_path / "engine.tgz", man=manifest(env_names_needed=[]), inner=[
+        *GOOD_INNER, tinfo("trader/skills", tarfile.DIRTYPE), tinfo("trader/skills/evil", tarfile.DIRTYPE),
+        tinfo("trader/skills/evil/__init__.py", data=evil), tinfo("trader/config.yaml", data=cfg)])
+    io = ScriptedIO([True])
+    imported = B.import_bundle(bundle, hermes=hermes, name="x", io=io, store_factory=store)
+    assert imported is not None
+    pdir = hermes.profile_dir("x")
+    written = B._load_config((pdir / "config.yaml").read_bytes())
+    assert written == {"context": {"memory_trim": {"enabled": True}}, "model": {"provider": "openrouter"}}
+    assert any("context.engine" in line for line in io.said if line.startswith(B.NOT_IMPORTED_HEAD))
+    for key, want in (("context.engine", "compressor"), ("model.provider", "openrouter")):
+        got = hermes.run(["-p", "x", "config", "get", key], timeout=300)
+        assert got.returncode == 0 and got.stdout.strip().splitlines()[-1].strip() == want, got.stdout + got.stderr
+    assert not marker.exists()
+    assert rollback(imported, hermes=hermes, store_factory=store)
+    assert not pdir.exists()

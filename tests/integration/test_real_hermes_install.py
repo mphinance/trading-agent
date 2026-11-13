@@ -30,6 +30,20 @@ def _hermes(home: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run([exe, *args], capture_output=True, text=True, env=env, timeout=600)
 
 
+def ready_scratch_hermes(home: Path, hermes_home: Path) -> None:
+    """Hermes 0.23.1 keeps its dependency environment per data root, so a scratch HERMES_HOME needs its own before
+    any command runs (it refuses with "run `hermes pm repair`"). The repair writes only under the scratch root."""
+    exe = shutil.which("hermes")
+    if exe is None:
+        pytest.skip("hermes is not installed")
+    env = {k: v for k, v in os.environ.items() if k in ("PATH", "LANG", "LC_ALL")}
+    env.update(HOME=str(home), HERMES_HOME=str(hermes_home))
+    probe = subprocess.run([exe, "--version"], capture_output=True, text=True, env=env, timeout=120)
+    if "pm repair" in probe.stdout + probe.stderr:
+        fixed = subprocess.run([exe, "pm", "repair"], capture_output=True, text=True, env=env, timeout=600)
+        assert fixed.returncode == 0, fixed.stdout + fixed.stderr
+
+
 def _clean_checkout(dest: Path) -> Path:
     """What a git clone of the repo would hold: tracked and unignored files only. Installing the working tree
     directly fails when it holds a .venv, because Hermes refuses symlinks in a distribution."""
@@ -45,6 +59,7 @@ def _clean_checkout(dest: Path) -> Path:
 
 def test_install_then_update_preserves_a_user_edited_config(tmp_path):
     (tmp_path / "home").mkdir()
+    ready_scratch_hermes(tmp_path / "home", tmp_path / "hermes")
     src = _clean_checkout(tmp_path / "checkout")
     r = _hermes(tmp_path, "profile", "install", str(src), "--name", "tatest", "-y")
     assert r.returncode == 0 and "Installed 'tatest'" in r.stdout, r.stdout + r.stderr
