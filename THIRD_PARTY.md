@@ -52,6 +52,8 @@ The user picks a library in the setup wizard, and it is installed from the libra
 
 The catalog generator reads the awesome-broker-mcp catalog, licensed CC0 1.0. Broker names are their owners' marks.
 
+- Source: https://github.com/mphinance/awesome-broker-mcp
+
 ## Hermes (runtime dependency)
 
 Hermes agent, by Nous Research, is MIT licensed. It is a runtime dependency the user installs separately; it is not vendored here.

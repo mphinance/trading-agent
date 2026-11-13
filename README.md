@@ -5,6 +5,8 @@
 
 **A setup tool that builds a [Hermes](https://hermes-agent.nousresearch.com) agent profile for trading research from the AI access and broker tools you already have, and exports it to a new computer as one file that does not contain your keys.**
 
+The wizard's broker list is generated from [awesome-broker-mcp](https://github.com/mphinance/awesome-broker-mcp), a CC0 community list of broker MCP servers (76 broker entries, 14 aggregators and 4 readme-only, 94 in all). Browse it to see every broker it knows. Today the wizard can install only Alpaca and Tradier itself (curated entries); the rest are searchable and show "setup details not curated yet". To add or fix a broker entry, change it in that catalog repository.
+
 It creates one new Hermes profile (a folder with its own settings, memories and `.env` key file), asks before it uses anything it finds, and does not print key values. It also ships the three small profile files Hermes installs: `distribution.yaml`, `SOUL.md` and `config.yaml`.
 
 > [!WARNING]
@@ -16,7 +18,7 @@ It creates one new Hermes profile (a folder with its own settings, memories and 
 |---|---|
 | What do I run? | `trading-agent setup` (also `undo`, `scan`, `export`, `import`) |
 | What do I need first? | Python 3.11.4 or newer, and Hermes 0.23.0 or newer |
-| What does it change? | One new Hermes profile (Hermes may also add a `~/.local/bin/<profile>` shortcut, seen on import, [UNVERIFIED] on setup: run `ls ~/.local/bin` before and after), plus this tool's own progress and receipt files. No other app, no other profile |
+| What does it change? | One new Hermes profile (`import` makes a `~/.local/bin/<profile>` shortcut; `setup` made none in a test run on Hermes 0.23.1), plus this tool's own progress and receipt files. No other app, no other profile |
 | Where do keys go? | This tool writes them only to the new profile's `.env` file (mode 0600). Hermes and the connectors you pick then use them |
 | Is anything required? | No. No AI, no broker, no data keys all finish |
 | Does it include trading rules? | No. See [What is not included](#what-is-not-included) |

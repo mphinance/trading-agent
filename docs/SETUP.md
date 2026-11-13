@@ -30,7 +30,7 @@
 
 - Linux (the only platform covered so far).
 - Python 3.11.4 or newer (import and export rely on a tar extraction filter that earlier 3.11 releases lack).
-- [uv](https://docs.astral.sh/uv/) or pipx, to install a Python command.
+- [uv](https://docs.astral.sh/uv/) or pipx, to install a Python command. If your system Python is older than 3.11.4 (Debian 12 ships 3.11.2), `uv tool install` fetches a suitable Python by itself, which is the easy route. With pipx, add `--python <path to a 3.11.4 or newer Python>`.
 - Hermes 0.23.0 or newer. `distribution.yaml` says `hermes_requires: ">=0.23.0"`; Hermes refuses to install the profile on anything older.
 
 ## Step 1: install Hermes
@@ -59,7 +59,7 @@ uv tool install "git+https://github.com/mphinance/trading-agent.git@portable-age
 trading-agent --help
 ```
 
-`pipx install "git+https://github.com/mphinance/trading-agent.git@portable-agent"` works the same way. Both put a `trading-agent` command on your path.
+`pipx install "git+https://github.com/mphinance/trading-agent.git@portable-agent"` works the same way. Both put a `trading-agent` command in `~/.local/bin`. If uv warns that this folder "is not on your PATH", run `uv tool update-shell` and open a new terminal (or add the folder to `PATH` yourself), otherwise `trading-agent: command not found`.
 
 > [!NOTE]
 > This install route was exercised through the built wheel in the tests (the wheel contains the three profile files), not yet from a public repository by an outside user.
@@ -86,7 +86,7 @@ cli:claude | ai-cli | absent | claude
 ai-local:ollama | ai-local | absent | ollama
 ```
 
-One line per thing it looked for: where, kind, present or absent, name. The full output is [scan.txt](transcripts/scan.txt); `trading-agent scan --json` prints the same as JSON. To find CLIs and shell-only variables, `scan` starts your login shell (so your shell startup files run) and runs `--version` on any AI CLI it finds. It reads the MCP config files of other apps (Claude Code, Claude Desktop) for server and variable names, and tries a few loopback ports. It sends nothing over the network.
+The excerpt above is shortened: a real run prints about 55 lines, one per thing it looked for (mostly `absent` on a clean machine): where, kind, present or absent, name. The full output is [scan.txt](transcripts/scan.txt); `trading-agent scan --json` prints the same as JSON. To find CLIs and shell-only variables, `scan` starts your login shell (so your shell startup files run) and runs `--version` on any AI CLI it finds. It reads the MCP config files of other apps (Claude Code, Claude Desktop) for server and variable names, and tries a few loopback ports. It sends nothing over the network.
 
 Run the wizard. Flags are optional:
 
@@ -120,10 +120,12 @@ Read the boxes left to right; no profile and no key is written before the last b
 - **Check Hermes.** Finds `hermes`, reads its version, checks it against `>=0.23.0`. If missing or too old, it prints the install or update hint and offers "Check again".
 - **Scan.** Looks for AI tools, saved key names, other apps' MCP settings and local model ports. Reports presence by name only, never a value. Nothing is used yet.
 - **AI for the brain.** Choose none, OpenRouter, Venice, a custom OpenAI-compatible service, or, when the scan found one running, Ollama or LM Studio. A signed-in AI CLI that the scan found cannot power the agent in this version; the wizard says so and leaves that sign-in untouched. A "keep it private" choice shows only a local model or Venice.
-- **Broker.** Pick a broker MCP or "No broker, research only". The ten curated names are listed first, the full catalog is searchable. Only Alpaca and Tradier can be installed here; other entries show "setup details not curated yet" and where to set them up yourself.
+- **Broker.** The list comes from the [awesome-broker-mcp](https://github.com/mphinance/awesome-broker-mcp) catalog (browse it for every broker it knows; fixes to a broker entry are made there). Pick a broker MCP or "No broker, research only". The ten curated names are listed first, the full catalog is searchable. Only Alpaca and Tradier can be installed here; other entries show "setup details not curated yet" and where to set them up yourself.
 - **Skill libraries.** Pick any or none. In this version the choice is recorded by name; nothing is downloaded.
 - **Data keys.** Optional keys that your picks mention. Skip is fine.
 - **Review.** A plain list of exactly what will happen: create the profile, write these key names into the private `.env`, record these picks, change nothing in any other app or profile. Choose "Do it" to write; "Back" changes nothing.
+
+Menu numbers shift with what the scan found (for example the OpenRouter "Key found" entry only appears when that key exists), so read the label, not the number you saw in the transcript.
 
 Keys: when the wizard needs a key it asks for it with a hidden prompt, or offers to copy one it found by name in your environment, one use at a time, and only if you say yes. See [KEYS](KEYS.md).
 
@@ -135,7 +137,7 @@ When it finishes, setup lists what was created, a "Left to finish later" list (f
 trading-agent undo --profile <profile>
 ```
 
-`--profile` can be left out when exactly one profile has a receipt. Undo shows what it will remove and asks `Remove it? [y/N]` (default No). It removes what setup created, by the receipt, and only a profile folder that carries this tool's ownership marker (a hidden `.trading-agent-run` file whose id matches the receipt). That deletes the whole profile folder, memories included, and the `~/.local/bin/<profile>` command shortcut if Hermes made one (seen on import; whether `setup` creates one is [UNVERIFIED]: compare `ls ~/.local/bin` before and after). A profile you made yourself is left alone; when nothing is removed the exit status is 1. Details on keys: [KEYS](KEYS.md#removing-keys). A real run is in [undo.txt](transcripts/undo.txt).
+`--profile` can be left out when exactly one profile has a receipt. Undo shows what it will remove and asks `Remove it? [y/N]` (default No). It removes what setup created, by the receipt, and only a profile folder that carries this tool's ownership marker (a hidden `.trading-agent-run` file whose id matches the receipt). That deletes the whole profile folder, memories included, and the `~/.local/bin/<profile>` command shortcut if Hermes made one (import makes one; a test run of `setup` on Hermes 0.23.1 made none). A profile you made yourself is left alone; when nothing is removed the exit status is 1. Details on keys: [KEYS](KEYS.md#removing-keys). A real run is in [undo.txt](transcripts/undo.txt).
 
 ## If something goes wrong
 

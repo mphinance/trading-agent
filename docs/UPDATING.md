@@ -38,7 +38,7 @@ Two cases are different:
   Edit that one line to `source: github.com/mphinance/trading-agent` in a text editor, then run `hermes profile update <profile>`. Update re-records the source it used, so you do this once. Hermes accepts a git URL such as `github.com/user/repo` there (its own error message says so); whether it can take a branch in `source:` is [UNVERIFIED], so until the maintainer makes `portable-agent` the default branch, this address resolves to the older project: use a local folder holding the new version instead, or wait for the swap. To check, run `hermes profile update` in a scratch `HERMES_HOME`.
 - **A checkout.** Running from a working copy is not supported for setup (see [SETUP](SETUP.md#why-not-run-it-from-a-checkout)). If you installed from a clean clone anyway, the recorded source is that clone's folder; keep it where it is, or set the source to the repository address as above.
 
-A successful update prints:
+Hermes first prints where it will update from and asks `Proceed? [y/N]`; the default is No, so pressing Enter cancels with `Update cancelled.`. Answer `y`, or pass `-y` to skip the question: `hermes profile update <profile> -y`. A wrong or imported profile name gives `Profile '<name>' is not a distribution (no distribution.yaml)`. A successful update prints:
 
 ```text
 ✓ Updated '<profile>' → v<version>
