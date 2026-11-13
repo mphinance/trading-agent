@@ -1896,12 +1896,52 @@ def _free_name(name: str, hermes: HermesCli, io: IO) -> str | None:
         name = picked
 
 
+_PLAIN_PROMPT = "{who}: setting {name} (not a secret, so you will see it).{default} Press Enter to skip it."
+
+
+def _catalog_secret_flags() -> dict[str, tuple[bool, str | None]]:
+    """name -> (is secret, route default) from the shipped catalog's route env specs. A name that appears as
+    secret anywhere counts as secret."""
+    from trading_agent.catalog.snapshot import load_catalog
+    flags: dict[str, tuple[bool, str | None]] = {}
+    for entry in load_catalog():
+        for route in entry.get("routes") or []:
+            for spec in (route.get("auth") or {}).get("env_vars") or []:
+                n = spec.get("name")
+                if not isinstance(n, str):
+                    continue
+                sec = bool(spec.get("secret", True))
+                dflt = spec.get("default") if isinstance(spec.get("default"), str) else None
+                was = flags.get(n)
+                flags[n] = (sec or (was[0] if was else False), (was[1] if was and was[1] else dflt))
+    return flags
+
+
+def _is_secret_name(name: str, flags: dict[str, tuple[bool, str | None]]) -> bool:
+    """Hidden prompt unless the catalog says the name is a plain setting, or (not in the catalog) the name has
+    no secret word in it."""
+    if name in flags:
+        return flags[name][0]
+    return any(w in _SECRET_WORDS or w.rstrip("s") in _SECRET_WORDS for w in name.lower().split("_")) \
+        or name.lower().replace("_", "").endswith(("apikey", "secretkey"))
+
+
 def _ask_keys(names: tuple[str, ...], io: IO) -> dict[str, str]:
-    """Ask or skip, one hidden prompt per name. Environment reuse is deliberately not offered in v1."""
+    """Ask or skip, one prompt per name: hidden for secrets, a visible prompt (with the route's default, if
+    any) for plain settings. Environment reuse is deliberately not offered in v1."""
     values: dict[str, str] = {}
+    flags = _catalog_secret_flags()
     for env_name in names:
+        secret = _is_secret_name(env_name, flags)
+        default = None if secret else flags.get(env_name, (False, None))[1]
         while True:
-            v = io.secret(S.PASTE_PROMPT.format(who=KEY_WHO, name=env_name))
+            if secret:
+                v = io.secret(S.PASTE_PROMPT.format(who=KEY_WHO, name=env_name))
+            else:
+                hint = f" Default: {default}." if default else ""
+                v = io.ask(_PLAIN_PROMPT.format(who=KEY_WHO, name=env_name, default=hint)).strip()
+                if v == "" and default:
+                    v = default
             if v == "":
                 break
             try:

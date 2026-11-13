@@ -612,6 +612,26 @@ def test_import_asks_for_each_needed_key_name(env):
     assert no_window(io_.everything(), s1)
 
 
+def test_import_asks_non_secret_settings_visibly_and_secrets_hidden(env):
+    path = exported(env, values={"ALPACA_PAPER_TRADE": "true"})
+    s1, s2 = random_secret(), random_secret()
+    r, io_ = do_import(env, path, answers=[True, s1, "paper", s2])
+    kinds = {p.split("paste ")[-1].split(" ")[0] if k == "secret" else p.split("setting ")[-1].split(" ")[0]: k
+             for k, p, _ in io_.prompts if k in ("secret", "ask")}
+    assert kinds == {"ALPACA_API_KEY": "secret", "ALPACA_PAPER_TRADE": "ask", "ALPACA_SECRET_KEY": "secret"}
+    envf = env.pdir() / ".env"
+    assert dotenv_read(envf) == {"ALPACA_API_KEY": s1, "ALPACA_PAPER_TRADE": "paper", "ALPACA_SECRET_KEY": s2}
+    assert stat.S_IMODE(envf.stat().st_mode) == 0o600
+    assert no_window(io_.everything(), s1) and no_window(io_.everything(), s2)
+
+
+def test_import_non_secret_setting_can_be_skipped_with_enter(env):
+    path = exported(env, values={"ALPACA_PAPER_TRADE": "true"})
+    r, io_ = do_import(env, path, answers=[True, "", "", ""])
+    assert "ALPACA_PAPER_TRADE" not in r.env_names_written
+    assert not (env.pdir() / ".env").exists()
+
+
 def test_import_does_not_reuse_a_key_from_the_environment(env):
     path = exported(env)
     env.platform._e["ALPACA_API_KEY"] = random_secret()

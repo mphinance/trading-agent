@@ -10,7 +10,7 @@ The bundle's config.yaml sets up these:
 These can run programs on this computer. Import only a bundle you made or trust; the answer defaults to No.
 Import it as a new profile called trader2? [y/N] y
 The imported profile: paste ALPACA_API_KEY (hidden, nothing is shown). Press Enter to skip it. [hidden]
-The imported profile: paste ALPACA_PAPER_TRADE (hidden, nothing is shown). Press Enter to skip it. [hidden]
+The imported profile: setting ALPACA_PAPER_TRADE (not a secret, so you will see it). Press Enter to skip it.
 The imported profile: paste ALPACA_SECRET_KEY (hidden, nothing is shown). Press Enter to skip it. [hidden]
 Imported the profile trader2.
 Left to finish later:

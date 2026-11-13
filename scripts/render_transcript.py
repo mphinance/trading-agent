@@ -274,7 +274,7 @@ def render_all() -> dict[Path, str]:
 IMPORT_ANSWERS = [
     "y",                                   # Import it as a new profile? (the default is No)
     Secret(FAKE_KEY_ID),                   # ALPACA_API_KEY
-    Secret(""),                            # ALPACA_PAPER_TRADE: Enter to skip
+    "",                                    # ALPACA_PAPER_TRADE (a plain setting, visible prompt): Enter to skip
     Secret(FAKE_SECRET_KEY),               # ALPACA_SECRET_KEY
 ]
 
