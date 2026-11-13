@@ -217,6 +217,8 @@ CONFIG_LITERAL_IMPORT = ("The bundle's config.yaml holds values written out in f
                          "${{NAME}} references belong. Nothing was imported.")
 CONFIG_UNREADABLE = "config.yaml could not be read as YAML, so I could not check it. Nothing was written."
 CONFIG_COMPLEX = "config.yaml is too large or too deeply nested to check. Nothing was written."
+CONFIG_ODD_KEYS = ("config.yaml repeats a setting name, or has a setting name that is not text, so I could not "
+                   "check it the way Hermes reads it. Nothing was written.")
 NOT_A_FOLDER = "That path is a file or a link, not a folder. Nothing was written."
 NO_WRITE = "I cannot write there (permission denied). Nothing was written."
 NO_PROFILE = "I found no profile called {name}."
@@ -693,14 +695,65 @@ def _masked_reason(data: bytes) -> str | None:
 
 # ---------------------------------------------------------------- config.yaml checks
 
+_YAML11_YN = re.compile(r"^(?:y|Y|n|N)$")
+
+
+def _yaml_classes() -> tuple[type, type]:
+    """(loader, dumper) that read and write config.yaml the way Hermes 0.23 reads it (hermes_yaml.py: ruamel,
+    YAML 1.1, so bare y and n are booleans, and duplicate keys are errors). PyYAML is YAML 1.1 already except for
+    y and n. The loader also refuses a setting name that is not text. Built once, lazily."""
+    global _YAML_CLASSES
+    if _YAML_CLASSES is None:
+        import yaml
+
+        class Loader(yaml.SafeLoader):
+            bool_values = {**yaml.SafeLoader.bool_values, "y": True, "n": False}
+
+            def construct_mapping(self, node, deep=False):
+                if isinstance(node, yaml.MappingNode):
+                    self.flatten_mapping(node)
+                seen: set[str] = set()
+                for key_node, _ in node.value:
+                    key = self.construct_object(key_node, deep=True)
+                    if not isinstance(key, str) or key in seen:
+                        raise BundleError(CONFIG_ODD_KEYS)
+                    seen.add(key)
+                return super().construct_mapping(node, deep)
+
+        class Dumper(yaml.SafeDumper):
+            def ignore_aliases(self, data):
+                return True
+
+        for cls in (Loader, Dumper):
+            cls.add_implicit_resolver("tag:yaml.org,2002:bool", _YAML11_YN, list("yYnN"))
+        _YAML_CLASSES = (Loader, Dumper)
+    return _YAML_CLASSES
+
+
+_YAML_CLASSES: tuple[type, type] | None = None
+
+
 def _load_config(data: bytes) -> Any:
     if len(data) > MAX_CONFIG_BYTES:
         raise BundleError(CONFIG_COMPLEX)
     import yaml
+    loader, _ = _yaml_classes()
     try:
-        return yaml.safe_load(data.decode("utf-8"))
-    except (yaml.YAMLError, UnicodeDecodeError, RecursionError, ValueError):
+        return yaml.load(data.decode("utf-8"), Loader=loader)  # noqa: S506 - a SafeLoader subclass
+    except (yaml.YAMLError, UnicodeDecodeError, RecursionError, ValueError, TypeError):
         raise BundleError(CONFIG_UNREADABLE) from None
+
+
+def _dump_config(tree: Any) -> bytes:
+    """R50: the bytes an import writes are always a fresh dump of the tree that was checked, and they must read
+    back as exactly that tree (y and n as text are quoted, no anchors). Comments are not kept."""
+    import yaml
+    _, dumper = _yaml_classes()
+    tree = {} if tree is None else tree
+    out = yaml.dump(tree, Dumper=dumper, sort_keys=False, allow_unicode=True, default_flow_style=False).encode()
+    if _load_config(out) != tree:
+        raise BundleError(CONFIG_UNREADABLE)
+    return out
 
 
 def _key_words(key: str) -> list[str]:
@@ -753,6 +806,50 @@ def _literal_problem(value: Any, strict: bool, secret: bool) -> bool:
     return strict or secret
 
 
+def _args_key(key: str) -> bool:
+    """``args``, ``argv``, ``chromium_args``, ``docker_extra_args``: a list of command line arguments."""
+    words = _key_words(key)
+    return bool(words) and words[-1] in ("args", "argv")
+
+
+def _secret_flag(item: str) -> tuple[bool, str | None]:
+    """(ITEM is a flag whose name holds a secret word, the value after ``=`` or None). ``-k`` counts too."""
+    if not item.startswith("-") or item.startswith("---"):
+        return False, None
+    name, eq, value = item.lstrip("-").partition("=")
+    secret = name == "k" or (bool(name) and _secret_key(name))
+    return secret, (value if eq else None)
+
+
+def _args_literals(v: Any, path: tuple[str, ...]) -> list[str]:
+    """Paths of literal secrets in a command line: the item after a secret-word flag (``--api-key X``, ``-k X``)
+    and the value part of ``--token=X``. A ``${NAME}`` reference is fine. A string is split on spaces and
+    named by the whole setting's path."""
+    if isinstance(v, str):
+        items, named = v.split(), lambda i: ".".join(path)
+    elif isinstance(v, list):
+        items, named = v, lambda i: ".".join((*path, str(i)))
+    else:
+        return []
+    out: list[str] = []
+    for i, item in enumerate(items):
+        if not isinstance(item, str):
+            continue
+        secret, value = _secret_flag(item)
+        if not secret:
+            continue
+        if value is not None:
+            if value and not _is_reference(value):
+                out.append(named(i))
+        elif i + 1 < len(items):
+            nxt = items[i + 1]
+            if nxt is None or isinstance(nxt, bool) or (isinstance(nxt, str) and (
+                    nxt == "" or nxt.startswith("--") or _is_reference(nxt))):
+                continue
+            out.append(named(i + 1))
+    return list(dict.fromkeys(out))
+
+
 def _walk_config(cfg: Any) -> tuple[list[str], set[str]]:
     """(dotted key paths holding a literal secret, Hermes setting names referenced in env maps). Iterative and
     capped, so an alias bomb or a deep nest is refused instead of walked. Secret-ness is inherited by every
@@ -771,6 +868,8 @@ def _walk_config(cfg: Any) -> tuple[list[str], set[str]]:
                 key = str(k)
                 if strict and key.startswith("HERMES_"):
                     hermes_names.add(key)
+                if _args_key(key):
+                    literal.extend(_args_literals(v, (*path, key)))
                 child_strict = strict or (isinstance(v, dict) and _map_key(key)) or (
                     isinstance(v, list) and key.lower() in ("env", "headers"))
                 child_path = (*path, key)
@@ -881,31 +980,130 @@ KNOWN_TOP_KEYS = frozenset({
 _SPECIAL_SUBTREES = ("mcp_servers", "hooks", "quick_commands")
 
 
-# R48b: the ONLY config.yaml settings an import brings in. Derived from Hermes 0.23's default config structure
-# (hermes_cli/config_defaults.DEFAULT_CONFIG and cli-config.yaml.example, read-only): model and provider choice,
-# display and UI, memory, context and compression knobs, prompt text, and a few agent knobs that cannot run a program
-# or send data anywhere new. mcp_servers is kept but always shown and confirmed. Everything else is dropped from the
-# imported config.yaml and listed for the user. "*" matches one key.
+# R49: the ONLY config.yaml settings an import brings in, as LEAF paths ("*" = any one key or list index). A leaf
+# keeps a plain value only (text, number, true/false, empty, or a list of those) that passes its rule in
+# SAFE_VALUE_RULES; a mapping under a leaf name is never kept whole. Everything else is dropped and listed, including
+# any child Hermes does not define. Sources (Hermes 0.23.1, read-only, 2026-11-13):
+#   D = hermes_cli/config_defaults.DEFAULT_CONFIG (the default config, walked leaf by leaf)
+#   P = hermes_cli/config_providers._KNOWN_PROVIDER_KEYS and _normalize_custom_provider_entry (provider entries)
+#   M = hermes_cli/runtime_provider_backends.py and the model_cfg.get(...) reads (the model section)
+#   F = hermes_cli/fallback_config.py (fallback_providers entries)
+#   H = hermes_cli/personality.py (personalities: plain prompt text)
+_PROVIDER_LEAVES = (                                            # P, minus key_cmd, ssl_*, extra_* and headers
+    "provider", "name", "base_url", "url", "api", "api_key", "key_env", "api_key_env", "api_mode", "transport",
+    "model", "default_model", "models", "models.*", "models.*.id", "models.*.name", "models.*.context_length",
+    "models.*.max_tokens", "models_discovered", "context_length", "max_tokens", "temperature", "reasoning_effort",
+    "rate_limit_delay", "request_timeout_seconds", "stale_timeout_seconds", "discover_models", "capabilities.*",
+    "catalog_provider",
+)
+_MODEL_LEAVES = ("provider", "default", "model", "name", "base_url", "api_key", "key_env", "api_key_env",  # M
+                 "api_mode", "context_length", "max_tokens", "temperature", "reasoning_effort", "supports_vision")
+_DISPLAY_LEAVES = (                                             # D, minus tool_progress_command, status_phrases
+    "compact", "personality", "resume_display", "resume_exchanges", "resume_max_user_chars",
+    "resume_max_assistant_chars", "resume_max_assistant_lines", "resume_skip_tool_only", "busy_input_mode",
+    "busy_steer_ack_enabled", "cli_multiline_shortcuts", "interface", "cli_layout", "tui_native",
+    "tui_auto_resume_recent", "resume_last_session", "tui_agents_nudge", "bell_on_complete", "bell_on_prompt",
+    "show_reasoning", "reasoning_full", "memory_notifications", "background_process_notifications", "streaming",
+    "timestamps", "timestamp_format", "final_response_markdown", "persistent_output", "persistent_output_max_lines",
+    "cli_rebuild_scrollback_on_redraw", "persist_prompts", "inline_diffs", "inline_images", "file_mutation_verifier",
+    "credits_notices", "turn_completion_explainer", "show_cost", "battery", "focus_view", "focus_saved_tool_progress",
+    "skin", "language", "tui_status_indicator", "cli_refresh_interval", "vim_mode", "user_message_preview.first_lines",
+    "user_message_preview.last_lines", "interim_assistant_messages", "suppress_warning_notifications",
+    "show_commentary", "tool_preview_length", "friendly_tool_labels", "turn_summary", "spinner_token_flow",
+    "tool_progress_grouping", "reasoning_style", "ephemeral_system_ttl", "platforms.*.streaming",
+    "runtime_footer.enabled", "runtime_footer.fields", "status_bar.fields", "copy_shortcut", "pet.enabled",
+    "pet.slug", "pet.render_mode", "pet.scale", "pet.unicode_cols",
+)
+_COMPRESSION_LEAVES = (                                         # D, minus codex_app_server_auto
+    "enabled", "checkpoint_required", "progress_notices", "threshold", "threshold_tokens", "target_ratio", "tail_mode",
+    "protect_last_n", "min_tail_user_messages", "max_attempts", "proactive_prune_tokens",
+    "proactive_prune_min_result_chars", "proactive_prune_min_reclaim_tokens", "micro_compact",
+    "micro_compact_every_n_turns", "micro_compact_defrag_threshold_tokens", "hygiene_hard_message_limit",
+    "hygiene_timeout_seconds", "hygiene_total_ceiling_seconds", "hygiene_failure_cooldown_seconds",
+    "hygiene_max_turn_hold_seconds", "context_timeout_seconds", "context_total_ceiling_seconds", "protect_first_n",
+    "abort_on_summary_failure", "codex_gpt55_autoraise", "codex_gpt55_autoraise_notice", "codex_responses_native",
+    "codex_responses_compact_threshold", "in_place", "model_thresholds.*", "idle_compact_after_seconds",
+    "prepare_ahead",
+)
+
+
+def _under(prefix: str, leaves) -> set[str]:
+    return {f"{prefix}.{leaf}" for leaf in leaves}
+
+
 KNOWN_SAFE_CONFIG = frozenset({
-    "_config_version", "model", "providers", "fallback", "fallback_providers", "auth.adopt_external_logins",
-    "mcp_servers", "display", "memory", "compression", "context", "streaming", "tool_output", "human_delay",
-    "personalities", "prompt_caching", "timezone", "privacy", "goals", "loops", "tool_loop_guardrails", "vision",
-    "context_file_max_chars", "file_read_max_chars", "agent.max_turns", "agent.text_verbosity",
-    "agent.reasoning_overrides", "agent.disabled_toolsets", "agent.service_tier", "skills.template_vars",
+    "_config_version",                                                                          # D (written by Hermes)
+    "model", *_under("model", _MODEL_LEAVES),                                                   # M (model may be text)
+    *_under("providers.*", _PROVIDER_LEAVES),                                                   # P
+    *_under("custom_providers.*", _PROVIDER_LEAVES),                                            # P (legacy list form)
+    *_under("fallback_providers.*", _PROVIDER_LEAVES),                                          # F (same entry shape)
+    "fallback.min_switch_reset_seconds",                                                        # D
+    "auth.adopt_external_logins",                                                               # D
+    "context.engine",                                                                           # D, value rule below
+    *_under("context.memory_trim", ("enabled", "cooldown_seconds", "log_every_n", "info_log_min_delta_mb")),  # D
+    *_under("display", _DISPLAY_LEAVES),                                                        # D
+    *_under("memory", ("memory_enabled", "user_profile_enabled", "memory_char_limit", "user_char_limit",
+                       "nudge_interval")),                     # D, minus provider, write_approval, prefetch_spill
+    *_under("compression", _COMPRESSION_LEAVES),                                                # D
+    *_under("streaming", ("enabled", "transport", "edit_interval", "buffer_threshold", "cursor",
+                          "fresh_final_after_seconds")),                                        # D
+    *_under("tool_output", ("max_bytes", "max_lines", "max_line_length")),                      # D
+    *_under("human_delay", ("mode", "min_ms", "max_ms")),                                       # D
+    "personalities.*", *_under("personalities.*", ("system_prompt", "tone", "style", "description")),  # H
+    "prompt_caching.cache_ttl", "timezone", "privacy.redact_pii", "goals.max_turns",            # D
+    *_under("loops", ("min_interval_seconds", "max_ticks", "self_paced_floor_seconds",
+                      "self_paced_ceiling_seconds")),                                           # D
+    *_under("tool_loop_guardrails", ("warnings_enabled", "hard_stop_enabled", "non_interactive_hard_stop_enabled",
+                                     "warn_after.exact_failure", "warn_after.same_tool_failure",
+                                     "warn_after.idempotent_no_progress", "hard_stop_after.exact_failure",
+                                     "hard_stop_after.same_tool_failure", "hard_stop_after.idempotent_no_progress",
+                                     "loop_caps.max_web_searches", "loop_caps.max_subagents")),  # D
+    *_under("vision", ("embed_target_bytes", "max_calls_per_image", "replay_recent_images")),   # D
+    "context_file_max_chars", "file_read_max_chars",                                            # D
+    *_under("agent", ("max_turns", "text_verbosity", "reasoning_effort", "reasoning_overrides.*", "disabled_toolsets",
+                      "service_tier")),                                                         # D
+    "skills.template_vars",                                                                     # D (a true/false switch)
 })
-# Settings inside an allowed section that are still left out.
-NOT_IMPORTED_UNDER_SAFE = frozenset({
-    "display.tool_progress_command",          # name says command; not needed for a move
-    "memory.provider",                        # an external memory service would receive the memories
-    "memory.write_approval",                  # an approval switch
-    "compression.codex_app_server_auto",      # may start a helper app server
-})
-# Allowlisted names that hold a risky word, each with the reason it is safe to bring in.
+# Subtrees kept whole. Each must be listed in ALLOWLIST_JUSTIFIED. mcp_servers is the only one: it is not data
+# only, so every server, and every setting a server carries beyond the usual ones, is shown before the confirm.
+SAFE_SUBTREES = frozenset({"mcp_servers"})
+
+
+def _ref_or_empty(v: Any) -> bool:
+    return v is None or v == "" or (isinstance(v, str) and _is_reference(v))
+
+
+def _env_name_value(v: Any) -> bool:
+    return v is None or v == "" or (isinstance(v, str) and _ENV_NAME_RE.fullmatch(v) is not None)
+
+
+# Leaves whose VALUE is constrained too. A value that fails its rule is dropped and listed like an unknown setting.
+SAFE_VALUE_RULES: tuple[tuple[str, Callable[[Any], bool]], ...] = (
+    # Hermes imports plugins/context_engine/<name>/__init__.py with no sanitising, so only the built-in is allowed.
+    ("context.engine", lambda v: v == "compressor"),
+    # Maps keyed by a name the user picks: only the value type Hermes reads is kept.
+    ("compression.model_thresholds.*", lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)),
+    ("agent.reasoning_overrides.*", lambda v: isinstance(v, str)),
+    *((f"{root}.capabilities.*", lambda v: isinstance(v, bool))
+      for root in ("providers.*", "custom_providers.*", "fallback_providers.*")),
+    *((f"{root}.{leaf}", _ref_or_empty) for root in ("model", "providers.*", "custom_providers.*",
+                                                      "fallback_providers.*") for leaf in ("api_key",)),
+    *((f"{root}.{leaf}", _env_name_value) for root in ("model", "providers.*", "custom_providers.*",
+                                                        "fallback_providers.*") for leaf in ("key_env", "api_key_env")),
+)
+# Allowlisted names that hold a risky word, and kept subtrees, each with the reason it is safe to bring in.
 ALLOWLIST_JUSTIFIED: dict[str, str] = {
-    "mcp_servers": "every server's command or address is shown before the default-No confirm",
-    "model.base_url": "shown as an address, with every key reference that would be sent to it",
-    "providers": "provider addresses are shown, with every key reference that would be sent to them",
-    "fallback_providers": "provider addresses are shown, with every key reference that would be sent to them",
+    "mcp_servers": "every server's command, address, folder, env references and extra settings are shown before "
+                   "the default-No confirm",
+    "model.base_url": "shown as an address that will receive the provider's API key",
+    "model.api_key": "kept only as a ${NAME} reference, and shown as sent to the model's address",
+    "model.key_env": "kept only as a plain variable name, and shown as sent to the model's address",
+    "model.api_key_env": "kept only as a plain variable name, and shown as sent to the model's address",
+    "display.runtime_footer": "which fields the status footer shows (model, context percent, folder)",
+    "providers": "provider addresses are shown as receiving the provider's API key, with every key reference",
+    "custom_providers": "provider addresses are shown as receiving the provider's API key, with every key reference",
+    "fallback_providers": "provider addresses are shown as receiving the provider's API key, with every key reference",
+    "context.engine": "kept only when the value is exactly compressor (the built-in engine)",
     "context_file_max_chars": "a size limit, not a file path",
     "file_read_max_chars": "a size limit, not a file path",
     "display.file_mutation_verifier": "a display toggle for showing file edit checks",
@@ -921,6 +1119,8 @@ ALLOWLIST_JUSTIFIED: dict[str, str] = {
     "compression.checkpoint_required": "a context compression switch",
     "tool_loop_guardrails.non_interactive_hard_stop_enabled": "a stop limit, it can only make the agent stop sooner",
 }
+_SAFE_SPECS = tuple(tuple(p.split(".")) for p in sorted(KNOWN_SAFE_CONFIG))
+_RULE_SPECS = tuple((tuple(p.split(".")), rule) for p, rule in SAFE_VALUE_RULES)
 
 
 def _path_match(pattern: str, path: tuple[str, ...]) -> bool:
@@ -929,10 +1129,13 @@ def _path_match(pattern: str, path: tuple[str, ...]) -> bool:
     return len(parts) <= len(path) and all(a == "*" or a == b for a, b in zip(parts, path))
 
 
-def _extends(pattern: str, path: tuple[str, ...]) -> bool:
-    """PATTERN reaches below PATH (PATH is a strict prefix of it)."""
-    parts = pattern.split(".")
-    return len(parts) > len(path) and all(a == "*" or a == b for a, b in zip(parts, path))
+def _spec_is(spec: tuple[str, ...], path: tuple[str, ...]) -> bool:
+    return len(spec) == len(path) and all(a == "*" or a == b for a, b in zip(spec, path))
+
+
+def _spec_below(spec: tuple[str, ...], path: tuple[str, ...]) -> bool:
+    """SPEC reaches below PATH (PATH is a strict prefix of it)."""
+    return len(spec) > len(path) and all(a == "*" or a == b for a, b in zip(spec, path))
 
 
 def _justified(dotted: str) -> bool:
@@ -940,32 +1143,46 @@ def _justified(dotted: str) -> bool:
     return any(_path_match(p, path) for p in ALLOWLIST_JUSTIFIED)
 
 
+def _scalar(v: Any) -> bool:
+    return v is None or isinstance(v, (str, bool, int, float))
+
+
+def _plain(v: Any) -> bool:
+    return _scalar(v) or (isinstance(v, list) and all(_scalar(x) for x in v))
+
+
+def _leaf_ok(path: tuple[str, ...], v: Any) -> bool:
+    return _plain(v) and all(rule(v) for spec, rule in _RULE_SPECS if _spec_is(spec, path))
+
+
 def _filter_config(cfg: Any) -> tuple[Any, list[str]]:
-    """(the settings an import brings in, dotted paths it leaves out). Key order is kept."""
+    """(the settings an import brings in, dotted paths it leaves out). Key and list order are kept."""
     if not isinstance(cfg, dict):
         return cfg, []
     dropped: list[str] = []
 
-    def state(path: tuple[str, ...]) -> str:
-        if any(_path_match(u, path) for u in NOT_IMPORTED_UNDER_SAFE):
-            return "drop"
-        if any(_path_match(a, path) for a in KNOWN_SAFE_CONFIG):
-            return "partial" if any(_extends(u, path) for u in NOT_IMPORTED_UNDER_SAFE) else "keep"
-        return "partial" if any(_extends(a, path) for a in KNOWN_SAFE_CONFIG) else "drop"
-
-    def rec(node: dict, path: tuple[str, ...]) -> dict:
-        out: dict = {}
-        for k, v in node.items():
+    def rec(node: Any, path: tuple[str, ...]) -> Any:
+        items = list(node.items()) if isinstance(node, dict) else list(enumerate(node))
+        out: Any = {} if isinstance(node, dict) else []
+        for k, v in items:
             p = (*path, str(k))
-            st = state(p)
-            if st == "keep":
-                out[k] = v
-            elif st == "partial" and isinstance(v, dict):
-                sub = rec(v, p)
-                if sub or not v:
-                    out[k] = sub
+            if any(_path_match(t, p) for t in SAFE_SUBTREES):
+                kept = v
+            elif any(_spec_is(s, p) for s in _SAFE_SPECS) and _leaf_ok(p, v):
+                kept = v
+            elif isinstance(v, (dict, list)) and v and any(_spec_below(s, p) for s in _SAFE_SPECS):
+                kept = rec(v, p)
+                if not kept:
+                    continue                      # everything under it was dropped and is listed by its own path
+            elif isinstance(v, (dict, list)) and not v and any(_spec_below(s, p) for s in _SAFE_SPECS):
+                kept = v                          # an empty section such as providers: {}
             else:
                 dropped.append(".".join(p))
+                continue
+            if isinstance(out, dict):
+                out[k] = kept
+            else:
+                out.append(kept)
         return out
 
     return rec(cfg, ()), dropped
@@ -1019,6 +1236,125 @@ def _capped(lines: list[str], what: str) -> list[str]:
     return [*lines[:MAX_SHOWN], f"and {len(lines) - MAX_SHOWN} more {what}"]
 
 
+_PROVIDER_ROOTS = ("model", "providers", "custom_providers", "fallback_providers")
+_PROVIDER_ADDRESS_KEYS = ("base_url", "url", "api", "endpoint")
+_PROGRAM_LAST_WORDS = frozenset({"cmd", "command", "exec", "bin", "binary", "script", "launcher", "program", "shell"})
+# Settings that change how HTTPS connections are checked (Hermes reads ssl_verify and ssl_ca_cert on providers and
+# MCP servers, client_cert and client_key on MCP servers).
+_TLS_KEYS = frozenset({"ssl_verify", "verify_ssl", "tls_verify", "verify", "insecure", "ssl_ca_cert", "ca_cert",
+                       "ca_bundle", "client_cert", "client_key", "ssl_cert", "ssl_key"})
+_MCP_USUAL = frozenset({"command", "args", "env", "url", "headers", "cwd", "timeout", "connect_timeout", "enabled",
+                        "description", "transport", "type"})
+_REF_NAMES = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+
+
+def _program_key(key: str) -> bool:
+    """``command``, ``key_cmd``, ``codex_bin``, ``binary_path``: a setting that names a program to run."""
+    words = _key_words(key)
+    return key.lower() in SHOWN_LEAF_KEYS or (bool(words) and words[-1] in _PROGRAM_LAST_WORDS)
+
+
+def _send_lines(node: dict, where: str, address: str) -> list[str]:
+    """Only values that ARE references (``${NAME}``, ``Bearer ${NAME}``) and ``key_env`` names: those are keys
+    Hermes reads from the environment and sends. Other text is not a key."""
+    out: list[str] = []
+    stack: list[tuple[Any, str]] = [(node, where)]
+    budget = 1000
+    while stack and budget > 0:
+        n, p = stack.pop()
+        budget -= 1
+        if isinstance(n, dict):
+            for k, v in n.items():
+                key, sub = str(k), f"{p}.{k}" if p else str(k)
+                if key in ("key_env", "api_key_env") and isinstance(v, str) and _ENV_NAME_RE.fullmatch(v):
+                    out.append(f"Would send the key in ${{{v}}} ({_clip(sub)}) to {_clip(address)}")
+                elif isinstance(v, str) and _is_reference(v):
+                    out += [f"Would send the key in ${{{ref}}} ({_clip(sub)}) to {_clip(address)}"
+                            for ref in _REF_NAMES.findall(v)]
+                elif isinstance(v, (dict, list)):
+                    stack.append((v, sub))
+        elif isinstance(n, list):
+            stack.extend((v, f"{p}.{i}") for i, v in enumerate(n))
+    return sorted(set(out))
+
+
+def _provider_nodes(cfg: dict):
+    model = cfg.get("model")
+    if isinstance(model, dict):
+        yield "model", model
+    providers = cfg.get("providers")
+    if isinstance(providers, dict):
+        yield from ((f"providers.{k}", v) for k, v in providers.items())
+    for root in ("custom_providers", "fallback_providers"):
+        items = cfg.get(root)
+        if isinstance(items, list):
+            yield from ((f"{root}.{i}", v) for i, v in enumerate(items))
+
+
+def _provider_lines(cfg: dict) -> tuple[list[str], list[str]]:
+    """Every provider address, said plainly to receive that provider's API key: Hermes sends the provider's key to
+    a base_url set in config.yaml even with no key reference in sight (runtime_provider_backends.py treats
+    provider: openrouter plus a base_url as a deliberate mirror). Then each key reference sent there."""
+    addresses: list[str] = []
+    sends: list[str] = []
+    for where, node in _provider_nodes(cfg):
+        if not isinstance(node, dict):
+            continue
+        keys = [k for k in _PROVIDER_ADDRESS_KEYS if not (where == "model" and k == "api")]
+        found = [(k, node[k]) for k in keys if isinstance(node.get(k), str) and node[k].strip()]
+        for k, addr in found:
+            addresses.append(f"{_clip(where)}.{k}: {_clip(addr)} (this address will receive the API key for this "
+                             "provider)")
+        if found:
+            sends += _send_lines(node, where, found[0][1])
+    return addresses, sends
+
+
+def _mcp_lines(servers: dict) -> list[str]:
+    out: list[str] = []
+    for name, entry in servers.items():
+        shown = _clip(name)
+        if not isinstance(entry, dict):
+            out.append(f"MCP server {shown}")
+            continue
+        if entry.get("command") is not None:
+            raw_args = entry.get("args")
+            args = raw_args if isinstance(raw_args, list) else ([raw_args] if isinstance(raw_args, str) else [])
+            out.append(f"MCP server {shown}: runs {_clip(' '.join(str(x) for x in [entry['command'], *args]))}")
+        elif entry.get("url") is not None:
+            out.append(f"MCP server {shown}: connects to {_clip(entry['url'])}")
+        else:
+            out.append(f"MCP server {shown}")
+        if _nonempty(entry.get("cwd")):
+            out.append(f"MCP server {shown}: runs in the folder (cwd) {_clip(entry['cwd'])}")
+        env = entry.get("env")
+        if isinstance(env, dict):
+            out += [f"MCP server {shown}: sets {_clip(k)} to {_clip(v)}" for k, v in env.items()]
+        if isinstance(entry.get("url"), str):
+            out += _send_lines(entry, f"mcp_servers.{name}", entry["url"])
+        other = [str(k) for k in entry if str(k) not in _MCP_USUAL and str(k) not in _TLS_KEYS]
+        if other:
+            out.append(f"MCP server {shown} also sets: {', '.join(_clip(k) for k in other)}")
+    return out
+
+
+def _tls_lines(cfg: Any) -> list[str]:
+    out: list[str] = []
+    stack: list[tuple[Any, tuple[str, ...]]] = [(cfg, ())]
+    budget = MAX_CONFIG_NODES
+    while stack and budget > 0:
+        node, path = stack.pop()
+        budget -= 1
+        items = node.items() if isinstance(node, dict) else enumerate(node) if isinstance(node, list) else ()
+        for k, v in items:
+            p = (*path, str(k))
+            if isinstance(node, dict) and str(k).lower() in _TLS_KEYS and not isinstance(v, (dict, list)):
+                out.append(f"{_clip('.'.join(p))}: {_clip(v)} (changes how secure connections are checked)")
+            elif isinstance(v, (dict, list)):
+                stack.append((v, p))
+    return sorted(out)
+
+
 def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
     """What an imported config.yaml can run or reach, in plain words (best effort, R47 tier 2). Tier 1 settings
     were refused before this runs."""
@@ -1035,17 +1371,7 @@ def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
                 lines.append(f"Command approvals: {key} is approve (risky commands run without asking)")
     servers = cfg.get("mcp_servers")
     if isinstance(servers, dict):
-        mcp = []
-        for name, entry in servers.items():
-            if isinstance(entry, dict) and entry.get("command") is not None:
-                raw_args = entry.get("args")
-                args = raw_args if isinstance(raw_args, list) else ([raw_args] if isinstance(raw_args, str) else [])
-                mcp.append(f"MCP server {_clip(name)}: runs {_clip(' '.join(str(x) for x in [entry['command'], *args]))}")
-            elif isinstance(entry, dict) and entry.get("url") is not None:
-                mcp.append(f"MCP server {_clip(name)}: connects to {_clip(entry['url'])}")
-            else:
-                mcp.append(f"MCP server {_clip(name)}")
-        lines += _capped(mcp, "MCP servers")
+        lines += _capped(_mcp_lines(servers), "MCP server lines")
     hooks = cfg.get("hooks")
     if isinstance(hooks, dict):
         hk = []
@@ -1089,9 +1415,9 @@ def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
         for k, v in node.items():
             key = str(k)
             p = (*path, key)
-            if not path and key in _SPECIAL_SUBTREES:
+            if not path and key in (*_SPECIAL_SUBTREES, *_PROVIDER_ROOTS):
                 continue
-            if key.lower() in SHOWN_LEAF_KEYS and not isinstance(v, dict) and _nonempty(v):
+            if _program_key(key) and not isinstance(v, dict) and _nonempty(v):
                 programs.append(f"{'.'.join(p)}: {_clip(_flat(v))}")
             elif _address_key(key) and isinstance(v, str) and v:
                 addresses.append(f"{'.'.join(p)}: {_clip(v)}")
@@ -1099,20 +1425,12 @@ def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
             if isinstance(v, (dict, list)):
                 stack.append((v, p))
         if address is not None:
-            refs = _refs_in(node, [1000])
-            if isinstance(node.get("key_env"), str) and _ENV_NAME_RE.fullmatch(node["key_env"]):
-                refs.add(node["key_env"])
-            for ref in sorted(refs):
-                sends.append(f"Would send ${{{ref}}} to {_clip(address)}")
-    servers_sends = []
-    if isinstance(servers, dict):
-        for entry in servers.values():
-            if isinstance(entry, dict) and isinstance(entry.get("url"), str):
-                for ref in sorted(_refs_in(entry, [1000])):
-                    servers_sends.append(f"Would send ${{{ref}}} to {_clip(entry['url'])}")
+            sends += _send_lines(node, ".".join(path), address)
+    provider_addresses, provider_sends = _provider_lines(cfg)
     lines += _capped(sorted(programs), "program settings")
-    lines += _capped(sorted(addresses), "addresses")
-    lines += _capped(sends + servers_sends, "keys sent to addresses")
+    lines += _capped(provider_addresses + sorted(addresses), "addresses")
+    lines += _capped(provider_sends + sends, "keys sent to addresses")
+    lines += _capped(_tls_lines(cfg), "secure connection settings")
     unknown = sorted(str(k) for k in cfg if str(k) not in KNOWN_TOP_KEYS)
     lines += _capped([f"Setting this tool does not know: {_clip(k)}" for k in unknown], "unknown settings")
     lines += _capped([f"Hermes setting {_clip(n)} is passed to a program it starts" for n in sorted(hermes_names)],
@@ -1471,11 +1789,9 @@ def read_bundle(path: Path, work: Path
             raise BundleError(CONFIG_LITERAL_IMPORT.format(paths=_paths_text(literal)))
         if cfg is not None and not isinstance(cfg, dict):
             raise BundleError(CONFIG_NOT_MAPPING)
-        kept, dropped = _filter_config(cfg)          # R48b: only allowlisted settings are brought in
-        if dropped:
-            import yaml
-            trimmed = yaml.safe_dump(kept, sort_keys=False, allow_unicode=True, default_flow_style=False).encode()
-            entries = [(r, d, trimmed if r == "config.yaml" and not d else b) for r, d, b in entries]
+        kept, dropped = _filter_config(cfg)          # R49: only allowlisted leaves are brought in
+        written = _dump_config(kept)                  # R50: always the checked tree, never the bundle's bytes
+        entries = [(r, d, written if r == "config.yaml" and not d else b) for r, d, b in entries]
         _, hermes_names = _walk_config(kept)
         risky = _risky_lines(kept, hermes_names)
     return manifest, entries, risky, dropped
