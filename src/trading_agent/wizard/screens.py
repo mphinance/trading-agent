@@ -223,3 +223,6 @@ LATER_BROKER = "Pick a broker (optional; research works without one)."
 LATER_NAME = "Add {name} for {who} (you skipped it)."
 LATER_OAUTH = "Sign in to {name} on its own site (setup cannot do that for you)."
 LATER_BROKER_TEST = "Test the {name} connection: {status}."
+NEW_SETUP_FOR = ("Starting a new setup for {name}. The saved setup for {old} was not finished "
+                 "and is left alone.")
+NEW_SETUP_FOR_ANON = "Starting a new setup for {name}. The saved setup was not finished and is left alone."

@@ -105,6 +105,15 @@ _UNSUPPORTED_AI_KEYS = ("ANTHROPIC_API_KEY",)
 _VERSION_PIN = S.HERMES_MIN_VERSION
 
 
+class ResumeConflict(Exception):
+    """``--profile NAME`` differs from a saved setup that is already writing its profile. Carries the old
+    name (None if it is not a valid name), never anything else."""
+
+    def __init__(self, old: str | None) -> None:
+        super().__init__("saved setup is mid-write")
+        self.old = old
+
+
 class _Quit(Exception):
     """The user chose to stop here. State is already saved."""
 
@@ -132,6 +141,7 @@ class _Wizard(ValueMixin):
         if self.ws.current is State.DONE:       # a finished run is history: a new run starts fresh
             self.ws = WizardState()
         self._init_values()
+        self._apply_preset()
         self._findings: list[Finding] | None = None
         self._could_not: list[str] = []
         self.receipt: Receipt | None = None
@@ -196,6 +206,23 @@ class _Wizard(ValueMixin):
             State.DATA_KEYS: self._st_data_keys, State.REVIEW: self._st_review, State.WRITE: self._st_write,
             State.VERIFY: self._st_verify, State.DONE: self._st_done,
         }
+
+    def _apply_preset(self) -> None:
+        """``--profile NAME`` never loses to a saved setup for another name. A saved setup that has not
+        started writing is dropped (it holds only decision tokens; the profile it named is left alone); one that
+        has is refused, so a half-written profile is never silently orphaned."""
+        preset, saved = self.d.profile_name, self.dec("profile_name")
+        if preset is None or not saved or saved == preset:
+            return
+        try:
+            validate_profile_name(saved)
+            old: str | None = saved
+        except ValueError:
+            old = None
+        if self.ws.current in (State.WRITE, State.VERIFY):
+            raise ResumeConflict(old)
+        self.ws = WizardState()
+        self.say(S.NEW_SETUP_FOR.format(name=preset, old=old) if old else S.NEW_SETUP_FOR_ANON.format(name=preset))
 
     # ---- saved state: validate every answer against its domain
 

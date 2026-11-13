@@ -21,6 +21,11 @@ NOT_IN_BUILD = "The setup files for the agent are not in this build yet."
 NOT_A_DISTRIBUTION = "That folder does not look like a Hermes distribution: it has no distribution.yaml."
 UNEXPECTED = ("Something unexpected went wrong ({kind}). Run the command again; "
               "`trading-agent undo` removes anything setup created.")
+UNEXPECTED_PLAIN = "Something unexpected went wrong ({kind}). Run the command again."
+RESUME_CONFLICT = ("A saved setup for {old} is already writing its profile. Run `trading-agent setup` "
+                   "without --profile to continue it, or `trading-agent undo` first.")
+RESUME_CONFLICT_ANON = ("A saved setup is already writing its profile. Run `trading-agent setup` "
+                        "without --profile to continue it, or `trading-agent undo` first.")
 NO_RECEIPT_ANY = "I found no setup receipt, so there is nothing to undo."
 NO_RECEIPT_ONE = "I found no setup receipt for {name}, so there is nothing to undo."
 BAD_NAME = "That is not a valid profile name."
@@ -68,7 +73,7 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     from trading_agent.libraries import load_libraries
     from trading_agent.profile.hermes_cli import HermesCli
     from trading_agent.secrets import choose_store
-    from trading_agent.wizard.flow import Deps, run_wizard
+    from trading_agent.wizard.flow import Deps, ResumeConflict, run_wizard
     from trading_agent.wizard.io import ConsoleIO
     if args.profile is not None and not _valid_name(args.profile):
         _err(BAD_NAME)
@@ -89,7 +94,11 @@ def _cmd_setup(args: argparse.Namespace) -> int:
         catalog=load_catalog(), libraries=load_libraries(),
         store_factory=lambda profile_dir: choose_store(platform, profile_dir), source_dir=dist,
         profile_name=args.profile)
-    receipt = run_wizard(ConsoleIO(), deps)
+    try:
+        receipt = run_wizard(ConsoleIO(), deps)
+    except ResumeConflict as conflict:
+        _err(RESUME_CONFLICT.format(old=conflict.old) if conflict.old else RESUME_CONFLICT_ANON)
+        return 2
     return 0 if receipt is not None else 1
 
 
@@ -245,5 +254,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         _quiet_stdout()
         return 1
     except Exception as exc:  # noqa: BLE001 - the type name only: str(exc) could hold a secret
-        print(UNEXPECTED.format(kind=type(exc).__name__), file=sys.stderr)
+        template = UNEXPECTED if command == "setup" else UNEXPECTED_PLAIN
+        print(template.format(kind=type(exc).__name__), file=sys.stderr)
         return 1

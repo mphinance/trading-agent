@@ -231,8 +231,8 @@ def test_an_unexpected_exception_prints_only_its_type(world, monkeypatch, capsys
 
     def boom(_args):
         raise RuntimeError(f"details with {secret}")
-    monkeypatch.setattr(cli, "_cmd_scan", boom)
-    rc, out, err = run_cli(monkeypatch, capsys, ["scan"])
+    monkeypatch.setattr(cli, "_cmd_setup", boom)
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup"])
     assert rc == 1 and "RuntimeError" in err and err.count("\n") == 1
     assert "trading-agent undo" in err and "Nothing was changed" not in err
     assert no_window(out + err, secret) and "Traceback" not in err
@@ -536,3 +536,66 @@ def test_scan_masks_a_key_shaped_mcp_server_name(world, real_detectors, monkeypa
     assert rc == 0 and "claude" in out.lower() and key not in out + err and no_window(out + err, key[3:])
     rc, out, err = run_cli(monkeypatch, capsys, ["scan", "--json"])
     assert key not in out
+
+
+# ---------------------------------------------------------------- fix round 2
+
+def _interrupted_at_ai_route(world, monkeypatch, capsys):
+    rc, _, _ = run_cli(monkeypatch, capsys, ["setup", "--distribution", str(world.dist)], ["start", "", "scan"])
+    assert rc == 1
+    state = json.loads((world.config_home / "trading-agent" / "state.json").read_text())
+    assert state["current"] == "AI_ROUTE" and state["decisions"]["profile_name"] == "trader"
+
+
+def test_resumed_setup_with_a_different_profile_flag_starts_over_with_a_warning(world, monkeypatch, capsys):
+    _interrupted_at_ai_route(world, monkeypatch, capsys)
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--profile", "other", "--distribution", str(world.dist)],
+                           ["start", "scan", "skip", "continue", "none", "done", "do"])
+    assert rc == 0 and world.pdir("other").is_dir() and not world.pdir("trader").exists()
+    assert "Starting a new setup for other. The saved setup for trader was not finished and is left alone." in out
+    assert "trading-agent undo --profile other" in out
+
+
+def test_resumed_setup_with_the_same_profile_flag_just_resumes(world, monkeypatch, capsys):
+    _interrupted_at_ai_route(world, monkeypatch, capsys)
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--profile", "trader", "--distribution", str(world.dist)],
+                           ["skip", "continue", "none", "done", "do"])
+    assert rc == 0 and world.pdir("trader").is_dir() and "Starting a new setup" not in out
+
+
+def test_a_differing_profile_flag_refuses_when_the_saved_setup_is_mid_write(world, monkeypatch, capsys):
+    _interrupted_at_ai_route(world, monkeypatch, capsys)
+    path = world.config_home / "trading-agent" / "state.json"
+    doc = json.loads(path.read_text())
+    doc["current"] = "WRITE"
+    path.write_text(json.dumps(doc))
+    before = path.read_text()
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--profile", "other", "--distribution", str(world.dist)])
+    assert rc == 2 and err.strip() == cli.RESUME_CONFLICT.format(old="trader") and out == ""
+    assert path.read_text() == before and not world.pdir("other").exists()
+
+
+def test_catalog_build_write_is_atomic(tmp_path, monkeypatch):
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text("{}")
+    out = tmp_path / "o.json"
+    out.write_bytes(b"OLD-CONTENT")
+
+    def refuse(*_a, **_k):
+        raise OSError("replace refused")
+    monkeypatch.setattr(os, "replace", refuse)
+    rc = cli.main(["catalog", "build", "--catalog-root", str(FIXTURE_CATALOG), "--out", str(out),
+                   "--overlay", str(overlay)])
+    assert rc == 1 and out.read_bytes() == b"OLD-CONTENT"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["o.json", "overlay.json"]
+
+
+@pytest.mark.parametrize("argv", [["scan"], ["catalog", "build", "--catalog-root", "x", "--out", "y"]])
+def test_unexpected_tail_mentions_undo_only_for_setup(world, monkeypatch, capsys, argv):
+    monkeypatch.setattr(cli, "_cmd_scan", lambda a: 1 / 0)
+    monkeypatch.setattr(cli, "_cmd_catalog_build", lambda a: 1 / 0)
+    rc, out, err = run_cli(monkeypatch, capsys, argv)
+    assert rc == 1 and err.strip() == cli.UNEXPECTED_PLAIN.format(kind="ZeroDivisionError")
+    monkeypatch.setattr(cli, "_cmd_setup", lambda a: 1 / 0)
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup"])
+    assert "trading-agent undo" in err and "ZeroDivisionError" in err
