@@ -122,10 +122,27 @@ _MASKED = re.compile(r"(?<![A-Za-z0-9_\-])(?:sk-|gh[pousr]_|github_|xox[abposr]-
 
 # config.yaml literal-value rule. Key names are split into words (snake, kebab and camel case).
 _SECRET_WORDS = frozenset({"key", "keys", "apikey", "secret", "secrets", "token", "password", "passwd", "pwd",
+                           "signature", "bearer",
                            "passphrase", "auth", "authorization", "credential", "credentials", "cookie", "cookies"})
 _NOT_A_VALUE_LAST = frozenset({"env", "url", "uri", "endpoint", "file", "path", "dir", "type", "mode", "method",
                                "provider", "name", "header", "scheme", "kind", "style", "required", "enabled"})
-_COUNT_WORDS = frozenset({"max", "min", "limit", "limits", "count", "budget", "length", "size", "ttl", "timeout"})
+_COUNT_WORDS = frozenset({"max", "min", "limit", "limits", "count", "budget", "length", "size", "ttl", "timeout",
+                          "threshold"})
+# Hermes 0.23 default settings whose names hold a secret word but whose values are not secrets. Derived by walking
+# hermes_cli/config_defaults.DEFAULT_CONFIG for secret-word keys (tests/fixtures/hermes_default_config_sample.yaml
+# holds those defaults). A path here, or under it, is never a literal secret.
+SAFE_CONFIG_PATHS = frozenset({
+    "terminal.docker_shared_container_key", "compression.threshold_tokens", "compression.proactive_prune_tokens",
+    "compression.proactive_prune_min_reclaim_tokens", "compression.micro_compact_defrag_threshold_tokens",
+    "display.spinner_token_flow", "dashboard.show_token_analytics", "dashboard.basic_auth.username",
+    "dashboard.basic_auth.session_ttl_seconds", "dashboard.session_token_auth.enabled", "dashboard.drain_auth.scope",
+    "dashboard.drain_auth.min_secret_chars", "voice.record_key", "delegation.compression_threshold_tokens",
+    "discord.dm_role_auth_guild", "auth.codex_login_flow", "tools.tool_search.listing_max_tokens", "vault.key_storage",
+    "secrets.bitwarden.project_id", "secrets.bitwarden.cache_ttl_seconds", "secrets.bitwarden.encrypted_cache",
+    "secrets.bitwarden.override_existing", "secrets.bitwarden.auto_install", "secrets.onepassword.account",
+    "secrets.onepassword.cache_ttl_seconds", "secrets.onepassword.override_existing", "proxy.credential_source",
+    "desktop.password_store", "credential_pool_strategies",
+})
 _STRICT_REF = re.compile(r"\$\{[A-Z_][A-Z0-9_]*\}")
 _ANY_REF = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)")
 _IMPORTED_AT = re.compile(r"(?m)Imported profile '[^'\n]*' at (.+?)\s*$")
@@ -180,8 +197,19 @@ SECRET_CONTENT = "I did not export anything: {rel} {why}. Edit that file to remo
 WHY_ENV_VALUE = "holds a value from this profile's .env file"
 WHY_TOKEN = "holds something shaped like a key or token"
 WHY_SOFT = "has a long hex or base64 run, or a token-like web address value"
-WHY_MASKED = "holds a key that Hermes would export in part (its start and last 4 characters)"
-CHANGED = "I did not export anything: {rel} changed or became a link while I was checking it. Try again."
+WHY_MASKED = ("holds something Hermes changes on export because it looks like a key, so a real key would be "
+              "exported in part (a placeholder shaped like a key also trips this)")
+DISK_LINK = "I did not export anything: {rel} became a link while I was checking it. Try again."
+DISK_GONE = "I did not export anything: {rel} disappeared while I was checking it. Try again."
+DISK_SPECIAL = "I did not export anything: {rel} is not a regular file any more. Try again."
+DISK_UNREADABLE = "I did not export anything: I could not read {rel} on disk. Check its permissions and try again."
+DISK_TOO_BIG = "I did not export anything: {rel} is too large to check (over 50 MB)."
+DISK_CHANGED = "I did not export anything: {rel} changed while I was checking it. Try again."
+WHY_ASSIGNMENT = "holds what looks like a password, token or key written after its name"
+NOT_IMPORTED_HEAD = "These settings were not imported:"
+NOT_IMPORTED_TAIL = ("Your bundle's config.yaml had them; add them yourself with `hermes config set` if you "
+                     "trust them.")
+CONFIG_NOT_MAPPING = "The bundle's config.yaml is not a list of settings. Nothing was imported."
 WHY_SOFT_NAME = "has a name shaped like a key"
 CONFIG_LITERAL = ("I did not export anything: config.yaml holds a value written out in full at {paths}. Move each "
                   "value to the profile's .env file and reference it as ${{NAME}}.")
@@ -488,47 +516,89 @@ def _dir_hash(files: list[tuple[str, bytes]], *, include_cache: bool) -> str:
     return h.hexdigest()
 
 
-def _safe_open_under(pdir: Path, rel: str) -> int | None:
-    """An fd for PDIR/REL opened without following any link on the way (each component is opened with
-    O_NOFOLLOW relative to its parent), or None if any part is a link, missing or not a directory/file."""
-    flags_dir = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+def _disk_bytes(pdir: Path, rel: str, budget: list[int]) -> bytes:
+    """The bytes of PDIR/REL as they are on disk, read-only. Every component is opened relative to its parent with
+    O_NOFOLLOW, the leaf also with O_NONBLOCK so a FIFO swapped in cannot hang the read, and the opened fd must be a
+    regular file. Raises BundleError with a line that says what went wrong (never any content)."""
+    import errno
+    shown = _printable(redact_patterns(rel))
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags_dir = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow
+    fd = -1
     try:
         fd = os.open(pdir, flags_dir)
-    except OSError:
-        return None
-    parts = rel.split("/")
-    try:
+        parts = rel.split("/")
         for part in parts[:-1]:
             nxt = os.open(part, flags_dir, dir_fd=fd)
             os.close(fd)
             fd = nxt
-        leaf = os.open(parts[-1], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=fd)
-    except OSError:
-        os.close(fd)
-        return None
-    os.close(fd)
-    return leaf
-
-
-def _disk_bytes(pdir: Path, rel: str, budget: list[int]) -> bytes | None:
-    """The bytes of PDIR/REL as they are on disk, read-only, no link followed, within the shared read BUDGET.
-    None when the path is a link, not a regular file, gone, or the budget is spent."""
-    fd = _safe_open_under(pdir, rel)
-    if fd is None:
-        return None
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_MEMBER_BYTES:
-            return None
-        budget[0] -= st.st_size
-        if budget[0] < 0:
-            return None
-        with os.fdopen(fd, "rb") as f:
-            fd = -1
-            return f.read(MAX_MEMBER_BYTES + 1)
-    finally:
+        leaf = os.open(parts[-1], os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0), dir_fd=fd)
+    except OSError as e:
         if fd >= 0:
             os.close(fd)
+        if e.errno in (errno.ELOOP, errno.ENOTDIR, getattr(errno, "EMLINK", -1)):
+            raise BundleError(DISK_LINK.format(rel=shown)) from None
+        if e.errno == errno.ENOENT:
+            raise BundleError(DISK_GONE.format(rel=shown)) from None
+        if e.errno == errno.ENXIO:
+            raise BundleError(DISK_SPECIAL.format(rel=shown)) from None
+        raise BundleError(DISK_UNREADABLE.format(rel=shown)) from None
+    os.close(fd)
+    try:
+        st = os.fstat(leaf)
+        if not stat.S_ISREG(st.st_mode):
+            raise BundleError(DISK_SPECIAL.format(rel=shown))
+        if st.st_size > MAX_MEMBER_BYTES:
+            raise BundleError(DISK_TOO_BIG.format(rel=shown))
+        budget[0] -= st.st_size
+        if budget[0] < 0:
+            raise BundleError(TOO_LARGE)
+        chunks, total = [], 0
+        while True:
+            chunk = os.read(leaf, CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_MEMBER_BYTES:
+                raise BundleError(DISK_TOO_BIG.format(rel=shown))
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except OSError:
+        raise BundleError(DISK_UNREADABLE.format(rel=shown)) from None
+    finally:
+        os.close(leaf)
+
+
+# Text files Hermes 0.23's export force-redacts (hermes_cli/profiles_export_scrub.py, _EXPORT_REDACT_SUFFIXES and
+# _should_redact_export_file). A difference between such a file and its disk copy means Hermes masked something.
+_HERMES_REDACT_SUFFIXES = frozenset({
+    ".md", ".txt", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".ini", ".cfg", ".conf", ".py", ".sh", ".bash",
+    ".zsh", ".js", ".ts", ".tsx", ".jsx", ".css", ".html", ".xml", ".csv"})
+
+
+def _hermes_redacts(rel: str) -> bool:
+    name = rel.rsplit("/", 1)[-1].lower()
+    suffix = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+    return (suffix in _HERMES_REDACT_SUFFIXES or name == ".cursorrules" or name.endswith(".env.example")
+            or name.startswith("config.yaml."))
+
+
+# A secret written after its name: "db password: X", "the token is X", "api_key = X". Real Hermes leaves some of
+# these whole (a space before the key word), so the difference rule alone would miss them. Hard refusal.
+_ASSIGN = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:password|passwd|passphrase|pwd|secret|token|api[ _-]?key|access[ _-]?key"
+    r"|private[ _-]?key|client[ _-]?secret|auth[ _-]?token)s?(?![A-Za-z0-9_])[\"']?\s*(?:[:=]|\bis\b)\s*[\"']?"
+    r"(?P<v>[^\s\"'`,;]{8,})")
+
+
+def _assignment_reason(data: bytes) -> str | None:
+    text = data.decode("utf-8", errors="replace")
+    for m in _ASSIGN.finditer(text):
+        v = m.group("v")
+        if v.startswith(("${", "***")) or not any(c.isdigit() for c in v) or not any(c.isalpha() for c in v):
+            continue
+        return WHY_ASSIGNMENT
+    return None
 
 
 def _disk_skill_files(skill_dir: Path, budget: list[int]) -> list[tuple[str, bytes]] | None:
@@ -645,11 +715,21 @@ def _safe_key(key: str) -> bool:
     return bool(words) and (words[-1] in _NOT_A_VALUE_LAST or any(w in _COUNT_WORDS for w in words))
 
 
+def _secret_word(w: str) -> bool:
+    """Singular or plural: tokens, passwords, secrets, credentials, signatures, api_keys."""
+    return w in _SECRET_WORDS or (len(w) > 3 and w.endswith("s") and w[:-1] in _SECRET_WORDS)
+
+
 def _secret_key(key: str) -> bool:
     """A key whose value would be a secret: a key-like word (key, secret, token, password, auth, credential,
-    cookie ...), unless ``_safe_key`` says the value is a name, address, kind or count."""
+    cookie, signature, bearer; singular or plural), unless ``_safe_key`` says the value is a name, address, kind
+    or count."""
     words = _key_words(key)
-    return any(w in _SECRET_WORDS for w in words) and not _safe_key(key)
+    return any(_secret_word(w) for w in words) and not _safe_key(key)
+
+
+def _safe_path(path: tuple[str, ...]) -> bool:
+    return any(".".join(path[:i]) in SAFE_CONFIG_PATHS for i in range(1, len(path) + 1))
 
 
 def _map_key(key: str) -> bool:
@@ -693,8 +773,9 @@ def _walk_config(cfg: Any) -> tuple[list[str], set[str]]:
                     hermes_names.add(key)
                 child_strict = strict or (isinstance(v, dict) and _map_key(key)) or (
                     isinstance(v, list) and key.lower() in ("env", "headers"))
-                child_secret = _secret_key(key) or (secret and not _safe_key(key))
-                stack.append((v, (*path, key), child_strict, child_secret))
+                child_path = (*path, key)
+                child_secret = (_secret_key(key) or (secret and not _safe_key(key))) and not _safe_path(child_path)
+                stack.append((v, child_path, child_strict, child_secret))
         elif isinstance(node, list):
             for i, v in enumerate(node):
                 stack.append((v, (*path, str(i)), strict, secret))
@@ -732,8 +813,16 @@ def _not_plain_true(v: Any) -> bool:
     return not (v is True or (isinstance(v, str) and v.strip().lower() in ("true", "yes", "on", "1")))
 
 
-def _mode_off(v: Any) -> bool:
-    return v is False or (isinstance(v, str) and v.strip().lower() in ("off", "false", "no", "0"))
+def _not_manual_or_smart(v: Any) -> bool:
+    """Hermes loads YAML 1.1, where bare y, n, yes, no, on, off are booleans and False normalizes to off. Anything
+    but the exact strings manual or smart is treated as weakening approvals."""
+    return not (isinstance(v, str) and v in ("manual", "smart"))
+
+
+def _not_plainly_false(v: Any) -> bool:
+    if v is None or v is False or (isinstance(v, int) and not isinstance(v, bool) and v == 0):
+        return False
+    return not (isinstance(v, str) and v.strip().lower() in ("", "false", "no", "n", "off", "0"))
 
 
 def _globby(v: Any) -> bool:
@@ -758,8 +847,8 @@ REFUSED_SETTINGS: tuple[tuple[str, Callable[[Any], bool]], ...] = (
     ("plugins.host.launcher", _nonempty),
     ("terminal.shell_init_files", _nonempty),
     ("security.redact_secrets", _not_plain_true),
-    ("hooks_auto_accept", _on),
-    ("approvals.mode", _mode_off),
+    ("hooks_auto_accept", _not_plainly_false),
+    ("approvals.mode", _not_manual_or_smart),
 )
 # R47 tier 2: shown before the default-No confirm. Leaves under these key names, at any depth, are programs.
 SHOWN_LEAF_KEYS = frozenset({"command", "args", "binary_path", "executable_path", "launcher", "ssh_path", "cmd",
@@ -790,6 +879,100 @@ KNOWN_TOP_KEYS = frozenset({
     "x_search", "mcp_servers",
 })
 _SPECIAL_SUBTREES = ("mcp_servers", "hooks", "quick_commands")
+
+
+# R48b: the ONLY config.yaml settings an import brings in. Derived from Hermes 0.23's default config structure
+# (hermes_cli/config_defaults.DEFAULT_CONFIG and cli-config.yaml.example, read-only): model and provider choice,
+# display and UI, memory, context and compression knobs, prompt text, and a few agent knobs that cannot run a program
+# or send data anywhere new. mcp_servers is kept but always shown and confirmed. Everything else is dropped from the
+# imported config.yaml and listed for the user. "*" matches one key.
+KNOWN_SAFE_CONFIG = frozenset({
+    "_config_version", "model", "providers", "fallback", "fallback_providers", "auth.adopt_external_logins",
+    "mcp_servers", "display", "memory", "compression", "context", "streaming", "tool_output", "human_delay",
+    "personalities", "prompt_caching", "timezone", "privacy", "goals", "loops", "tool_loop_guardrails", "vision",
+    "context_file_max_chars", "file_read_max_chars", "agent.max_turns", "agent.text_verbosity",
+    "agent.reasoning_overrides", "agent.disabled_toolsets", "agent.service_tier", "skills.template_vars",
+})
+# Settings inside an allowed section that are still left out.
+NOT_IMPORTED_UNDER_SAFE = frozenset({
+    "display.tool_progress_command",          # name says command; not needed for a move
+    "memory.provider",                        # an external memory service would receive the memories
+    "memory.write_approval",                  # an approval switch
+    "compression.codex_app_server_auto",      # may start a helper app server
+})
+# Allowlisted names that hold a risky word, each with the reason it is safe to bring in.
+ALLOWLIST_JUSTIFIED: dict[str, str] = {
+    "mcp_servers": "every server's command or address is shown before the default-No confirm",
+    "model.base_url": "shown as an address, with every key reference that would be sent to it",
+    "providers": "provider addresses are shown, with every key reference that would be sent to them",
+    "fallback_providers": "provider addresses are shown, with every key reference that would be sent to them",
+    "context_file_max_chars": "a size limit, not a file path",
+    "file_read_max_chars": "a size limit, not a file path",
+    "display.file_mutation_verifier": "a display toggle for showing file edit checks",
+    "display.tui_auto_resume_recent": "a display toggle for resuming the last chat view",
+    "display.tool_progress_grouping": "a display toggle",
+    "display.inline_diffs": "a display toggle for showing diffs inline",
+    "display.inline_images": "a display toggle for showing images inline",
+    "display.background_process_notifications": "a display toggle for notices",
+    "compression.codex_responses_native": "a context compression mode switch",
+    "compression.codex_responses_compact_threshold": "a context compression size",
+    "compression.codex_gpt55_autoraise": "a context compression switch",
+    "compression.codex_gpt55_autoraise_notice": "a context compression notice switch",
+    "compression.checkpoint_required": "a context compression switch",
+    "tool_loop_guardrails.non_interactive_hard_stop_enabled": "a stop limit, it can only make the agent stop sooner",
+}
+
+
+def _path_match(pattern: str, path: tuple[str, ...]) -> bool:
+    """PATTERN (dotted, "*" = any one key) is a prefix of PATH."""
+    parts = pattern.split(".")
+    return len(parts) <= len(path) and all(a == "*" or a == b for a, b in zip(parts, path))
+
+
+def _extends(pattern: str, path: tuple[str, ...]) -> bool:
+    """PATTERN reaches below PATH (PATH is a strict prefix of it)."""
+    parts = pattern.split(".")
+    return len(parts) > len(path) and all(a == "*" or a == b for a, b in zip(parts, path))
+
+
+def _justified(dotted: str) -> bool:
+    path = tuple(dotted.split("."))
+    return any(_path_match(p, path) for p in ALLOWLIST_JUSTIFIED)
+
+
+def _filter_config(cfg: Any) -> tuple[Any, list[str]]:
+    """(the settings an import brings in, dotted paths it leaves out). Key order is kept."""
+    if not isinstance(cfg, dict):
+        return cfg, []
+    dropped: list[str] = []
+
+    def state(path: tuple[str, ...]) -> str:
+        if any(_path_match(u, path) for u in NOT_IMPORTED_UNDER_SAFE):
+            return "drop"
+        if any(_path_match(a, path) for a in KNOWN_SAFE_CONFIG):
+            return "partial" if any(_extends(u, path) for u in NOT_IMPORTED_UNDER_SAFE) else "keep"
+        return "partial" if any(_extends(a, path) for a in KNOWN_SAFE_CONFIG) else "drop"
+
+    def rec(node: dict, path: tuple[str, ...]) -> dict:
+        out: dict = {}
+        for k, v in node.items():
+            p = (*path, str(k))
+            st = state(p)
+            if st == "keep":
+                out[k] = v
+            elif st == "partial" and isinstance(v, dict):
+                sub = rec(v, p)
+                if sub or not v:
+                    out[k] = sub
+            else:
+                dropped.append(".".join(p))
+        return out
+
+    return rec(cfg, ()), dropped
+
+
+def _not_imported_line(dropped: list[str]) -> str:
+    return f"{NOT_IMPORTED_HEAD} {', '.join(_clip(d) for d in dropped)}. {NOT_IMPORTED_TAIL}"
 
 
 def _refused_setting(cfg: Any) -> str | None:
@@ -855,7 +1038,8 @@ def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
         mcp = []
         for name, entry in servers.items():
             if isinstance(entry, dict) and entry.get("command") is not None:
-                args = entry.get("args") if isinstance(entry.get("args"), list) else []
+                raw_args = entry.get("args")
+                args = raw_args if isinstance(raw_args, list) else ([raw_args] if isinstance(raw_args, str) else [])
                 mcp.append(f"MCP server {_clip(name)}: runs {_clip(' '.join(str(x) for x in [entry['command'], *args]))}")
             elif isinstance(entry, dict) and entry.get("url") is not None:
                 mcp.append(f"MCP server {_clip(name)}: connects to {_clip(entry['url'])}")
@@ -915,7 +1099,10 @@ def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
             if isinstance(v, (dict, list)):
                 stack.append((v, p))
         if address is not None:
-            for ref in sorted(_refs_in(node, [1000])):
+            refs = _refs_in(node, [1000])
+            if isinstance(node.get("key_env"), str) and _ENV_NAME_RE.fullmatch(node["key_env"]):
+                refs.add(node["key_env"])
+            for ref in sorted(refs):
                 sends.append(f"Would send ${{{ref}}} to {_clip(address)}")
     servers_sends = []
     if isinstance(servers, dict):
@@ -1139,28 +1326,36 @@ def export(name: str, out: Path, *, hermes: HermesCli, receipt: Receipt | None, 
             disk_config = b""
             for rel, is_dir, data in kept_files:
                 shown_rel = _printable(redact_patterns(rel))
-                # Hermes' export masks token shapes BEFORE we see the archive, so the on-disk bytes of every
-                # file that goes into the bundle are authoritative for the hard checks.
+                # Hermes' export masks secret-looking text BEFORE we see the archive, so the on-disk bytes of
+                # every file that goes into the bundle are authoritative for the hard checks.
                 disk = _disk_bytes(pdir, rel, budget)
-                if disk is None:
-                    raise BundleError(CHANGED.format(rel=shown_rel))
-                if rel == "config.yaml":
-                    disk_config = disk
-                why = _hard_reason(disk, values) or _hard_reason(data, values)
+                why = _hard_reason(disk, values) or _hard_reason(data, values) or (
+                    _assignment_reason(disk) if rel != "config.yaml" else None)  # config: key paths named first
                 if why:
                     raise BundleError(SECRET_CONTENT.format(rel=shown_rel, why=why))
-                if _masked_reason(data):
+                if rel == "config.yaml":
+                    # config.yaml gets the stricter structural checks below on its disk copy, and that copy is
+                    # what ships: Hermes also masks harmless config lines (password_store: auto becomes ***).
+                    disk_config = disk
+                elif data != disk:
+                    # R48a: any change Hermes made means it found something secret-looking (a real key, or a
+                    # placeholder shaped like one). Refuse rather than ship a part of it.
+                    raise BundleError(SECRET_CONTENT.format(rel=shown_rel, why=WHY_MASKED) if _hermes_redacts(rel)
+                                      else DISK_CHANGED.format(rel=shown_rel))
+                elif _masked_reason(data):
                     raise BundleError(SECRET_CONTENT.format(rel=shown_rel, why=WHY_MASKED))
                 if redact_patterns(rel) != rel:
                     soft.append((rel, WHY_SOFT_NAME))
-                elif _soft_reason(data) or _soft_reason(disk):
+                elif _soft_reason(disk):
                     soft.append((rel, WHY_SOFT))
-            config = next((d for r, is_dir, d in kept if r == "config.yaml" and not is_dir), b"")
-            for text in (disk_config, config):
-                if text:
-                    literal, _ = _walk_config(_load_config(text))
-                    if literal:
-                        raise BundleError(CONFIG_LITERAL.format(paths=_paths_text(literal)))
+            if disk_config:
+                literal, _ = _walk_config(_load_config(disk_config))
+                if literal:
+                    raise BundleError(CONFIG_LITERAL.format(paths=_paths_text(literal)))
+                if _assignment_reason(disk_config):          # a password in a comment, say
+                    raise BundleError(SECRET_CONTENT.format(rel="config.yaml", why=WHY_ASSIGNMENT))
+                kept = [(r, d, disk_config if r == "config.yaml" and not d else b) for r, d, b in kept]
+            config = disk_config
             ctext = config.decode("utf-8", errors="replace")
             needed = set(env_names) | set(_REF_RE.findall(ctext)) | set(_KEY_ENV_RE.findall(ctext))
             if receipt is not None:
@@ -1228,7 +1423,8 @@ def export_files(name: str, out_dir: Path, *, hermes: HermesCli, receipt: Receip
 
 # ---------------------------------------------------------------- import
 
-def read_bundle(path: Path, work: Path) -> tuple[BundleManifest, list[tuple[str, bool, bytes]], list[str]]:
+def read_bundle(path: Path, work: Path
+                ) -> tuple[BundleManifest, list[tuple[str, bool, bytes]], list[str], list[str]]:
     """Check a bundle completely, writing only into the private WORK dir. Returns the validated manifest, the
     profile entries (relative paths) and plain lines saying what its config.yaml can run. Raises BundleError
     before the caller creates anything."""
@@ -1263,17 +1459,26 @@ def read_bundle(path: Path, work: Path) -> tuple[BundleManifest, list[tuple[str,
         if _credential_named(rel) or not _kept(rel) or _hermes_skill_state(rel):
             raise BundleError(NOT_ALLOWED)
     risky: list[str] = []
+    dropped: list[str] = []
     config = next((d for r, is_dir, d in entries if r == "config.yaml" and not is_dir), None)
     if config is not None:
         cfg = _load_config(config)
         refused = _refused_setting(cfg)       # tier 1 first, by key path only
         if refused:
             raise BundleError(REFUSED_SETTING.format(path=refused))
-        literal, hermes_names = _walk_config(cfg)
+        literal, _ = _walk_config(cfg)
         if literal:
             raise BundleError(CONFIG_LITERAL_IMPORT.format(paths=_paths_text(literal)))
-        risky = _risky_lines(cfg, hermes_names)
-    return manifest, entries, risky
+        if cfg is not None and not isinstance(cfg, dict):
+            raise BundleError(CONFIG_NOT_MAPPING)
+        kept, dropped = _filter_config(cfg)          # R48b: only allowlisted settings are brought in
+        if dropped:
+            import yaml
+            trimmed = yaml.safe_dump(kept, sort_keys=False, allow_unicode=True, default_flow_style=False).encode()
+            entries = [(r, d, trimmed if r == "config.yaml" and not d else b) for r, d, b in entries]
+        _, hermes_names = _walk_config(kept)
+        risky = _risky_lines(kept, hermes_names)
+    return manifest, entries, risky, dropped
 
 
 def _command_exists(hermes: HermesCli, name: str) -> bool:
@@ -1386,9 +1591,11 @@ def import_bundle(path: Path, *, hermes: HermesCli, name: str | None, io: IO,
         validate_profile_name(name)
     with tempfile.TemporaryDirectory(prefix="trading-agent-import-") as tmp:
         work = Path(tmp)
-        manifest, entries, risky = read_bundle(Path(path), work)
+        manifest, entries, risky, dropped = read_bundle(Path(path), work)
         for line in summary_lines(dataclasses.replace(manifest, contents=_contents(entries))):
             io.say(line)
+        if dropped:
+            io.say(_not_imported_line(dropped))
         if risky:
             io.say(RISKY_HEAD)
             for line in risky:
@@ -1412,6 +1619,8 @@ def import_bundle(path: Path, *, hermes: HermesCli, name: str | None, io: IO,
         receipt = _install(chosen, manifest, archive, values, hermes, store_factory)
         values.clear()
     io.say(IMPORT_DONE.format(name=chosen))
+    if dropped:
+        io.say(_not_imported_line(dropped))
     skipped = [n for n in manifest.env_names_needed if n not in receipt.env_names_written]
     if skipped:
         io.say(FINISH_LATER_TITLE)
