@@ -112,6 +112,14 @@ def check_args(args: Sequence[str]) -> None:
             raise ForbiddenHermesArgs("forbidden hermes subcommand")
 
 
+def _absolute(path: Path) -> Path:
+    """An archive path on a hermes command line must be absolute: a relative one could read as a flag."""
+    p = Path(path)
+    if not p.is_absolute():
+        raise ValueError("archive path must be absolute")
+    return p
+
+
 class HermesCli:
     def __init__(self, platform: Platform, binary: str = "hermes") -> None:
         self.platform = platform
@@ -187,6 +195,18 @@ class HermesCli:
     def profile_delete(self, name: str) -> RunResult:
         validate_profile_name(name)
         return self.run(["profile", "delete", name, "-y"], timeout=CALL_TIMEOUT)
+
+    def profile_export(self, name: str, output: Path) -> RunResult:
+        """``hermes profile export NAME -o OUTPUT``: a credential-free .tar.gz (Hermes drops .env and auth.json
+        at the profile root; everything else in the profile is kept, so the caller filters and scans it)."""
+        validate_profile_name(name)
+        return self.run(["profile", "export", name, "-o", str(_absolute(output))], timeout=INSTALL_TIMEOUT)
+
+    def profile_import(self, archive: Path, name: str) -> RunResult:
+        """``hermes profile import ARCHIVE --name NAME``. Hermes also writes a ``~/.local/bin/NAME`` wrapper and
+        replaces a file already there, so callers must check that path first."""
+        validate_profile_name(name)
+        return self.run(["profile", "import", str(_absolute(archive)), "--name", name], timeout=INSTALL_TIMEOUT)
 
     def config_set(self, profile: str, key: str, value: str) -> RunResult:
         """``hermes -p PROFILE config set KEY VALUE``. VALUE goes on the command line: never a secret."""

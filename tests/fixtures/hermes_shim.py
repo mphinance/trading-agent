@@ -10,9 +10,12 @@ SHIM_LOG (JSON lines, one argv per call) and SHIM_CONTROL (JSON the test edits):
    "cancel_install": false,      # print "Install cancelled." and exit 0, create nothing
    "listed": ["name"]}           # extra names reported by `profile list`
 
+   "import_fail_after_create": false,  # profile import: make the directory, then exit 1
+
 Implements: --version, profile install <dir> --name N -y, profile delete N -y,
-profile update N -y, profile list, -p N config set KEY VALUE. Output mimics T0.
-It never reads or writes anything outside HERMES_HOME.
+profile update N -y, profile list, -p N config set KEY VALUE, profile export N -o FILE,
+profile import FILE --name N. Output mimics T0 and the 0.23 export/import behavior.
+It never reads or writes anything outside HERMES_HOME, except the import wrapper under HOME (like Hermes).
 """
 from __future__ import annotations
 
@@ -20,6 +23,7 @@ import json
 import os
 import shutil
 import sys
+import tarfile
 from pathlib import Path
 
 import yaml
@@ -78,7 +82,53 @@ def main(argv: list[str]) -> int:
             print(f"Error: Profile '{name}' does not exist.")
             return 1
         shutil.rmtree(target)
+        if os.environ.get("HOME"):
+            wrapper = Path(os.environ["HOME"]) / ".local" / "bin" / name
+            if wrapper.is_file() and f"hermes -p {name} " in wrapper.read_text():
+                wrapper.unlink()      # like Hermes: only its own wrapper, never a user's file
         print(f"✓ Deleted profile '{name}'")
+        return 0
+
+    if argv[:2] == ["profile", "export"]:
+        # Like Hermes 0.23: a .tar.gz of the profile dir under its own name, without .env and auth.json
+        # at the profile root (everything else, including token*, *.pem and the marker, is kept).
+        name, out = argv[2], Path(argv[argv.index("-o") + 1])
+        target = home / "profiles" / name
+        if not target.is_dir():
+            print(f"Error: Profile '{name}' does not exist.")
+            return 1
+
+        def skip(info):
+            rel = info.name.split("/", 1)[1] if "/" in info.name else ""
+            return None if rel in (".env", "auth.json") else info
+        with tarfile.open(out, "w:gz") as tar:
+            tar.add(target, arcname=name, filter=skip)
+        print(f"✓ Exported '{name}' to {out}")
+        return 0
+
+    if argv[:2] == ["profile", "import"]:
+        archive, name = Path(argv[2]), argv[argv.index("--name") + 1]
+        target = home / "profiles" / name
+        if target.exists():
+            print(f"Error: A profile named '{name}' already exists.")
+            return 1
+        stage = home / f".import-{name}"
+        with tarfile.open(archive, "r:gz") as tar:
+            top = tar.getmembers()[0].name.split("/")[0]
+            tar.extractall(stage, filter="data")
+        shutil.move(str(stage / top), str(target))
+        shutil.rmtree(stage)
+        if control.get("import_fail_after_create"):
+            print("Error: something broke after the directory was made")
+            return 1
+        wrapper = None
+        if os.environ.get("HOME"):
+            wrapper = Path(os.environ["HOME"]) / ".local" / "bin" / name
+            wrapper.parent.mkdir(parents=True, exist_ok=True)
+            wrapper.write_text(f"#!/bin/sh\nexec hermes -p {name} \"$@\"\n")
+        print(f"✓ Imported profile '{name}' at {target}")
+        if wrapper:
+            print(f"  Wrapper created: {wrapper}")
         return 0
 
     if argv[:2] == ["profile", "update"]:
