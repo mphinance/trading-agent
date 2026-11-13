@@ -42,7 +42,7 @@ def test_config_has_no_mcp_servers_or_secrets():
 def test_no_dashes_in_shipped_text():
     for name in SHIPPED:
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert "—" not in text and "–" not in text, name
+        assert chr(0x2014) not in text and chr(0x2013) not in text, name
 
 
 def test_no_mcp_json_shipped():
