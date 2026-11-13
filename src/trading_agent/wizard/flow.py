@@ -83,6 +83,7 @@ class Deps:
     source_dir: Path
     online: bool = True
     verify_ai: Callable[[AiChoice], str] = default_verify_ai
+    profile_name: str | None = None   # preset from `setup --profile`: the wizard uses it and does not ask
 
 
 # ---------------------------------------------------------------- AI provider facts
@@ -374,7 +375,10 @@ class _Wizard(ValueMixin):
         if self._hermes_check() == "back":
             return State.START
         name: str | None = self.dec("profile_name") or None
-        if name is not None:
+        if self.d.profile_name is not None:
+            validate_profile_name(self.d.profile_name)
+            name = self.d.profile_name           # chosen on the command line: no question
+        elif name is not None:
             a = self.io.choose(S.NAME_KEEP.format(name=name), [
                 Option("continue", "Continue"), Option("rename", "Pick another name"), Option("back", "Back")])
             if a == "back":
