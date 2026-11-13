@@ -1,0 +1,7 @@
+name: trading-agent
+version: 0.1.0
+description: Hermes profile with a first-run setup wizard. Pick an AI provider, optionally a broker MCP, optional skill and tool libraries.
+hermes_requires: ">=0.23.0"
+license: MIT
+env_requires: []
+distribution_owned: [SOUL.md, config.yaml, distribution.yaml]

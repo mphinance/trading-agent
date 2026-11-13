@@ -1,0 +1,3 @@
+# Minimal defaults. The setup wizard writes your provider and choices here.
+# This file is yours: `hermes profile update` keeps it.
+model: {}

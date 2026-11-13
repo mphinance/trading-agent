@@ -9,8 +9,30 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 
 
-def _distribution_root() -> Traversable:
+def _packaged_root() -> Traversable:
+    """Where the wheel puts the distribution (hatch force-include)."""
     return resources.files("trading_agent").joinpath("data").joinpath("distribution")
+
+
+def _checkout_root() -> Path:
+    """The repo root of a source checkout, where the distribution files are the source of truth."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _has_manifest(root: Traversable) -> bool:
+    try:
+        return root.joinpath("distribution.yaml").is_file()
+    except OSError:
+        return False
+
+
+def _distribution_root() -> Traversable:
+    """The packaged files when present, else the checkout root (editable or `uv run`), else the packaged path."""
+    packaged = _packaged_root()
+    if _has_manifest(packaged):
+        return packaged
+    checkout = _checkout_root()
+    return checkout if _has_manifest(checkout) else packaged
 
 
 def _copy_tree(src: Traversable, dest: Path) -> None:

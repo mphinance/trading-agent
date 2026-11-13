@@ -26,6 +26,13 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/trading_agent"]
 
+# One source of truth at the repo root (so `hermes profile install` works from a checkout or repo URL),
+# shipped inside the wheel where trading_agent.paths looks for it.
+[tool.hatch.build.targets.wheel.force-include]
+"distribution.yaml" = "trading_agent/data/distribution/distribution.yaml"
+"SOUL.md" = "trading_agent/data/distribution/SOUL.md"
+"config.yaml" = "trading_agent/data/distribution/config.yaml"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
