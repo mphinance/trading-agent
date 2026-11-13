@@ -34,7 +34,7 @@ Tick a box only after the maintainer decided it.
 ### Repository and contact
 
 - [ ] **`SECURITY.md` contact channel.** Add a real reporting address or private advisory link; none is in the repository yet.
-- [ ] **Name and repository settings.** Confirm the project name, the repository address used in `<repo-url>` in the docs, description, topics, default branch, branch protection and issue settings.
+- [ ] **Name and repository settings.** Confirm the project name, the repository address used in the install commands, description, topics, default branch, branch protection and issue settings.
 
 ### Product scope
 
@@ -114,6 +114,7 @@ uv run pytest -q
 
 ## Final steps
 
+- [ ] After the swap makes `portable-agent` the default branch, drop the `@portable-agent` suffix from every install command (`git grep -n "@portable-agent"`), change the `source:` note in UPDATING, and re-run `tests/test_docs.py`.
 - [ ] README status line still matches reality (built, tested against the shim and Hermes 0.23.1, not yet used by outside users).
 - [ ] The swap in [SWAP.md](SWAP.md) is done only after every box above is ticked, and only by the maintainer.
 

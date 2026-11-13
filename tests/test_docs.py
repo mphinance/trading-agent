@@ -200,6 +200,8 @@ LEAK_EXCEPTIONS = [
     ("*", re.compile(r"docs\.kraken\.com/home/")),
     # The publish checklist prints the grep that looks for this exact leak, and says what hits are fine.
     ("PUBLISH_CHECKLIST.md", re.compile(r"git grep .*/home/")),
+    # The install command prints this repository's own public address (the maintainer asked for it); exact URL only.
+    ("*", re.compile(r"github\.com/mphinance/trading-agent(\.git@portable-agent)?")),
     # Public GitHub org of the sources THIRD_PARTY.md credits (an address, not a private detail).
     ("THIRD_PARTY.md", re.compile(r"https://github\.com/mphinance/")),
     # The decision-tag legend in the style guide (docs/STYLE.md) names the tag [MICHAEL] by design.

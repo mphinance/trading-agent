@@ -53,7 +53,7 @@ Read it left to right: each box is safe to stop after, except the last, which ch
 | `<new-repo>` | Full path of the current `trading-agent-next` folder |
 | `<parent>` | The folder that contains both |
 | `<backup-dir>` | A folder outside both repositories, readable only by you |
-| `<repo-url>` | The remote address, as in `git remote -v` |
+| `<repo-url>` | The remote address, as in `git remote -v` (used only in this page's commands) |
 
 ## Step 0: prepare
 
@@ -179,6 +179,8 @@ git -C <parent>/trading-agent push --force-with-lease=main:<old-head-hash> origi
 ```
 
 The branch history of the new project is unrelated to the old one (an orphan branch), which is why a force-push is needed. Check the result in the repository's web page, then, if wanted, delete the extra `portable-agent` remote branch.
+
+After step 5 makes this the default branch, drop the `@portable-agent` suffix from every install command in the docs (`git grep -n "@portable-agent"`) and re-run `tests/test_docs.py`.
 
 ## Rollback
 

@@ -30,10 +30,10 @@ It creates one new Hermes profile (a folder with its own settings, memories and 
    hermes --version
    ```
 
-2. Install this tool from the repository (replace `<repo-url>` with the address of this repository). Install the packaged tool, not a working copy; the reason is in [SETUP](docs/SETUP.md#why-not-run-it-from-a-checkout).
+2. Install this tool from this repository's `portable-agent` branch (the default branch still holds the older project until the maintainer finishes the [swap](docs/SWAP.md)). Install the packaged tool, not a working copy; the reason is in [SETUP](docs/SETUP.md#why-not-run-it-from-a-checkout).
 
    ```bash
-   uv tool install "git+<repo-url>"
+   uv tool install "git+https://github.com/mphinance/trading-agent.git@portable-agent"
    trading-agent scan
    ```
 

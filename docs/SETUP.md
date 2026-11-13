@@ -10,7 +10,7 @@
 | Step | Command | Changes anything? |
 |---|---|---|
 | 1. Install Hermes (you run it) | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` | Installs Hermes |
-| 2. Install this tool | `uv tool install "git+<repo-url>"` | Installs a command |
+| 2. Install this tool | `uv tool install "git+https://github.com/mphinance/trading-agent.git@portable-agent"` | Installs a command |
 | 3. Look first (optional) | `trading-agent scan` | No |
 | 4. Run the wizard | `trading-agent setup` | One new Hermes profile |
 | 5. Undo | `trading-agent undo --profile <profile>` | Removes what step 4 made |
@@ -52,14 +52,14 @@ The version must be 0.23.0 or higher. If it is older, a normal (git) install upd
 
 ## Step 2: install the tool
 
-Install the packaged tool from the repository address (the name and address of the public repository are still being settled, see the [publish checklist](PUBLISH_CHECKLIST.md)):
+Install the packaged tool from the `portable-agent` branch of the repository (that branch holds this project until the maintainer makes it the default; after that the `@portable-agent` suffix is dropped, see the [publish checklist](PUBLISH_CHECKLIST.md)). `uv tool install` from this address has not been run end to end by outside users [UNVERIFIED]:
 
 ```bash
-uv tool install "git+<repo-url>"
+uv tool install "git+https://github.com/mphinance/trading-agent.git@portable-agent"
 trading-agent --help
 ```
 
-`pipx install "git+<repo-url>"` works the same way. Both put a `trading-agent` command on your path.
+`pipx install "git+https://github.com/mphinance/trading-agent.git@portable-agent"` works the same way. Both put a `trading-agent` command on your path.
 
 > [!NOTE]
 > This install route was exercised through the built wheel in the tests (the wheel contains the three profile files), not yet from a public repository by an outside user.

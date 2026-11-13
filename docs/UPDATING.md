@@ -35,7 +35,7 @@ Two cases are different:
   grep -n "^source:" ~/.hermes/profiles/<profile>/distribution.yaml
   ```
 
-  Edit that one line to `source: <repo-url>` in a text editor, then run `hermes profile update <profile>`. Update re-records the source it used, so you do this once.
+  Edit that one line to `source: github.com/mphinance/trading-agent` in a text editor, then run `hermes profile update <profile>`. Update re-records the source it used, so you do this once. Hermes accepts a git URL such as `github.com/user/repo` there (its own error message says so); whether it can take a branch in `source:` is [UNVERIFIED], so until the maintainer makes `portable-agent` the default branch, this address resolves to the older project: use a local folder holding the new version instead, or wait for the swap. To check, run `hermes profile update` in a scratch `HERMES_HOME`.
 - **A checkout.** Running from a working copy is not supported for setup (see [SETUP](SETUP.md#why-not-run-it-from-a-checkout)). If you installed from a clean clone anyway, the recorded source is that clone's folder; keep it where it is, or set the source to the repository address as above.
 
 A successful update prints:
