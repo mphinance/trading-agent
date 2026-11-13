@@ -434,6 +434,10 @@ def test_oauth_token_state_file_written_0600():
     """Issuing a token pair must persist the state file with owner-only
     permissions, not whatever the process umask would otherwise leave."""
     import stat
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX file modes do not exist on Windows")
 
     from trading_mcp.oauth_provider import _TOKEN_STATE_PATH
 

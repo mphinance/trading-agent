@@ -44,6 +44,8 @@ Related repos, and why this isn't merged into them:
 - **Broker:** `webull-openapi-python-sdk` 2.0.18 (pinned in `requirements.txt`)
   — `webull.core` / `webull.trade` / `webull.data`. Public.com is a second,
   partial adapter.
+  **Robinhood** (equities only, agentic account only) is a third adapter, `vesper/brokers/robinhood_broker.py`,
+  a standalone MCP client of Robinhood's hosted server; set `EXECUTION_BROKER=robinhood`. See `docs/ROBINHOOD.md`.
 - **Signals/data:** TraderDaddy Pro over plain JSON-RPC (`core/td.py`), TickerTrace
   (`tickertrace_mcp.py`), yfinance, TradingView screener.
 - **Approval channels:** Telegram (long-poll) and Discord (gateway bot).

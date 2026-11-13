@@ -151,6 +151,8 @@ async def executor_node(state: TradingState) -> Dict[str, Any]:
         try:
             if broker_target == "public":
                 res = await _execute_public(prop)
+            elif broker_target == "robinhood":
+                res = await _execute_robinhood(prop)
             else:
                 res = await _execute_webull(prop)
             results.append(res)
@@ -458,5 +460,55 @@ async def _execute_public(prop: OrderProposal) -> ExecutionResult:
         status="SUBMITTED",
         client_order_id=f"pub-{prop.id}",
         message=f"Order submitted to Public.com: {order_res.get('data', order_res) if isinstance(order_res, dict) else order_res}",
+        timestamp=_now(),
+    )
+
+
+async def _execute_robinhood(prop: OrderProposal) -> ExecutionResult:
+    """Equities on Robinhood's agentic account. Same guard flow as Public.com.
+
+    Robinhood may hold the order for approval in its own app; that is reported as
+    PENDING_BROKER_APPROVAL, not SUBMITTED, so nobody reads it as live."""
+    from vesper.brokers.robinhood_broker import RobinhoodBrokerClient
+
+    def _place():
+        with RobinhoodBrokerClient() as rh:
+            if not rh.configured:
+                raise RuntimeError(
+                    "Robinhood not configured: set ROBINHOOD_ACCOUNT_ID and run "
+                    "`python -m vesper.brokers.robinhood_auth login`"
+                )
+            payload = {
+                "symbol": prop.ticker,
+                "side": prop.side,
+                "quantity": prop.quantity,
+                "order_type": prop.order_type,
+                "limit_price": prop.limit_price,
+                "asset_type": prop.asset_type,
+                "strike": prop.strike,
+            }
+            ticket = guard.preview(prop.id, payload, live_buying_power=rh.get_buying_power())
+            return guard.place(
+                ticket.id,
+                payload,
+                lambda: rh.place_order(
+                    symbol=payload["symbol"],
+                    side=payload["side"],
+                    quantity=payload["quantity"],
+                    order_type=payload["order_type"],
+                    limit_price=payload["limit_price"],
+                    asset_type=payload["asset_type"],
+                    ref_id=str(uuid.uuid5(_CLIENT_ORDER_NS, prop.id)),
+                ),
+            )
+
+    order_res = await asyncio.to_thread(_place)
+    pending = isinstance(order_res, dict) and order_res.get("status") == "pending_robinhood_approval"
+    return ExecutionResult(
+        order_proposal_id=prop.id,
+        ticker=prop.ticker,
+        status="PENDING_BROKER_APPROVAL" if pending else "SUBMITTED",
+        client_order_id=f"rh-{prop.id}",
+        message=f"Order sent to Robinhood: {order_res}",
         timestamp=_now(),
     )
