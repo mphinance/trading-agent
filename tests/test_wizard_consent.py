@@ -90,6 +90,12 @@ def test_a_library_key_needs_its_own_grant_in_both_directions(mk):
     receipt, io = w.run(answers)
     assert "Library needs-or" in next(p for k, p, o in io.prompts if k == "choose" and "will be able to read" in p)
     assert w.writes[0].plan.skills == [] and w.writes[0].plan.ai == AiChoice("openrouter")
+    lines = "\n".join(io.said).splitlines()
+    done = lines[lines.index("You are set up."):]
+    who = done.index(screens.DONE_KEYS)
+    assert done[who + 1] == f"  {ORKEY}: the OpenRouter AI connection."     # the refused library cannot read it
+    assert not any("needs-or" in line for line in done[who:who + 2])
+    assert any("Library needs-or library (it is left out" in line and ORKEY in line for line in done)
     w2 = mk(environ={ORKEY: K1}, findings=[OR_FINDING, data], libraries=libs)
     w2.state_path().unlink()
     receipt, io2 = w2.run([*answers[:-2], "same", "do"])
