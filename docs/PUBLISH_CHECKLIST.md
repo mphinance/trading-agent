@@ -33,7 +33,7 @@ Tick a box only after the maintainer decided it.
 
 ### Repository and contact
 
-- [ ] **`SECURITY.md` contact channel.** Add a real reporting address or private advisory link; none is in the repository yet.
+- [ ] **`SECURITY.md` contact channel.** `SECURITY.md` points to GitHub private vulnerability reporting. Switch the feature on in the repository settings (Settings, Code security, Private vulnerability reporting), then confirm the **Report a vulnerability** button shows on the Security tab.
 - [ ] **Name and repository settings.** Confirm the project name, the repository address used in the install commands, description, topics, default branch, branch protection and issue settings.
 
 ### Product scope
