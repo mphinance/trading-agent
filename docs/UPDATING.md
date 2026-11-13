@@ -1,7 +1,7 @@
 # Updating
 
 > [!NOTE]
-> Status: update rules verified on Hermes 0.23.1 in a scratch home. The one-time source fix below was verified with a local folder as the source, not a git URL.
+> Status: update rules verified on Hermes 0.23.1 in a scratch home. Install from a package folder, then update, was verified on Hermes 0.23.1 with a real wheel in a scratch home. A git URL as the source was not tried.
 
 **How to update the profile's shipped files with `hermes profile update`, what it overwrites, and what it keeps.**
 
@@ -17,31 +17,32 @@
 
 `distribution_owned` in `distribution.yaml` is `[SOUL.md, config.yaml, distribution.yaml]`. `config.yaml` is listed so Hermes copies it on install, but update still keeps your edited one; only `--force-config` replaces it.
 
-## The one catch: the recorded source
+## The recorded source
 
-`hermes profile update` fetches the distribution from the source recorded in the profile's `distribution.yaml` (the `source:` line). Setup installs from a temporary copy of the packaged files, and that copy is deleted when setup ends. After that, update fails:
+`hermes profile update` fetches the distribution from the source recorded in the profile's `distribution.yaml` (the `source:` line). When you install the tool as a package (`uv tool install`, `pipx`, a wheel), setup installs straight from the packaged folder inside that install, so the recorded source is a real folder that stays put. `uv tool upgrade trading-agent` refreshes the files in it, and `hermes profile update <profile>` then picks them up. Nothing to edit.
 
-```text
-Error: Cannot resolve distribution source: '<temporary folder>'. Expected a git URL (e.g. github.com/user/repo) or a local directory.
-```
+Two cases are different:
 
-Fix it once per profile: point the recorded source at the repository address (or at a folder holding the new version), then update.
+- **A zipped install.** Setup has to unpack the files into a temporary folder, and that folder is deleted when setup ends. Setup prints a note when this happens. After that, update fails:
 
-```bash
-grep -n "^source:" ~/.hermes/profiles/<profile>/distribution.yaml
-```
+  ```text
+  Error: Cannot resolve distribution source: '<temporary folder>'. Expected a git URL (e.g. github.com/user/repo) or a local directory.
+  ```
 
-Edit that one line to `source: <repo-url>` in a text editor, then:
+  Fix it once per profile: point the recorded source at the repository address (or at a folder holding the new version).
 
-```bash
-hermes profile update <profile>
-```
+  ```bash
+  grep -n "^source:" ~/.hermes/profiles/<profile>/distribution.yaml
+  ```
+
+  Edit that one line to `source: <repo-url>` in a text editor, then run `hermes profile update <profile>`. Update re-records the source it used, so you do this once.
+- **A checkout.** Running from a working copy is not supported for setup (see [SETUP](SETUP.md#why-not-run-it-from-a-checkout)). If you installed from a clean clone anyway, the recorded source is that clone's folder; keep it where it is, or set the source to the repository address as above.
 
 ```text
 ✓ Updated '<profile>' → v<version>
 ```
 
-Update re-records the source it used, so you do this once. A profile made by `trading-agent import` has no `distribution.yaml` at all, so `hermes profile update` does not apply to it (see [MOVING](MOVING.md#honest-limits)).
+A profile made by `trading-agent import` has no `distribution.yaml` at all, so `hermes profile update` does not apply to it (see [MOVING](MOVING.md#honest-limits)).
 
 ## What not to do
 
