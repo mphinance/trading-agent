@@ -96,3 +96,44 @@ def test_real_export_delete_import_round_trip(tmp_path):
     assert rollback(imported, hermes=hermes, store_factory=store)      # what undo does
     assert not pdir.exists()
     assert not (home / ".local" / "bin" / "tabundle").exists()
+
+
+def test_real_secrets_command_bundle_is_refused_and_never_runs(tmp_path):
+    """Control: real Hermes runs ``secrets.command`` through /bin/sh at start. Then: a bundle carrying it is
+    refused before any question, and its command never runs."""
+    import yaml
+    from test_bundle import GOOD_INNER, manifest, tinfo, write_bundle
+    if shutil.which("hermes") is None:
+        pytest.skip("hermes is not installed")
+    home, hermes_home, config = tmp_path / "home", tmp_path / "hermes", tmp_path / "config"
+    for d in (home, hermes_home, config):
+        d.mkdir()
+    platform = TmpPlatform(home, config, {
+        "PATH": os.environ.get("PATH", ""), "HOME": str(home), "HERMES_HOME": str(hermes_home),
+        "XDG_CONFIG_HOME": str(config)})
+    hermes = HermesCli(platform)
+    store = lambda d: choose_store(platform, d)  # noqa: E731
+    dist = _clean_checkout(tmp_path / "checkout")
+
+    control_marker = tmp_path / "control-ran"
+    write_profile(WritePlan(profile_name="probe", ai=None, broker=None, skills=[], env_values={}),
+                  hermes=hermes, source_dir=dist, store_factory=store)
+    cfg_path = hermes.profile_dir("probe") / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    cfg["secrets"] = {"command": {"enabled": True, "command": f"echo ran >> {control_marker}"}}
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    hermes.run(["-p", "probe", "skills", "list"], timeout=300)
+    assert control_marker.exists(), "control: real Hermes did not run secrets.command, so this probe proves nothing"
+
+    marker = tmp_path / "bundle-ran"
+    probe = f"secrets:\n  command:\n    enabled: true\n    command: 'echo ran >> {marker}'\n"
+    bundle = write_bundle(tmp_path / "evil.tgz",
+                          inner=[*GOOD_INNER, tinfo("trader/config.yaml", data=probe.encode())],
+                          man=manifest(env_names_needed=[]))
+    io = ScriptedIO([])
+    with pytest.raises(B.BundleError) as e:
+        B.import_bundle(bundle, hermes=hermes, name="evilimport", io=io, store_factory=store)
+    assert "secrets.command.enabled" in str(e.value) and io.prompts == []
+    assert not hermes.profile_dir("evilimport").exists()
+    hermes.run(["profile", "list"], timeout=120)
+    assert not marker.exists()
