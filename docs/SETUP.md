@@ -29,7 +29,7 @@
 ## What you need
 
 - Linux (the only platform covered so far).
-- Python 3.11.4 or newer.
+- Python 3.11.4 or newer (import and export rely on a tar extraction filter that earlier 3.11 releases lack).
 - [uv](https://docs.astral.sh/uv/) or pipx, to install a Python command.
 - Hermes 0.23.0 or newer. `distribution.yaml` says `hermes_requires: ">=0.23.0"`; Hermes refuses to install the profile on anything older.
 
@@ -79,9 +79,14 @@ trading-agent scan
 ```
 
 ```text
-Found on this computer:
-  (names of AI tools, saved key names, MCP files and local model ports, if any)
+env:OPENROUTER_API_KEY | ai-key | present | OPENROUTER_API_KEY
+env:ALPACA_API_KEY | broker-key | absent | ALPACA_API_KEY
+mcp:claude-code | mcp-entry | absent |
+cli:claude | ai-cli | absent | claude
+ai-local:ollama | ai-local | absent | ollama
 ```
+
+One line per thing it looked for: where, kind, present or absent, name. The full output is [scan.txt](transcripts/scan.txt); `trading-agent scan --json` prints the same as JSON. To find CLIs and shell-only variables, `scan` starts your login shell (so your shell startup files run) and runs `--version` on any AI CLI it finds. It reads the MCP config files of other apps (Claude Code, Claude Desktop) for server and variable names, and tries a few loopback ports. It sends nothing over the network.
 
 Run the wizard. Flags are optional:
 
@@ -92,7 +97,7 @@ trading-agent setup --profile <profile>
 
 `--profile` sets the new profile's name up front. Without it the wizard asks and suggests `trader`. The name uses lowercase letters, digits, hyphen or underscore, starts with a letter, and is at most 32 characters; names such as `hermes`, `default`, `test`, `tmp`, `root` and `sudo` are reserved. An existing profile is never overwritten.
 
-You can go back one screen by typing `<`. Progress is saved, so an interrupted setup can resume.
+You can go back one screen by typing `<`. Progress (decision names, never values) is saved to `~/.config/trading-agent/state.json`, so an interrupted setup can resume. That file and the receipt live under `$XDG_CONFIG_HOME` when it is set.
 
 ## What the wizard asks
 
@@ -110,15 +115,15 @@ flowchart LR
     F --> G["Review, then write"]
 ```
 
-Read the boxes left to right; nothing is written to disk before the last box, and only after you confirm it. The list below says what each box does.
+Read the boxes left to right; no profile and no key is written before the last box, and only after you confirm it. The wizard does save its progress file as you go. The list below says what each box does.
 
 - **Check Hermes.** Finds `hermes`, reads its version, checks it against `>=0.23.0`. If missing or too old, it prints the install or update hint and offers "Check again".
 - **Scan.** Looks for AI tools, saved key names, other apps' MCP settings and local model ports. Reports presence by name only, never a value. Nothing is used yet.
-- **AI for the brain.** Choose none, OpenRouter, a custom OpenAI-compatible service (Venice included), Ollama, or LM Studio. A signed-in AI CLI that the scan found cannot power the agent in this version; the wizard says so and leaves that sign-in untouched. A "keep it private" choice shows only a local model or Venice.
+- **AI for the brain.** Choose none, OpenRouter, Venice, a custom OpenAI-compatible service, or, when the scan found one running, Ollama or LM Studio. A signed-in AI CLI that the scan found cannot power the agent in this version; the wizard says so and leaves that sign-in untouched. A "keep it private" choice shows only a local model or Venice.
 - **Broker.** Pick a broker MCP or "No broker, research only". The ten curated names are listed first, the full catalog is searchable. Only Alpaca and Tradier can be installed here; other entries show "setup details not curated yet" and where to set them up yourself.
 - **Skill libraries.** Pick any or none. In this version the choice is recorded by name; nothing is downloaded.
 - **Data keys.** Optional keys that your picks mention. Skip is fine.
-- **Review.** A plain list of exactly what will happen: create the profile, write these key names into the private `.env`, record these picks, change nothing in any other app or profile. Your answer defaults to No.
+- **Review.** A plain list of exactly what will happen: create the profile, write these key names into the private `.env`, record these picks, change nothing in any other app or profile. Choose "Do it" to write; "Back" changes nothing.
 
 Keys: when the wizard needs a key it asks for it with a hidden prompt, or offers to copy one it found by name in your environment, one use at a time, and only if you say yes. See [KEYS](KEYS.md).
 
@@ -130,7 +135,7 @@ When it finishes, setup lists what was created, a "Left to finish later" list (f
 trading-agent undo --profile <profile>
 ```
 
-`--profile` can be left out when exactly one profile has a receipt. Undo removes what setup created, by the receipt, and only things that carry this tool's ownership marker. A profile or file you made yourself is left alone. Details on keys: [KEYS](KEYS.md#removing-keys). A real run is in [undo.txt](transcripts/undo.txt).
+`--profile` can be left out when exactly one profile has a receipt. Undo shows what it will remove and asks `Remove it? [y/N]` (default No). It removes what setup created, by the receipt, and only a profile folder that carries this tool's ownership marker (a hidden `.trading-agent-run` file whose id matches the receipt). That deletes the whole profile folder, memories included, and the `~/.local/bin/<profile>` command shortcut if Hermes made one (seen on import; whether `setup` creates one is [UNVERIFIED]: compare `ls ~/.local/bin` before and after). A profile you made yourself is left alone; when nothing is removed the exit status is 1. Details on keys: [KEYS](KEYS.md#removing-keys). A real run is in [undo.txt](transcripts/undo.txt).
 
 ## If something goes wrong
 

@@ -5,7 +5,7 @@
 
 **What this project points at, under which license, and what still needs checking before anything is listed.**
 
-The user picks a library in the setup wizard, and it is installed from the library's own source under the library's own license. Source of all facts here: the design notes in SKILLS_AND_TOOLS.md. Anything marked UNVERIFIED has not been confirmed.
+The user picks a library in the setup wizard, and it is installed from the library's own source under the library's own license. Facts here come from the maintainer's design notes (not in this repository) and from reading the upstream repositories. Anything marked UNVERIFIED has not been confirmed. Licenses are what each repository's own license file says, not legal advice, and this project has not had a legal review.
 
 > [!WARNING]
 > **alpha-skills lineage: unresolved.** alpha-skills is catalogued but not listed (`listed: false`) and is never offered in the wizard until the lineage below is checked.
@@ -15,7 +15,7 @@ The user picks a library in the setup wizard, and it is installed from the libra
 | Entry | License | Offered in the wizard? |
 |---|---|---|
 | [alpha-skills](#alpha-skills-trading-subset) | MIT (lineage unresolved) | No, `listed: false` |
-| [broker-skill-docs](#broker-skill-docs) | CC0 for the catalog text; each broker's repo has its own | Yes, license shown before install |
+| [broker-skill-docs](#broker-skill-docs) | CC0 for the catalog text; each broker's repo has its own | Yes, license shown next to the name; the pick is only recorded, nothing is installed in this version |
 | [momentum-mcp](#momentum-mcp) | Apache-2.0 | Optional |
 | [awesome-broker-mcp](#awesome-broker-mcp-catalog-generator-input) | CC0 1.0 | Input to the catalog generator only |
 | [Hermes](#hermes-runtime-dependency) | MIT | Runtime dependency, installed separately |
@@ -24,7 +24,7 @@ The user picks a library in the setup wizard, and it is installed from the libra
 
 - Source: https://github.com/mphinance/alpha-skills (per its README)
 - License: MIT, copyright "Momentum Phinance LLC"
-- Contains: 136 skill folders in total; 64 are trading skills, 56 of which are shippable after dropping personal and brokerage-specific ones
+- Contains: 136 skill folders in total (counted from a local clone on 2026-11-13); 64 are trading skills, 56 of which are shippable after dropping personal and brokerage-specific ones (these two counts are from the design notes and [UNVERIFIED]: recount against the clone)
 - Keys a pick may need (names only): `FMP_API_KEY`, `FINVIZ_API_KEY`, `TD_API_KEY`. UNVERIFIED which keyed skills fall back gracefully.
 - Attribution: the README says "Methodologies adapted from TraderMonty, William O'Neil, and Mark Minervini". Credit those sources.
 - **alpha-skills lineage: unresolved.** Many skills are probably derived from a public open-source trading-skill pack. Evidence: the README credit above, several skills naming "TraderMonty" directly, and skill names that match a public pack. Upstream identity, its license, and which skills are copies versus rewrites are UNVERIFIED. Before listing: identify the upstream, read its license, add an entry crediting it, and mark any skill whose license does not allow redistribution.
@@ -34,8 +34,8 @@ The user picks a library in the setup wizard, and it is installed from the libra
 ## broker-skill-docs
 
 - Source: https://github.com/mphinance/awesome-broker-mcp (the docs live under `docs/skills/`)
-- License: CC0 for the catalog text. Each broker's own skill repo has its own license, recorded per entry in the catalog; some have none at repo root. The wizard shows that license before installing one.
-- Contains: 44 per-broker skill docs.
+- License: CC0 for the catalog text. Each broker's own skill repo has its own license, recorded per entry in the catalog; some have none at repo root. The wizard shows the license next to the name when you pick one; this version only records the pick and installs nothing.
+- Contains: 44 per-broker skill docs (counted from a local clone on 2026-11-13).
 - Keys: whatever each broker's own server documents. Nothing from us.
 - Attribution: broker names are their owners' marks; text only, no logos.
 

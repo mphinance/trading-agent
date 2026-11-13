@@ -1,7 +1,7 @@
 # Updating
 
 > [!NOTE]
-> Status: update rules verified on Hermes 0.23.1 in a scratch home. Install from a package folder, then update, was verified on Hermes 0.23.1 with a real wheel in a scratch home. A git URL as the source was not tried.
+> Status: update rules verified on Hermes 0.23.1 in a scratch home. Install from a package folder, then update, was verified on Hermes 0.23.1 with a real wheel in a scratch home. A git URL as the source was not tried: [UNVERIFIED]; to check, run `hermes profile update` on a profile whose `source:` is a repository address, in a scratch `HERMES_HOME`.
 
 **How to update the profile's shipped files with `hermes profile update`, what it overwrites, and what it keeps.**
 
@@ -13,7 +13,7 @@
 | `distribution.yaml` | Overwritten, with the new version |
 | `config.yaml` | Kept. Your provider choice and broker entries stay |
 | `.env` (keys) | Kept |
-| `memories/`, `skills/` you added, `sessions/` | Kept |
+| `memories/`, `skills/` you added | Kept |
 
 `distribution_owned` in `distribution.yaml` is `[SOUL.md, config.yaml, distribution.yaml]`. `config.yaml` is listed so Hermes copies it on install, but update still keeps your edited one; only `--force-config` replaces it.
 
@@ -48,9 +48,9 @@ A profile made by `trading-agent import` has no `distribution.yaml` at all, so `
 
 ## What not to do
 
-- Do not use `hermes profile install <source> --name <profile> --force` to update. On Hermes 0.23.1 it kept `.env` and `memories/` but reset `config.yaml` to the shipped defaults in a scratch test, which would wipe your provider and broker settings.
+- Do not use `hermes profile install <source> --name <profile> --force` to update. Its effect on `config.yaml` is [UNVERIFIED] here: the spike notes say `--force` preserves user data, while an earlier scratch test reportedly reset `config.yaml` to the shipped defaults, which would wipe your provider and broker settings. To check, try it in a scratch `HERMES_HOME`. `hermes profile update` is the path that was verified.
 - Do not point `hermes profile install` or `update` at a development checkout. It holds `.venv` symlinks and Hermes refuses them (see [SETUP](SETUP.md#why-not-run-it-from-a-checkout)).
-- Do not put hand edits you care about in `SOUL.md`. Keep them in `config.yaml` personalities, or in a skill.
+- Do not put hand edits you care about in `SOUL.md`; update overwrites it. Keep them in `config.yaml` personalities, or in a skill.
 
 ## Updating the tool
 

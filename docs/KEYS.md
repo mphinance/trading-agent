@@ -11,10 +11,10 @@
 |---|---|
 | Where is a key stored? | The new profile's private `.env` file, and nowhere else |
 | What does `config.yaml` hold? | `${NAME}` references, never a value |
-| Who can read the file? | Your user account only (mode 0600), written atomically |
-| Is a key ever printed? | No. Prompts are hidden and messages name the setting, never the value |
+| Who can read the file? | Other user accounts cannot (mode 0600, written atomically). Every program running as you can, the agent and its connectors included. It is plain text, not encrypted |
+| Is a key ever printed? | Not by this tool. Prompts are hidden and its messages name the setting, never the value |
 | Is a key from my environment reused? | Only when you say yes, for one named use at a time |
-| Does export or import carry keys? | Never |
+| Does export or import carry keys? | Not on purpose. Export refuses what its checks catch; the checks are best effort |
 
 ## Where the file is
 
@@ -23,6 +23,9 @@
 ```
 
 `HERMES_HOME` defaults to `~/.hermes`. One line per setting, `NAME=value`. Hermes resolves `${NAME}` in the profile's `config.yaml` from this file first, then from the process environment, so a name set in both uses the `.env` value.
+
+> [!WARNING]
+> The `.env` file is plain text. Mode 0600 keeps other user accounts out; it does not keep out the agent, which runs as you and has your file access, or any program you run under your account. Hermes loads the file, and each connector you pick receives the keys listed for it. A hosted connector (a `url` entry) receives them in request headers, so the key leaves your computer to that vendor's server. A local connector (a `command` entry) is third-party code run on your computer with its keys. This tool does not audit either. Use broker keys with the least access the broker offers (read-only or paper where it has them).
 
 The OS keyring is not used: core Hermes does not read provider keys from it, so a key stored there would silently never arrive.
 
@@ -52,7 +55,7 @@ References such as `${ALPACA_API_KEY}`. A broker that runs as a local program ge
 trading-agent undo --profile <profile>
 ```
 
-Undo uses the setup receipt and an ownership marker inside the profile. It removes the profile it created (including its `.env`) and Hermes' command alias for it. If it cannot prove it made a path, it leaves that path alone and says so.
+Undo uses the setup receipt and an ownership marker inside the profile. It asks `Remove it? [y/N]` (default No), then removes the profile it created (including its `.env`) and the command shortcut Hermes made for it, if any. If it cannot prove it made a path, it leaves that path alone and says so.
 
 > [!CAUTION]
 > Undo deletes the profile's memories along with its keys. Export first if you want to keep them: [MOVING](MOVING.md).
@@ -63,7 +66,7 @@ Neither carries a key. The export refuses a file in the profile that matches a v
 
 ## Detection never reads values for display
 
-The scan reports that a variable, file or port exists. Only names and presence are shown. Anything it reads to compare (for example, to warn that a memory holds a key) stays in memory and is never written to a message.
+The scan reports that a variable, file or port exists. Only names and presence are shown. To do that it checks whether each variable is set and reads other apps' MCP config files, so values pass through memory, but none is printed, saved to the receipt or the progress file, or sent over the network. Anything the export reads to compare (to refuse a memory that holds a key) is handled the same way. That is what the code does; no outside audit has checked it.
 
 ## Related docs
 

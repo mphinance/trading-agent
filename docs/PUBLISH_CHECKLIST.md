@@ -7,7 +7,7 @@
 
 ## At a glance
 
-- 12 open items need a human decision (lineage, license, images, contact, name).
+- 13 open items need a human decision (lineage, license, images, contact, name, risk wording).
 - 5 checks are run and read: local paths, dashes, secret shapes, tests, and a command check.
 - Nothing here is run by automation. Tick a box only after you looked.
 
@@ -38,6 +38,7 @@ Tick a box only after the maintainer decided it.
 
 ### Product scope
 
+- [ ] **Risk and terms wording reviewed.** The README, SETUP and KEYS pages carry plain warnings: no trading rules or risk controls, a broker connector can place live orders, not financial advice, the profile `.env` is readable by the agent, bundles are unencrypted. Confirm the wording, and decide whether broker and AI service names in the catalog and wizard need a trademark or terms-of-service review. Detection of signed-in CLIs is detect-only by design; no vendor terms were checked, so that remains [UNVERIFIED].
 - [ ] **More brokers curated.** Only Alpaca and Tradier are installable. Decide whether to curate more overlay entries before launch or ship as is.
 - [ ] **CLI-powered brain follow-up.** A found signed-in AI CLI cannot power the Hermes brain in this version. Decide whether to document it as a known limit or schedule the follow-up.
 - [ ] **Outside-user pass.** Someone who has not seen the project follows [SETUP](SETUP.md) on a clean machine and reports where it broke. Until then the README status line stays "not yet used by outside users".
@@ -54,7 +55,15 @@ git grep -n "/home/" -- . ':!docs/PUBLISH_CHECKLIST.md'
 
 Expected hits only: a documentation URL path in the catalog (`https://docs.kraken.com/home/mcp`) and fake paths in test fixtures. Any real home folder, hostname or address is a failure.
 
-- [ ] Local-path check read and clean.
+Private addresses, and your own machine names (add them to the pattern yourself; they are not listed here because this page is public):
+
+```bash
+git grep -nE '\b(10|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+' -- . ':!tests' ':!uv.lock'
+```
+
+Expected output: nothing.
+
+- [ ] Local-path and private-address checks read and clean.
 
 ### Dashes
 

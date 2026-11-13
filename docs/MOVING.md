@@ -17,12 +17,12 @@
 
 ```mermaid
 flowchart LR
-    A["Export on the old computer"] --> B{"Key check passes?"}
+    A["Export on the old computer"] --> B{"Export checks pass? (best effort)"}
     B -->|No| C["Refused, nothing written"]
     B -->|Yes| D["One .tgz file (not encrypted)"]
     D --> E["You copy it"]
     E --> F["Import on the new computer"]
-    F --> G{"Whole file safe?"}
+    F --> G{"Import checks pass?"}
     G -->|No| H["Refused, nothing created"]
     G -->|Yes| I["You confirm (default No)"]
     I --> J["Profile created, keys asked by name"]
@@ -66,7 +66,7 @@ trading-agent export --profile <profile> -o <profile>.tgz
 A real run is in [export.txt](transcripts/export.txt).
 
 - `--profile` can be left out when setup made only one profile; with several, the tool asks which one.
-- The output file must not exist yet. The tool never overwrites; it writes to a temporary file and moves it into place, readable only by you (mode 0600).
+- Without `-o`, the file is written to the current folder as `<profile>-<date>-<time>.tgz`. The output file must not exist yet. The tool never overwrites; it writes to a temporary file and moves it into place, readable only by you (mode 0600).
 - Afterwards it prints `This contains: ...` and `It does not contain: keys, sign-ins.`, plus the key names you will re-enter.
 
 The rule has two levels. Every message names the file or the setting, never the value.
@@ -167,7 +167,7 @@ trading-agent undo --profile <profile>
 
 ## Safety checks on import
 
-A bundle from anyone else is treated as hostile input. Before anything is written:
+A bundle from anyone else is untrusted input. These checks guard against a malformed or oversized archive, files outside the allowed set and risky `config.yaml` settings. They do not judge what the memories, `SOUL.md` and skills say; see [What import trusts](#what-import-trusts). Before anything is written:
 
 | Check | Limit |
 |---|---|
@@ -201,6 +201,12 @@ A bundle from anyone else is treated as hostile input. Before anything is writte
 - **Hermes edits text on export, and that blocks the export.** `hermes profile export` itself rewrites secret-looking text inside text files (first 6 and last 4 characters, or `***`, or `[REDACTED PRIVATE KEY]`). Any such change refuses the export, including for harmless lookalikes such as `SECRET=your-webhook-secret-here`; edit the file, then export again. `config.yaml` is checked on its own terms and ships unchanged.
 - **Some false alarms.** A memory that quotes a long hash gets a named warning and a `[y/N]` question.
 - **What the disk rules miss.** A key written with an unusual separator (`password -> X`), a short or letters-only value, a key base64-encoded under a harmless name, a key in a markdown table cell, or a password split across lines can ship. The rules look for typical shapes, not for every way to write a secret. A key in an `args` list nested inside another list is not checked either.
+
+### What import trusts
+
+- **Memories, `SOUL.md` and skills come in whole.** The agent reads them as instructions, so a bundle from someone else can steer it (prompt injection) or carry a skill folder with scripts. Whether Hermes runs scripts inside a skill folder is [UNVERIFIED]: read the Hermes docs or test in a scratch `HERMES_HOME`; until then assume it can. Import only a bundle you made or trust, and read `SOUL.md` and the skills first.
+- **`mcp_servers` are shown, not vetted.** The import prints each server's command or address, and you decide. A server you approve runs as you, with whatever keys you then give it.
+- **Your own bundle can leak more than keys.** Memories can hold positions, account details, strategy notes and which brokers you use (`bundle.json` names the keys, which hints at them). Read it before it leaves your hands.
 
 ### What import leaves out
 
