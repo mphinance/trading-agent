@@ -98,11 +98,30 @@ def main(argv: list[str]) -> int:
             print(f"Error: Profile '{name}' does not exist.")
             return 1
 
-        # Hermes 0.23 also redacts secret-looking text inside exported files (VERIFIED:
-        # "WEBHOOK_SECRET=your-webhook-secret-here" comes out as "WEBHOOK_SECRET=your-w...here").
+        # Hermes 0.23 force-redacts text files on export (hermes_cli/profiles_export_scrub.py calls
+        # agent.redact.redact_sensitive_text(force=True)). Observed on the real function, 2026-11-13:
+        #   sk-zpI...alvq, sk-or-...89ab, ghp_xa...NGp7, AKIAAB...MNOP, eyJhbG...sR8U, xoxb-1...mnop,
+        #   glpat-...qrst, AIzaBB...BBBB (first 6 + "..." + last 4), a short one (sk-abcdefghij) -> ***,
+        #   a PEM private key block -> [REDACTED PRIVATE KEY], "Bearer abcdef0123456789xyzQ" -> "Bearer abcdef...xyzQ",
+        #   "https://user:pw12345@x" -> "https://user:***@x", and in a real export
+        #   "WEBHOOK_SECRET=your-webhook-secret-here" -> "WEBHOOK_SECRET=your-w...here".
         import io
         import re
-        redact = re.compile(rb"(SECRET=)(\S{6})\S+(\S{4})")
+        suffixes = {".md", ".txt", ".yaml", ".yml", ".json", ".jsonl", ".toml", ".ini", ".cfg", ".conf", ".py", ".sh"}
+        token = re.compile(rb"(?<![A-Za-z0-9_-])(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}"
+                           rb"|xox[abposr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}"
+                           rb"|glpat-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})")
+
+        def mask(t: bytes) -> bytes:
+            return t[:6] + b"..." + t[-4:] if len(t) >= 18 else b"***"
+
+        def redact(data: bytes) -> bytes:
+            data = re.sub(rb"-----BEGIN[^-]*PRIVATE KEY-----.*?-----END[^-]*PRIVATE KEY-----",
+                          b"[REDACTED PRIVATE KEY]", data, flags=re.S)
+            data = token.sub(lambda m: mask(m.group(0)), data)
+            data = re.sub(rb"(?i)(bearer\s+)([A-Za-z0-9._~+/=-]{8,})", lambda m: m.group(1) + mask(m.group(2)), data)
+            data = re.sub(rb"(://[^/\s@:]+:)[^/\s@]+@", rb"\1***@", data)
+            return re.sub(rb"(SECRET=)(\S{6})\S+(\S{4})", rb"\1\2...\3", data)
 
         def skip(info):
             rel = info.name.split("/", 1)[1] if "/" in info.name else ""
@@ -114,7 +133,9 @@ def main(argv: list[str]) -> int:
                 if info is None:
                     continue
                 if info.isreg():
-                    data = redact.sub(rb"\1\2...\3", p.read_bytes())
+                    data = p.read_bytes()
+                    if p.suffix.lower() in suffixes:
+                        data = redact(data)
                     info.size = len(data)
                     tar.addfile(info, io.BytesIO(data))
                 else:
