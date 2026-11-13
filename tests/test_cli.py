@@ -701,3 +701,13 @@ def test_export_and_import_help(world, monkeypatch, capsys, argv):
     rc = cli.main([*argv, "--help"])
     out = capsys.readouterr().out
     assert rc == 0 and out.startswith("usage: trading-agent")
+
+
+def test_export_soft_warning_defaults_to_no_and_exits_0(world, monkeypatch, capsys):
+    _set_up_with_memory(world, monkeypatch, capsys)
+    (world.pdir() / "memories" / "hash.md").write_text("commit 0123456789abcdef0123456789abcdef01234567\n")
+    out = world.root / "agent.tgz"
+    rc, so, se = run_cli(monkeypatch, capsys, ["export", "-o", str(out)], [""])
+    assert rc == 0 and "memories/hash.md" in so and "[y/N]" in so and not out.exists()
+    rc, so, _ = run_cli(monkeypatch, capsys, ["export", "-o", str(out)], ["y"])
+    assert rc == 0 and out.is_file()

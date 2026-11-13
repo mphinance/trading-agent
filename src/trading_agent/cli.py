@@ -185,7 +185,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
         _err(BAD_NAME)
         return 2
     platform = _platform()
-    name = _pick_profile(args, platform, ConsoleIO(), NO_RECEIPT_EXPORT, WHICH_EXPORT)
+    console = ConsoleIO()
+    name = _pick_profile(args, platform, console, NO_RECEIPT_EXPORT, WHICH_EXPORT)
     if name is None:
         return 1
     try:
@@ -197,7 +198,10 @@ def _cmd_export(args: argparse.Namespace) -> int:
     files = args.files is not None
     out = args.files if files else (args.output or Path.cwd() / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.tgz")
     try:
-        path, manifest = B.export(name, out, hermes=HermesCli(platform), receipt=receipt, files=files)
+        path, manifest = B.export(name, out, hermes=HermesCli(platform), receipt=receipt, files=files, io=console)
+    except B.ExportCancelled as exc:
+        print(str(exc))                     # the user said No: not an error
+        return 0
     except B.BundleError as exc:
         _err(str(exc))
         return 1
