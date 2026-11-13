@@ -22,10 +22,12 @@ import yaml
 from test_profile_writer import Env, dotenv_read
 from trading_agent import cli, paths
 from trading_agent.profile.receipt import Receipt
+from trading_agent.wizard.flow import Detectors
 from trading_agent.wizard.screens import INSTALL_CMD
 
 ROOT = Path(__file__).parents[1]
 FIXTURE_CATALOG = Path(__file__).parent / "fixtures" / "catalog"
+REAL_DETECTORS = cli._detectors
 KEY_ID, SECRET_KEY = "KEYID-0123456789", "SECRETKEY-9876543210"
 # Pasted through the wizard: choose route, paste both keys, mode switch, then finish.
 HAPPY = ["start", "", "scan", "skip", "continue", "pick:alpaca", "route:local", "continue",
@@ -67,8 +69,17 @@ def world(tmp_path, monkeypatch):
     clean = {"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "HOME": str(tmp_path / "world" / "home"),
              "XDG_CONFIG_HOME": str(w.config_home), "HERMES_HOME": str(w.hermes_home)}
     monkeypatch.setattr(os, "environ", clean)
+    # Fast fakes: the handler tests do not need to probe ports or spawn a login shell. The real detectors run in
+    # the scan tests (real_detectors) and in the one subprocess end-to-end test.
+    monkeypatch.setattr(cli, "_detectors", lambda platform: Detectors(
+        env=lambda: [], mcp_files=lambda enabled: [], ai_clis=lambda: [], ports=lambda: []))
     w.environ = clean
     return w
+
+
+@pytest.fixture
+def real_detectors(monkeypatch):
+    monkeypatch.setattr(cli, "_detectors", REAL_DETECTORS)
 
 
 def run_cli(monkeypatch, capsys, argv, lines=(), then="eof"):
@@ -128,9 +139,9 @@ def test_undo_reasks_on_junk_and_never_echoes_it(world, monkeypatch, capsys):
 
 def test_undo_with_no_receipt_prints_one_plain_line_and_exits_1(world, monkeypatch, capsys):
     rc, out, err = run_cli(monkeypatch, capsys, ["undo"])
-    assert rc == 1 and out.strip() == cli.NO_RECEIPT_ANY and err == ""
-    rc, out, _ = run_cli(monkeypatch, capsys, ["undo", "--profile", "nobody"])
-    assert rc == 1 and "no setup receipt for nobody" in out
+    assert rc == 1 and err.strip() == cli.NO_RECEIPT_ANY and out == ""
+    rc, out, err = run_cli(monkeypatch, capsys, ["undo", "--profile", "nobody"])
+    assert rc == 1 and "no setup receipt for nobody" in err and out == ""
 
 
 def test_undo_rejects_a_bad_profile_name_without_echoing_it(world, monkeypatch, capsys):
@@ -145,8 +156,8 @@ def test_undo_for_a_profile_that_no_longer_exists_removes_nothing(world, monkeyp
     bystander = world.pdir("other")
     bystander.mkdir(parents=True)
     (bystander / "keep.txt").write_text("mine")
-    rc, out, _ = run_cli(monkeypatch, capsys, ["undo", "--profile", "trader"], ["y"])
-    assert rc == 1 and cli.UNDO_NOTHING in out
+    rc, out, err = run_cli(monkeypatch, capsys, ["undo", "--profile", "trader"], ["y"])
+    assert rc == 1 and cli.UNDO_NOTHING in err
     assert (bystander / "keep.txt").read_text() == "mine"
 
 
@@ -161,8 +172,8 @@ def test_undo_with_two_receipts_lists_the_names_and_asks(world, monkeypatch, cap
 def test_a_receipt_that_cannot_be_read_removes_nothing(world, monkeypatch, capsys):
     Receipt(profile_name="trader").save(world.platform)
     world.receipt_path().write_text("{ not json")
-    rc, out, _ = run_cli(monkeypatch, capsys, ["undo", "--profile", "trader"])
-    assert rc == 1 and "could not be read" in out
+    rc, out, err = run_cli(monkeypatch, capsys, ["undo", "--profile", "trader"])
+    assert rc == 1 and "could not be read" in err
 
 
 def test_hermes_missing_returns_nonzero_and_prints_the_install_hint(world, monkeypatch, capsys, tmp_path):
@@ -175,7 +186,7 @@ def test_hermes_missing_returns_nonzero_and_prints_the_install_hint(world, monke
 
 # ---------------------------------------------------------------- scan
 
-def test_scan_output_has_no_values(world, monkeypatch, capsys):
+def test_scan_output_has_no_values(world, real_detectors, monkeypatch, capsys):
     secret = "sk-LEAK" + random_secret()
     os.environ["ALPACA_API_KEY"] = secret
     rc, out, err = run_cli(monkeypatch, capsys, ["scan"])
@@ -185,7 +196,7 @@ def test_scan_output_has_no_values(world, monkeypatch, capsys):
     assert [c.strip() for c in row.split("|")][1:3] == ["broker-key", "present"]
 
 
-def test_scan_json_has_the_same_fields_and_no_values(world, monkeypatch, capsys):
+def test_scan_json_has_the_same_fields_and_no_values(world, real_detectors, monkeypatch, capsys):
     secret = "sk-LEAK" + random_secret()
     os.environ["ALPACA_API_KEY"] = secret
     rc, out, err = run_cli(monkeypatch, capsys, ["scan", "--json"])
@@ -207,7 +218,7 @@ def test_ctrl_c_and_eof_at_every_prompt_stop_cleanly_and_leak_nothing(world, mon
     lines = [secret if x in (KEY_ID, SECRET_KEY) else x for x in HAPPY[:n]]
     rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--distribution", str(world.dist)], lines, then)
     assert rc == code
-    assert err.strip() == cli.STOPPED
+    assert err.strip() == cli.STOPPED and "setup" in err
     assert "Traceback" not in out + err and "File \"" not in out + err
     assert no_window(out + err, secret)
     state = world.config_home / "trading-agent" / "state.json"
@@ -223,6 +234,7 @@ def test_an_unexpected_exception_prints_only_its_type(world, monkeypatch, capsys
     monkeypatch.setattr(cli, "_cmd_scan", boom)
     rc, out, err = run_cli(monkeypatch, capsys, ["scan"])
     assert rc == 1 and "RuntimeError" in err and err.count("\n") == 1
+    assert "trading-agent undo" in err and "Nothing was changed" not in err
     assert no_window(out + err, secret) and "Traceback" not in err
 
 
@@ -257,7 +269,7 @@ def test_catalog_build_on_a_bad_root_fails_with_one_line(tmp_path, capsys):
 
 def test_a_missing_distribution_override_exits_2_with_one_line(world, monkeypatch, capsys, tmp_path):
     rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--distribution", str(tmp_path / "nope")])
-    assert rc == 2 and err.strip() == cli.NOT_IN_BUILD and out == ""
+    assert rc == 2 and err.strip() == cli.NOT_A_DISTRIBUTION and out == ""
 
 
 def test_the_packaged_distribution_missing_exits_2_not_a_traceback(world, monkeypatch, capsys, tmp_path):
@@ -348,3 +360,179 @@ def test_true_end_to_end_in_a_subprocess_setup_then_undo(tmp_path):
     e = subprocess.run([*cmd, "setup", "--distribution", str(w.dist)], input="start\n", capture_output=True,
                        text=True, env=env, timeout=120)
     assert e.returncode == 1 and e.stderr.strip() == cli.STOPPED and "Traceback" not in e.stderr
+
+
+# ---------------------------------------------------------------- fix round 1
+
+def _plant_receipt_copy(world, as_name):
+    shutil.copy(world.receipt_path(), world.receipt_path(as_name))
+
+
+def test_undo_refuses_a_receipt_file_whose_body_names_another_profile(world, monkeypatch, capsys):
+    setup(world, monkeypatch, capsys)
+    _plant_receipt_copy(world, "alpha")                       # alpha.json says profile_name trader
+    rc, out, err = run_cli(monkeypatch, capsys, ["undo", "--profile", "alpha"], ["y"])
+    assert rc == 1 and err.strip() == cli.BAD_RECEIPT.format(name="alpha") and "Remove it?" not in out
+    assert (world.pdir() / ".env").is_file() and world.receipt_path().is_file()
+
+
+def test_undo_refuses_a_symlinked_receipt_file(world, monkeypatch, capsys):
+    setup(world, monkeypatch, capsys)
+    world.receipt_path("zulu").symlink_to(world.receipt_path())
+    rc, out, err = run_cli(monkeypatch, capsys, ["undo", "--profile", "zulu"], ["y"])
+    assert rc == 1 and err.strip() == cli.BAD_RECEIPT.format(name="zulu")
+    assert (world.pdir() / ".env").is_file()
+    # even when the body happens to name the same profile as the link's own name
+    world.receipt_path("zulu").unlink()
+    world.receipt_path("trader").rename(world.receipt_path("moved"))
+    world.receipt_path("trader").symlink_to(world.receipt_path("moved"))
+    rc, out, err = run_cli(monkeypatch, capsys, ["undo", "--profile", "trader"], ["y"])
+    assert rc == 1 and (world.pdir() / ".env").is_file()
+
+
+def test_undo_validates_the_receipts_profile_name_before_asking(world, monkeypatch, capsys):
+    Receipt(profile_name="ok").save(world.platform)
+    doc = json.loads(world.receipt_path("ok").read_text())
+    doc["profile_name"] = "../evil"
+    world.receipt_path("ok").write_text(json.dumps(doc))
+    rc, out, err = run_cli(monkeypatch, capsys, ["undo", "--profile", "ok"], ["y"])
+    assert rc == 1 and err.strip() == cli.BAD_RECEIPT.format(name="ok") and "Remove it?" not in out
+
+
+def test_undo_prints_receipt_names_through_the_safe_filter(world, monkeypatch, capsys):
+    Receipt(profile_name="trader", env_names_written=["\x1b[31mEVIL\x07", "sk-" + "a1B2" * 10]).save(world.platform)
+    rc, out, err = run_cli(monkeypatch, capsys, ["undo", "--profile", "trader"], ["n"])
+    assert rc == 0 and "\x1b" not in out + err and "\x07" not in out + err and "EVIL" in out
+    assert "sk-" + "a1B2" * 10 not in out
+
+
+def test_setup_profile_flag_names_the_new_profile(world, monkeypatch, capsys):
+    lines = [x for x in HAPPY if x != ""]                       # no name prompt any more
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--profile", "myagent", "--distribution", str(world.dist)],
+                           lines)
+    assert rc == 0 and world.pdir("myagent").is_dir() and not world.pdir("trader").exists()
+    assert "trading-agent undo --profile myagent" in out and "Pick a name" not in out
+
+
+@pytest.mark.parametrize("bad", ["../x", "Hermes", "default", ""])
+def test_setup_profile_flag_is_validated_and_never_echoed(world, monkeypatch, capsys, bad):
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--profile", bad, "--distribution", str(world.dist)])
+    assert rc == 2 and err.strip() == cli.BAD_NAME and (not bad or bad not in out + err)
+
+
+def test_setup_profile_flag_junk_is_not_echoed(world, monkeypatch, capsys):
+    junk = random_secret()
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--profile", junk, "--distribution", str(world.dist)])
+    assert rc == 2 and no_window(out + err, junk)
+
+
+def test_a_menu_prompt_never_prints_what_was_typed(world, monkeypatch, capsys):
+    junk = random_secret()
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--distribution", str(world.dist)],
+                           ["start", "", "scan", junk, junk, "skip", "continue", "none", "done", "do"])
+    assert rc == 0 and "Type a number from the list." in out and no_window(out + err, junk)
+
+
+def test_ctrl_c_at_startup_import_is_a_clean_stop(world, monkeypatch, capsys):
+    import importlib.abc
+    name = "trading_agent.wizard.flow"
+
+    class Boom(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path, target=None):
+            if fullname == name:
+                raise KeyboardInterrupt
+    monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(sys, "meta_path", [Boom(), *sys.meta_path])
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--distribution", str(world.dist)])
+    assert rc == 130 and err.strip() == cli.STOPPED and "Traceback" not in err
+
+
+def test_cli_imports_nothing_heavy_at_module_load():
+    code = ("import sys, trading_agent.cli; "
+            "print(sorted(m for m in ('jsonschema', 'yaml', 'trading_agent.wizard.flow', 'trading_agent.catalog.generate') "
+            "if m in sys.modules))")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT / "src")})
+    assert r.stdout.strip() == "[]", r.stderr
+
+
+@pytest.mark.parametrize("argv,lines", [(["undo"], []), (["scan"], [])])
+@pytest.mark.parametrize("then,code", [("interrupt", 130), ("eof", 1)])
+def test_stop_line_is_neutral_outside_setup(world, monkeypatch, capsys, argv, lines, then, code):
+    Receipt(profile_name="a").save(world.platform)
+    Receipt(profile_name="b").save(world.platform)                # undo asks which one, scan is stopped by a patch
+    if argv == ["scan"]:
+        monkeypatch.setattr(cli, "_cmd_scan", lambda a: (_ for _ in ()).throw(
+            KeyboardInterrupt if then == "interrupt" else EOFError))
+    rc, out, err = run_cli(monkeypatch, capsys, argv, lines, then)
+    assert rc == code and err.strip() == cli.STOPPED_NEUTRAL and "setup" not in err
+
+
+def test_catalog_build_unwritable_out_gives_one_error_line(tmp_path, capsys):
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text("{}")
+    (tmp_path / "adir").mkdir()
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ro.chmod(0o500)
+    try:
+        for out in (tmp_path / "adir", ro / "o.json", tmp_path / "afile" / "o.json"):
+            (tmp_path / "afile").write_text("x")
+            rc = cli.main(["catalog", "build", "--catalog-root", str(FIXTURE_CATALOG), "--out", str(out),
+                           "--overlay", str(overlay)])
+            err = capsys.readouterr().err
+            assert rc == 1 and err.startswith("error:") and err.count("\n") == 1 and "Traceback" not in err
+            assert list(tmp_path.glob("**/.*.tmp")) == []
+    finally:
+        ro.chmod(0o700)
+
+
+def test_catalog_build_writes_atomically_and_leaves_no_temp_file(tmp_path):
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text("{}")
+    out = tmp_path / "o.json"
+    out.write_text("OLD")
+    assert cli.main(["catalog", "build", "--catalog-root", str(FIXTURE_CATALOG), "--out", str(out),
+                     "--overlay", str(overlay)]) == 0
+    assert json.loads(out.read_text())["entries"] and sorted(p.name for p in tmp_path.iterdir()) == ["o.json", "overlay.json"]
+
+
+def test_a_failed_build_keeps_the_old_output_file(tmp_path, capsys):
+    out = tmp_path / "o.json"
+    out.write_text("OLD")
+    assert cli.main(["catalog", "build", "--catalog-root", str(tmp_path), "--out", str(out)]) == 1
+    assert out.read_text() == "OLD"
+    capsys.readouterr()
+
+
+def test_catalog_build_deeply_nested_overlay_gives_an_error_line(tmp_path, capsys):
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text("[" * 200000 + "]" * 200000)
+    rc = cli.main(["catalog", "build", "--catalog-root", str(FIXTURE_CATALOG), "--out", str(tmp_path / "o.json"),
+                   "--overlay", str(overlay)])
+    err = capsys.readouterr().err
+    assert rc == 1 and err.startswith("error:") and err.count("\n") == 1 and "Traceback" not in err
+
+
+@pytest.mark.parametrize("make", ["file", "empty", "nodist"])
+def test_distribution_override_that_is_not_a_distribution_gets_its_own_line(world, monkeypatch, capsys, tmp_path, make):
+    target = tmp_path / "d"
+    if make == "file":
+        target.write_text("x")
+    else:
+        target.mkdir()
+        if make == "nodist":
+            (target / "SOUL.md").write_text("x")
+    rc, out, err = run_cli(monkeypatch, capsys, ["setup", "--distribution", str(target)])
+    assert rc == 2 and err.strip() == cli.NOT_A_DISTRIBUTION and "no distribution.yaml" in err
+    assert cli.NOT_A_DISTRIBUTION != cli.NOT_IN_BUILD
+
+
+def test_scan_masks_a_key_shaped_mcp_server_name(world, real_detectors, monkeypatch, capsys):
+    key = "sk-" + "AbCd1234" * 5
+    (Path(os.environ["HOME"]) / ".claude.json").write_text(json.dumps(
+        {"mcpServers": {key: {"command": "node", "args": ["srv.js"]}}}))
+    rc, out, err = run_cli(monkeypatch, capsys, ["scan"])
+    assert rc == 0 and "claude" in out.lower() and key not in out + err and no_window(out + err, key[3:])
+    rc, out, err = run_cli(monkeypatch, capsys, ["scan", "--json"])
+    assert key not in out
