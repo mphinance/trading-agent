@@ -7,7 +7,7 @@
 
 ## At a glance
 
-- 13 open items need a human decision (lineage, license, images, contact, name, risk wording).
+- 12 open items need a human decision (lineage, images, contact setting, name, risk wording).
 - 5 checks are run and read: local paths, dashes, secret shapes, tests, and a command check.
 - Nothing here is run by automation. Tick a box only after you looked.
 
@@ -23,7 +23,7 @@ Tick a box only after the maintainer decided it.
 
 ### Licensing and attribution
 
-- [ ] **License confirmed by the maintainer.** MIT is provisional (`LICENSE`, `distribution.yaml`, `pyproject.toml`). Confirm or change in all three.
+- [x] **License confirmed by the maintainer.** MIT, confirmed 2026-11-13 (`LICENSE`, `distribution.yaml`, `pyproject.toml`).
 - [ ] **alpha-skills lineage resolved.** `THIRD_PARTY.md` says the README credits "TraderMonty" and several skills name it directly; the upstream, its license and which skills are copies are unverified. Until resolved, alpha-skills stays `listed: false` and is never offered in the wizard.
 - [ ] **`THIRD_PARTY.md` complete.** Every library the wizard can point at has an entry with source, license and attribution; the lineage entry above is added.
 - [ ] **GitHub license detector.** GitHub's detector shows no license for alpha-skills, momentum-mcp and awesome-broker-mcp although LICENSE files exist locally. Check each repository's license file is committed and recognised.

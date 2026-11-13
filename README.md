@@ -120,7 +120,7 @@ Read in this order. The full index is [Docs index](docs/README.md).
 
 ## License
 
-MIT, provisional: the maintainer has not confirmed it, and it may change before the repository is public. See [LICENSE](LICENSE) and the open items in [Publish checklist](docs/PUBLISH_CHECKLIST.md).
+MIT. See [LICENSE](LICENSE). Third-party licenses and the one open lineage question are in [THIRD_PARTY](THIRD_PARTY.md).
 
 ## Related docs
 
