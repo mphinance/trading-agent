@@ -4,6 +4,7 @@ Opt in with TRADING_AGENT_REAL_HERMES=1. Nothing here touches the real ~/.hermes
 from __future__ import annotations
 
 import gzip
+import io as io_mod
 import os
 import shutil
 import tarfile
@@ -49,6 +50,15 @@ def test_real_export_delete_import_round_trip(tmp_path):
     assert hermes_home in pdir.parents
     (pdir / "memories").mkdir(exist_ok=True)
     (pdir / "memories" / "MEMORY.md").write_text("remember: the round trip worked\n")
+    # Seed the bundled skills the way Hermes does on a first chat (its own sync, run through the real CLI):
+    # about 300 stock files, several of which hold md5 hashes and token-shaped examples.
+    seeded = hermes.run(["-p", "tabundle", "skills", "opt-in", "--sync"], timeout=300)
+    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+    assert (pdir / "skills" / ".bundled_manifest").is_file()
+    stock = [q for q in (pdir / "skills").rglob("SKILL.md") if ".hub" not in q.parts]
+    assert len(stock) > 10
+    (pdir / "skills" / "my-own").mkdir()
+    (pdir / "skills" / "my-own" / "SKILL.md").write_text("---\nname: my-own\n---\n# mine\n")
 
     out = tmp_path / "out" / "tabundle.tgz"
     out.parent.mkdir()
@@ -58,6 +68,14 @@ def test_real_export_delete_import_round_trip(tmp_path):
         assert sorted(m.name for m in tar.getmembers()) == ["bundle.json", "profile.tar.gz"]
     raw = path.read_bytes()
     assert no_window((raw + gzip.decompress(raw)).decode("latin-1"), secret)
+    with tarfile.open(path, "r:gz") as tar:
+        inner_raw = tar.extractfile("profile.tar.gz").read()
+    with tarfile.open(fileobj=io_mod.BytesIO(inner_raw), mode="r:gz") as tar:
+        names = [m.name for m in tar.getmembers()]
+    assert "tabundle/skills/my-own/SKILL.md" in names
+    skill_files = [n for n in names if n.startswith("tabundle/skills/") and n.count("/") > 2]
+    assert skill_files == ["tabundle/skills/my-own/SKILL.md"], skill_files[:10]
+    assert not any(".bundled_manifest" in n or "/.hub" in n for n in names)
 
     assert rollback(receipt, hermes=hermes, store_factory=store)
     assert not pdir.exists() and not hermes.profile_exists("tabundle")
@@ -66,6 +84,7 @@ def test_real_export_delete_import_round_trip(tmp_path):
     imported = B.import_bundle(path, hermes=hermes, name=None, io=io, store_factory=store)
     assert imported is not None and imported.profile_name == "tabundle"
     assert (pdir / "memories" / "MEMORY.md").read_text() == "remember: the round trip worked\n"
+    assert (pdir / "skills" / "my-own" / "SKILL.md").is_file()
     env_file = pdir / ".env"
     assert not env_file.exists() or "MY_DATA_KEY" not in env_file.read_text()
     for p in pdir.rglob("*"):
