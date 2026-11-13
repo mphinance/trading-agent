@@ -43,18 +43,18 @@ trading-agent export --profile <profile> -o <profile>.tgz
 
 The rule has two levels. Every message names the file or the setting, never the value.
 
-**Refused, nothing written:**
+**Refused, nothing written.** These checks read each file as it is on your disk (Hermes' own export already shortens some keys before this tool sees the archive, so the disk copy is what counts), and also look at the archive for what is left of a key Hermes shortened (`ghp_xa...NGp7`, `[REDACTED PRIVATE KEY]`): that means a real key sat in the file and part of it would be exported.
 
 | Because | Example | What to do |
 |---|---|---|
 | A file is named like a credential | `.env.local`, `auth.json`, `*.pem`, `*.key`, `token*` anywhere in the profile | Move the file out of the profile |
 | A file holds a value from the profile's `.env` | a memory that quotes your API key | Edit that file |
-| A file holds a high-confidence key shape | `sk-...`, `Bearer ...`, `ghp_...` and other vendor prefixes, a PEM private key, a JWT, `user:password@` in a URL, a long value in a key-named URL parameter | Edit that file |
-| `config.yaml` writes a value out in full where a key belongs | `api_key: hunter2pass`, or any literal inside an `env:` or `headers:` map such as `ALPACA_API_KEY: PKAB...` | Move the value to the profile's `.env` file and write `${NAME}` in its place |
+| A file holds a high-confidence key shape | `sk-...` (also `sk-or-...`), `Bearer ...`, `ghp_...`, `github_pat_...`, `xoxb-...`, `AKIA...`, `AIza...`, `glpat-...`, a PEM private key, a JWT, `user:password@` in a URL, a long value in a key-named URL parameter | Edit that file |
+| `config.yaml` writes a value out in full where a key belongs | `api_key: hunter2pass`; a number, date or binary value under a key-like name; any value under a key-like parent such as `credentials:`, `auth:`, `secrets:`, `password:`; any literal inside an `env:`, `headers:`, `default_headers:`, `extra_headers:`, `docker_env:` or other `*_env` / `*_headers` map | Move the value to the profile's `.env` file and write `${NAME}` in its place |
 
 **Named warning, you decide (the answer defaults to No):** a plain long hex or base64 run, or a token-like web address value, in one of your own files. This is usually a hash or an example. The export lists each file and why, then asks `Export them as they are? [y/N]`.
 
-Values shorter than 8 characters (`true`, `paper`) are settings, not keys, and are not compared. In `config.yaml`, `${NAME}` and `Bearer ${NAME}` are fine; so are key-like names whose value is a name, address or count (`key_env`, `token_url`, `auth_type`, `token_limit`).
+Values shorter than 8 characters (`true`, `paper`) are settings, not keys, and are not compared with your `.env`. In `config.yaml`, `true`, `false`, empty values, `${NAME}` and `Bearer ${NAME}` are fine; so are key-like names whose value is a name, address, kind or count (`key_env`, `token_url`, `auth_type`, `token_limit`), also under a key-like parent.
 
 ### A readable folder instead
 
@@ -82,7 +82,7 @@ trading-agent import <profile>.tgz --name <new-name>
 What happens, in order:
 
 1. The whole file is checked before anything is created (see [Safety checks](#safety-checks-on-import)). A bad file gives one plain line and nothing is written.
-2. You see what the bundle contains and, read from its `config.yaml`, everything it can run: each MCP server with its command or address, each hook command, each quick command, approval modes other than the defaults, and any Hermes setting it passes to a program. These can run programs on your computer: import only a bundle you made or trust. Nothing is rewritten for you; you decide.
+2. You see what the bundle contains. Some `config.yaml` settings refuse the bundle outright, because they run a program every time Hermes starts or switch off command approvals: `secrets.command.enabled`, `skills.inline_shell`, a wildcard or glob in `command_allowlist`, `delegation.subagent_auto_approve`, `plugins.host.launcher`, `terminal.shell_init_files`, `security.redact_secrets: false`, `hooks_auto_accept`, `approvals.mode: off`. Everything else the tool can recognise is listed: each MCP server with its command or address, hooks, quick commands, approval modes other than the defaults, enabled secret helpers, every setting named like a program (`command`, `args`, `binary_path`, `executable_path`, `launcher`, `ssh_path`, `cmd`, `exec`, `shell`, `program`, `script`, `cwd`) at any depth, every address (`base_url`, `url`, `endpoint`, `proxy` and `*_url`), `lsp.servers`, `plugins.enabled`, the terminal's environment pass-through lists, each `${NAME}` that would be sent to an address, and the names of settings this tool does not know. **This list is best effort**: Hermes has many settings and a new version can add more that run programs. Import only a bundle you made or trust. Nothing is rewritten for you; you decide.
 3. If the name is taken, by a Hermes profile or by a command of that name on this computer, you pick another name or go back. An existing profile is never overwritten.
 4. You confirm. The answer defaults to No.
 5. Keys: one hidden prompt per key name. Paste it, or press Enter to skip. Keys found in your environment are **not** offered for reuse during import; type them or add them later.
@@ -117,7 +117,7 @@ A bundle from anyone else is treated as hostile input. Before anything is writte
 - The bundle must hold exactly `bundle.json` and `profile.tar.gz`, both plain files.
 - Every entry must be a plain file or folder: no links, devices or pipes; no absolute paths, `..`, backslashes or control characters; no duplicate names (also ignoring case).
 - The profile archive may hold only `SOUL.md`, `config.yaml`, `memories/` and `skills/`. Anything else, such as `.env`, `auth.json`, chat history, scheduled jobs or Hermes' own `skills/.bundled_manifest` and `skills/.hub/`, refuses the bundle.
-- `config.yaml` must hold no value written out in full where a key belongs (the same rule as export), and may not turn off command approvals: `approvals.mode: off` or `hooks_auto_accept: true` refuses the bundle. You can still change those yourself after importing.
+- `config.yaml` must hold no value written out in full where a key belongs (the same rule as export), and may not carry any of the settings listed in step 2 that refuse a bundle. You can still change those yourself after importing.
 - `bundle.json` is checked field by field. An unknown `format` is refused. Key names must look like `NAME_WITH_CAPS` and may not be names that change how programs load, connect or ask for input (`PATH`, `HERMES_*`, `LD_*`, `DYLD_*`, `PYTHON*`, `NODE_OPTIONS`, `EDITOR`, `PAGER`, `SSH_ASKPASS`, proxies and similar).
 
 ## Honest limits
@@ -127,8 +127,8 @@ A bundle from anyone else is treated as hostile input. Before anything is writte
 - **Not tied to the distribution.** An imported profile does not carry `distribution.yaml` (it records a local path), so `hermes profile update` does not apply to it.
 - **Chat history stays behind.** Sessions, logs, the workspace folder and scheduled jobs are not included.
 - **A command alias appears.** `hermes profile import` also creates a `~/.local/bin/<profile>` shortcut; `undo` removes it. The import refuses a name that already exists as a command, so nothing of yours is replaced.
-- **The key scan finds typical shapes and exact copies, not everything.** It catches your `.env` values copied exactly and the common key formats listed above. It does not catch a key that was retyped in lower case, split across lines, cut short, or in a format it does not know. Read your memories before you share a bundle.
-- **Hermes edits text on export.** `hermes profile export` itself shortens secret-looking example text inside files (for example `SECRET=your-webhook-secret-here` becomes `SECRET=your-w...here`). A file of yours that looks like that arrives shortened.
+- **The key scan finds typical shapes and exact copies, not everything.** It checks each file on your disk and in the archive for: your `.env` values (8 characters or more) copied exactly, the key formats listed above, and what Hermes leaves of a key it shortened. It does not catch a key that was retyped in lower case, split across lines, cut short, encoded (base64 of a key looks like any hash and only gets a warning), or in a format it does not know, and a key Hermes shortened to `***` is caught only through the disk copy. Read your memories before you share a bundle.
+- **Hermes edits text on export.** `hermes profile export` itself shortens secret-looking text inside text files (first 6 and last 4 characters, or `***`, or `[REDACTED PRIVATE KEY]`). This tool refuses when it sees that a real key was there; harmless lookalikes such as `SECRET=your-webhook-secret-here` arrive shortened (`SECRET=your-w...here`).
 - **Some false alarms.** A memory that quotes a long hash gets a named warning and a `[y/N]` question.
 
 ## Related docs
