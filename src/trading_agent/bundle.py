@@ -479,7 +479,7 @@ def _hard_reason(data: bytes, values: list[str]) -> str | None:
 def _soft_reason(data: bytes) -> str | None:
     """A plain hex or base64 run or a token-like URL value: usually a hash or an example. Warn by name."""
     text = data.decode("utf-8", errors="replace")
-    return WHY_SOFT if redact_patterns(text) != text else None
+    return WHY_SOFT if redact_patterns(text, env_lines=False) != text else None
 
 
 def _clip(value: Any) -> str:

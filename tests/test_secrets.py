@@ -364,7 +364,7 @@ def test_scrub_default_quote_form():
     ("OPENAI_API_KEY=QWxhZGRpbjpvcGVuIHNlc2Ft", "QWxhZGRpbjpvcGVuIHNlc2Ft", "OPENAI_API_KEY="),
     ("TRADIER_TOKEN=abcdefghijklmnopqrstuvwxyzABCDEF", "abcdefghijklmnopqrstuvwxyzABCDEF", "TRADIER_TOKEN="),
     ("APCA_API_KEY_ID=PKABCDEFGHIJ1234", "PKABCDEFGHIJ1234", "APCA_API_KEY_ID="),
-    ("export DB_PASSWORD = hunter2", "hunter2", "DB_PASSWORD"),
+    ("export DB_PASSWORD = hunter2x", "hunter2x", "DB_PASSWORD"),
     ("api_key: shortval", "shortval", "api_key:"),
     ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA==", "Authorization: Basic"),
     ("GET https://h.example/cb#access_token=zz9short&state=1", "zz9short", "state=1"),
@@ -382,6 +382,12 @@ def test_redact_patterns_final_wave_shapes(text, gone, kept):
     "Basic Installation is in the README.",
     "ALPACA_API_KEY",
     "could not remove ALPACA_API_KEY from .env (KeyError)",
+    "ALPACA_API_KEY: ${ALPACA_API_KEY}",
+    "max_tokens: 4096",
+    "MAX_TOKENS=4096",
+    "API_KEY_REQUIRED=true",
+    "key_env: MY_LLM_KEY",
+    "token_url: https://x.test/oauth/token",
 ])
 def test_redact_patterns_final_wave_leaves_prose(text):
     assert sec.redact_patterns(text) == text

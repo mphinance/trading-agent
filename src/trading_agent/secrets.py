@@ -236,7 +236,8 @@ _SK_KEY = re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{7,}")
 _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+([A-Za-z0-9._~+/=\-]{8,})")
 # NAME=value or NAME: value. The name is bounded so a long word retried from its start stays linear;
 # whether the name is sensitive is decided in the callback, and only the value is hidden.
-_ENV_LINE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]{0,127})(\s*[=:]\s*)([^\s\[]\S*)")
+_ENV_LINE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]{0,127})([ \t]*[=:][ \t]*)(\S+)")
+_ENV_NAME_VALUE = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")   # names another NAME (key_env: MY_KEY)
 _ENV_WORDS = ("KEY", "TOKEN", "SECRET", "PASSW", "PWD", "AUTH", "CREDENTIAL")
 _PROSE_SAFE_WORDS = {"key", "keys", "token", "tokens", "secret", "secrets", "password", "passwd", "pwd", "auth",
                      "credential", "credentials", "apikey"}
@@ -289,21 +290,29 @@ def _env_name_sensitive(name: str) -> bool:
     return any(seg in _PROSE_SAFE_WORDS for seg in segs) and ("_" in name or name.lower() not in ("key", "keys"))
 
 
+def _env_value_plain(value: str) -> bool:
+    """Not a credential: a ${NAME} reference, an already hidden value, a number, a word like true, or short."""
+    return (len(value) < 8 or value.startswith(("${", "[")) or value.isdigit() or "://" in value
+            or _ENV_NAME_VALUE.fullmatch(value) is not None or value.lower() in ("true", "false", "none", "null"))
+
+
 def _env_sub(m: re.Match) -> str:
-    if not _env_name_sensitive(m.group(1)):
+    if not _env_name_sensitive(m.group(1)) or _env_value_plain(m.group(3)):
         return m.group(0)
     return f"{m.group(1)}{m.group(2)}{HIDDEN}"
 
 
-def redact_patterns(text: str) -> str:
+def redact_patterns(text: str, *, env_lines: bool = True) -> str:
     """Mask things shaped like credentials: sk-style keys, ``Bearer``/``Basic <token>``, hex or
     base64 runs of 32+ chars, URL userinfo, token-looking URL query or fragment values, and the value of
-    a ``NAME=value`` or ``NAME: value`` line whose NAME looks like a key, token, secret or password."""
+    a ``NAME=value`` or ``NAME: value`` line whose NAME looks like a key, token, secret or password.
+    ``env_lines=False`` skips that last rule: the export soft check has stricter config-specific rules of its own."""
     text = _URL_USERINFO.sub(lambda m: f"{m.group(1)}{HIDDEN}@", text)
     text = _URL_PARAM.sub(_param_sub, text)
     text = _URL_PARAM_NESTED.sub(_param_sub, text)
     text = _BEARER.sub(_bearer_sub, text)
-    text = _ENV_LINE.sub(_env_sub, text)
+    if env_lines:
+        text = _ENV_LINE.sub(_env_sub, text)
     text = _SK_KEY.sub(HIDDEN, text)
     text = _HEX_RUN.sub(HIDDEN, text)
     text = _B64_RUN.sub(_b64_sub, text)
