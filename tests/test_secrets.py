@@ -402,3 +402,64 @@ def test_redact_patterns_final_wave_is_linear(text):
     t0 = time.perf_counter()
     sec.redact_patterns(text)
     assert time.perf_counter() - t0 < 1.0
+
+
+# ---- NAME=value gaps: closing quote after the name, Token scheme, bare key in a header or flag, short passwords ----
+
+@pytest.mark.parametrize("text,gone,kept", [
+    ('{"api_key": "abc123def456"}', "abc123def456", '"api_key": '),
+    ("{'api_key': 'abc123def456', 'x': 1}", "abc123def456", "'x': 1"),
+    ('{"password":"hunter2"}', "hunter2", '"password":'),
+    ("Authorization: Token abc123def456ghi", "abc123def456ghi", "Authorization: Token"),
+    ("authorization: token abc123def456ghi", "abc123def456ghi", "authorization: token"),
+    ("curl --api-key=abc123def456 https://h.example/x", "abc123def456", "--api-key="),
+    ("curl --key abc123def456 --key=zz99yy88xx77", "zz99yy88xx77", "--key="),
+    ('curl -H "X-Api-Key: abc123def456" https://h.example/x', "abc123def456", "X-Api-Key: "),
+    ("X-Api-Key: abc123def456", "abc123def456", "X-Api-Key:"),
+    ("password=hunter2", "hunter2", "password="),
+    ("DB_PASSWORD=abcd", "abcd", "DB_PASSWORD="),
+    ("PWD: s3cr", "s3cr", "PWD:"),
+    ("client_secret=ab12", "ab12", "client_secret="),
+])
+def test_redact_patterns_name_value_gaps(text, gone, kept):
+    out = sec.redact_patterns(text)
+    assert gone not in out and sec.HIDDEN in out and kept in out
+
+
+def test_redact_patterns_keeps_json_structure_around_the_value():
+    assert sec.redact_patterns('{"api_key": "abc123def456"}') == '{"api_key": "' + sec.HIDDEN + '"}'
+
+
+@pytest.mark.parametrize("text", [
+    "keyboard: qwertyuiop layout",
+    "keyboard=qwertyuiop",
+    "author: Alexander Hamilton",
+    "the author wrote a long book about keys",
+    "press the key and wait for the token to expire",
+    "Token generation is slow today",
+    "token expired yesterday",
+    "monkey-key words in prose",
+    "password_min_length: 12",
+    "password=true",
+    "password=${DB_PASSWORD}",
+    "X-Request-Id: abcdefghijkl",
+    "--keyboard=qwertyuiop",
+])
+def test_redact_patterns_name_value_gaps_leave_prose(text):
+    assert sec.redact_patterns(text) == text
+
+
+def test_redact_patterns_name_value_gaps_respect_env_lines_false():
+    for text in ('{"api_key": "abc123def456"}', "--api-key=abc123def456", "password=hunter2", "X-Api-Key: abc123def456"):
+        assert sec.redact_patterns(text, env_lines=False) == text
+
+
+@pytest.mark.parametrize("text", [
+    '"api_key"' * 25_000, "-key=" * 45_000, "X-Api-Key: " * 20_000, "password=" * 25_000,
+    "Token " * 40_000, "\"a\":" * 55_000, "-" + "key" * 70_000, "'password' = " * 20_000,
+])
+def test_redact_patterns_name_value_gaps_are_linear(text):
+    assert len(text) >= 200_000
+    t0 = time.perf_counter()
+    sec.redact_patterns(text)
+    assert time.perf_counter() - t0 < 1.0

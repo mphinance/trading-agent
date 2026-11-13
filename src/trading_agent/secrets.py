@@ -233,10 +233,13 @@ def check_secret(name: str, value: str) -> None:
 # Deliberately small and biased toward over-redacting in error reports.
 
 _SK_KEY = re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{7,}")
-_BEARER = re.compile(r"(?i)\b(bearer|basic)\s+([A-Za-z0-9._~+/=\-]{8,})")
+_BEARER = re.compile(r"(?i)\b(bearer|basic|token)\s+([A-Za-z0-9._~+/=\-]{8,})")
 # NAME=value or NAME: value. The name is bounded so a long word retried from its start stays linear;
 # whether the name is sensitive is decided in the callback, and only the value is hidden.
-_ENV_LINE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]{0,127})([ \t]*[=:][ \t]*)(\S+)")
+# A quote may close the name (JSON "api_key": "...") and open the value; the callback keeps both.
+_ENV_LINE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]{0,127})([\"']?[ \t]*[=:][ \t]*[\"']?)(\S+)")
+_VALUE_TAIL = "\"'},"
+_LOW_MIN_WORDS = ("PASSW", "PWD", "SECRET")
 _ENV_NAME_VALUE = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")   # names another NAME (key_env: MY_KEY)
 _ENV_WORDS = ("KEY", "TOKEN", "SECRET", "PASSW", "PWD", "AUTH", "CREDENTIAL")
 _PROSE_SAFE_WORDS = {"key", "keys", "token", "tokens", "secret", "secrets", "password", "passwd", "pwd", "auth",
@@ -276,30 +279,40 @@ def _param_sub(m: re.Match) -> str:
 
 def _bearer_sub(m: re.Match) -> str:
     scheme, value = m.group(1), m.group(2)
-    # "basic" is also an English word: a plain lower-case or Title-case word after it is prose, not a credential
-    if scheme.lower() == "basic" and value.isalpha() and (value.islower() or value.istitle()):
+    # "basic" and "token" are also English words: a plain lower-case or Title-case word after them is prose
+    if scheme.lower() in ("basic", "token") and value.isalpha() and (value.islower() or value.istitle()):
         return m.group(0)
     return f"{scheme} {HIDDEN}"
 
 
-def _env_name_sensitive(name: str) -> bool:
+def _env_name_sensitive(name: str, prev: str = "") -> bool:
     if name.upper() == name:
         return any(w in name.upper() for w in _ENV_WORDS)
     # mixed or lower case: an identifier with a sensitive segment (api_key, access_token), or the bare word
     segs = name.lower().split("_")
+    if name.lower() == "key" and prev == "-":
+        return True    # the tail of a header or flag: X-Api-Key, --api-key (a bare "key" or "keyboard" in prose is not)
     return any(seg in _PROSE_SAFE_WORDS for seg in segs) and ("_" in name or name.lower() not in ("key", "keys"))
 
 
-def _env_value_plain(value: str) -> bool:
+def _env_value_plain(value: str, min_len: int = 8) -> bool:
     """Not a credential: a ${NAME} reference, an already hidden value, a number, a word like true, or short."""
-    return (len(value) < 8 or value.startswith(("${", "[")) or value.isdigit() or "://" in value
+    return (len(value) < min_len or value.startswith(("${", "[")) or value.isdigit() or "://" in value
             or _ENV_NAME_VALUE.fullmatch(value) is not None or value.lower() in ("true", "false", "none", "null"))
 
 
 def _env_sub(m: re.Match) -> str:
-    if not _env_name_sensitive(m.group(1)) or _env_value_plain(m.group(3)):
+    name, sep, value = m.group(1), m.group(2), m.group(3)
+    prev = m.string[m.start(1) - 1] if m.start(1) else ""
+    if not _env_name_sensitive(name, prev):
         return m.group(0)
-    return f"{m.group(1)}{m.group(2)}{HIDDEN}"
+    # closing quotes and JSON punctuation after the value stay where they were
+    body = value.rstrip(_VALUE_TAIL)
+    tail = value[len(body):]
+    low = any(w in name.upper() for w in _LOW_MIN_WORDS)
+    if _env_value_plain(body, 4 if low else 8):
+        return m.group(0)
+    return f"{name}{sep}{HIDDEN}{tail}"
 
 
 def redact_patterns(text: str, *, env_lines: bool = True) -> str:
