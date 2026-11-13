@@ -5,24 +5,36 @@ A bundle is a ``.tgz`` whose members are exactly ``bundle.json`` (names and labe
 ``auth.json``, a key or token file, chat history, logs or the ``.trading-agent-run`` ownership marker.
 It is NOT encrypted.
 
-Export (security first): Hermes drops ``.env`` and ``auth.json``; this module then refuses the whole export,
-writing nothing, if any member is named like a credential (``.env*``, ``auth.json``, ``*.pem``, ``*.key``,
-``token*``), keeps only ``SOUL.md``, ``config.yaml``, ``memories/`` and ``skills/``, and refuses again if any
-kept byte looks like a secret (``redact_patterns``) or holds a value from the profile's own ``.env`` (values
-of 8 or more characters, read in memory for this comparison only, never printed or stored).
+Export (security first): Hermes drops ``.env`` and ``auth.json``. This module then keeps only ``SOUL.md``,
+``config.yaml``, ``memories/`` and user skills (stock skills Hermes seeded and still match its
+``skills/.bundled_manifest`` hash are left out, with the manifest and ``skills/.hub/``, because Hermes reseeds
+them), and applies one explicit rule:
+
+* HARD refusal, nothing written: a file named like a credential anywhere in the profile (``.env*``,
+  ``auth.json``, ``*.pem``, ``*.key``, ``token*``); a kept file holding a value from the profile's own ``.env``
+  (values of 8 or more characters, read in memory for this comparison only, never printed or stored); a kept
+  file holding a high-confidence token shape (``sk-``, ``Bearer``, ``ghp_`` and other vendor prefixes, PEM
+  private keys, JWTs, ``user:password@`` in a URL, a long value in a key-named URL parameter); a literal value
+  in ``config.yaml`` under a key-like name or anywhere in an ``env:`` or ``headers:`` map.
+* NAMED WARNING with a confirm, default No: a plain long hex or base64 run, or a token-like URL value, in a
+  user file (usually a hash or an example). Without a way to ask, this is a refusal too.
 
 Import (hostile input): every member of both archives is checked by name and type BEFORE anything is
 written, under fixed caps; ``bundle.json`` is validated field by field and never trusted for a path; the
+``config.yaml`` must hold no literal secret and may not turn off command approvals, and what it can run
+(MCP servers, hooks, quick commands, approval modes, Hermes settings) is shown before a default-No confirm. The
 profile is created through ``hermes profile import`` with a receipt and the ownership marker made here, so
-``trading-agent undo`` removes it and a failure midway rolls back. Keys are asked for by name, never reused
-from the environment.
+``trading-agent undo`` removes it and a failure or Ctrl-C midway rolls back. Keys are asked for by name, never
+reused from the environment.
 """
 from __future__ import annotations
 
 import copy
 import dataclasses
 import gzip
+import hashlib
 import io
+import io as _iomod
 import json
 import os
 import re
@@ -42,7 +54,9 @@ from typing import Any, Callable
 from trading_agent.profile import writer as W
 from trading_agent.profile.hermes_cli import ForbiddenHermesArgs, HermesCli, validate_profile_name
 from trading_agent.profile.receipt import Receipt
-from trading_agent.secrets import SecretStore, check_secret, redact_patterns, scrub
+from trading_agent.secrets import (
+    _BEARER, _SENSITIVE_NAME, _SK_KEY, _TOKENISH, _URL_PARAM, SecretStore, check_secret, redact_patterns, scrub,
+)
 from trading_agent.wizard import screens as S
 from trading_agent.wizard.io import BACK_INPUT, IO, Option
 
@@ -63,6 +77,11 @@ CHUNK = 2**20
 MAX_PATH = 512
 MIN_VALUE_LEN = 8                      # shorter .env values (true, paper, 1) are settings, not secrets
 MAX_ENV_NAMES = 32
+MAX_CONFIG_BYTES = 2**20               # config.yaml parsed for the literal-secret and what-it-runs checks
+MAX_CONFIG_NODES = 100_000             # YAML alias bombs expand to more than this and are refused
+MAX_CONFIG_DEPTH = 64
+MAX_SHOWN = 20                         # servers, hooks or quick commands listed before "and N more"
+CLIP = 120
 
 KEPT_FILES = ("SOUL.md", "config.yaml")
 KEPT_DIRS = ("memories", "skills")
@@ -78,10 +97,31 @@ _REF_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-[^}]*)?\}")
 _KEY_ENV_RE = re.compile(r"(?m)^\s*key_env:\s*['\"]?([A-Z_][A-Z0-9_]*)")
 # Names a bundle may never ask the user to fill: they change how programs load or where they connect.
 _DENY_NAMES = frozenset({"PATH", "HOME", "SHELL", "USER", "LOGNAME", "PWD", "TMPDIR", "IFS", "ENV", "BASH_ENV",
-                         "HERMES_HOME", "NODE_OPTIONS", "PERL5OPT", "RUBYOPT", "SSL_CERT_FILE", "SSL_CERT_DIR",
-                         "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
-                         "NO_PROXY", "LANG"})
-_DENY_PREFIXES = ("LD_", "DYLD_", "PYTHON", "XDG_", "GIT_", "UV_", "PIP_", "NPM_CONFIG", "LC_")
+                         "NODE_OPTIONS", "NODE_PATH", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB", "SSL_CERT_FILE",
+                         "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY",
+                         "ALL_PROXY", "NO_PROXY", "LANG", "EDITOR", "VISUAL", "PAGER", "BROWSER", "PROMPT_COMMAND",
+                         "SSH_ASKPASS", "SUDO_ASKPASS", "GCONV_PATH", "OPENSSL_CONF", "JAVA_TOOL_OPTIONS",
+                         "_JAVA_OPTIONS", "CLASSPATH"})
+_DENY_PREFIXES = ("LD_", "DYLD_", "PYTHON", "XDG_", "GIT_", "UV_", "PIP_", "NPM_CONFIG", "LC_", "HERMES_", "MALLOC_")
+
+# High-confidence token shapes: a hit is a HARD refusal (redact_patterns' sk- and Bearer rules, plus these).
+_PEM = re.compile(r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----")
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
+_VENDOR = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}"
+                     r"|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,})")
+_USERINFO_PW = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{0,31}://[^/\s@:]+:[^/\s@]+@")
+_HARD_SHAPES = (_SK_KEY, _BEARER, _PEM, _JWT, _VENDOR, _USERINFO_PW)
+
+# config.yaml literal-value rule. Key names are split into words (snake, kebab and camel case).
+_SECRET_WORDS = frozenset({"key", "keys", "apikey", "secret", "secrets", "token", "password", "passwd", "pwd",
+                           "passphrase", "auth", "authorization", "credential", "credentials", "cookie", "cookies"})
+_NOT_A_VALUE_LAST = frozenset({"env", "url", "uri", "endpoint", "file", "path", "dir", "type", "mode", "method",
+                               "provider", "name", "header", "scheme", "kind", "style", "required", "enabled"})
+_COUNT_WORDS = frozenset({"max", "min", "limit", "limits", "count", "budget", "length", "size", "ttl", "timeout"})
+_STRICT_REF = re.compile(r"\$\{[A-Z_][A-Z0-9_]*\}")
+_ANY_REF = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)")
+_IMPORTED_AT = re.compile(r"(?m)Imported profile '[^'\n]*' at (.+?)\s*$")
+_RUNTIME_CACHE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
 
 # ---------------------------------------------------------------- copy (no em or en dashes)
 
@@ -92,6 +132,18 @@ LEFT_HERE = "Chat history, logs and workspace files stay on this computer. The b
 IMPORT_TRUST = ("A bundle's config.yaml can start programs (MCP servers) when the agent runs. "
                 "Import only a bundle you made or trust.")
 IMPORT_CONFIRM = "Import it as a new profile called {name}?"
+RISKY_HEAD = "The bundle's config.yaml sets up these:"
+RUN_WARNING = ("These can run programs on this computer. Import only a bundle you made or trust; "
+               "the answer defaults to No.")
+APPROVALS_OFF = ("The bundle's config.yaml turns off command approvals ({what}). An imported bundle may not do "
+                 "that. Nothing was imported.")
+NAME_TAKEN_NOW = "The name {name} was taken while you were answering. Nothing was imported."
+SOFT_HEAD = ("These files hold text shaped like a key. It is probably a hash or an example, but check before "
+             "you share the bundle:")
+SOFT_CONFIRM = "Export them as they are?"
+SOFT_NO_ASK = ("I did not export anything: {rels} hold text shaped like a key. Run the export in a terminal to "
+               "review them, or edit them first.")
+EXPORT_NO = "Nothing was written. Edit those files and export again."
 IMPORT_NO = "Nothing was imported."
 IMPORT_NAME_PROMPT = ("Name for the imported profile (letters, digits, hyphen, underscore). "
                       "Type < to go back.")
@@ -116,6 +168,19 @@ NOT_ALLOWED = ("The bundle holds files a profile bundle never carries (keys, cha
                "or other extras). Nothing was imported.")
 SECRET_FILE = ("I did not export anything: {rel} looks like a key or token. Move it out of the profile "
                "and try again.")
+SECRET_CONTENT = "I did not export anything: {rel} {why}. Edit that file to remove it, then export again."
+WHY_ENV_VALUE = "holds a value from this profile's .env file"
+WHY_TOKEN = "holds something shaped like a key or token"
+WHY_SOFT = "has a long hex or base64 run, or a token-like web address value"
+WHY_SOFT_NAME = "has a name shaped like a key"
+CONFIG_LITERAL = ("I did not export anything: config.yaml holds a value written out in full at {paths}. Move each "
+                  "value to the profile's .env file and reference it as ${{NAME}}.")
+CONFIG_LITERAL_IMPORT = ("The bundle's config.yaml holds values written out in full at {paths}, where only "
+                         "${{NAME}} references belong. Nothing was imported.")
+CONFIG_UNREADABLE = "config.yaml could not be read as YAML, so I could not check it. Nothing was written."
+CONFIG_COMPLEX = "config.yaml is too large or too deeply nested to check. Nothing was written."
+NOT_A_FOLDER = "That path is a file or a link, not a folder. Nothing was written."
+NO_WRITE = "I cannot write there (permission denied). Nothing was written."
 NO_PROFILE = "I found no profile called {name}."
 EXPORT_FAILED = "Hermes could not export the profile ({detail}). Nothing was written."
 OUT_EXISTS = "That file already exists. I never overwrite; pick a new name."
@@ -125,6 +190,10 @@ NO_PARENT = "The folder to write into does not exist."
 
 class BundleError(Exception):
     """One plain, value-free line. Nothing was written (export) or nothing was created (import)."""
+
+
+class ExportCancelled(BundleError):
+    """The user said No to exporting files with a named warning. Nothing was written."""
 
 
 # ---------------------------------------------------------------- manifest
@@ -354,11 +423,264 @@ def _printable(text: str) -> str:
     return "".join(c if c.isprintable() else "?" for c in text)
 
 
-def _looks_secret(data: bytes, values: list[str]) -> bool:
+def _hard_reason(data: bytes, values: list[str]) -> str | None:
+    """Why DATA must never leave this computer, or None. Exact .env values and high-confidence token shapes."""
     text = data.decode("utf-8", errors="replace")
-    if redact_patterns(text) != text:
-        return True
-    return bool(values) and scrub(text, values) != text
+    if values and scrub(text, values) != text:
+        return WHY_ENV_VALUE
+    if any(p.search(text) for p in _HARD_SHAPES):
+        return WHY_TOKEN
+    for m in _URL_PARAM.finditer(text):
+        if any(k in m.group(2).lower() for k in _SENSITIVE_NAME) and _TOKENISH.fullmatch(m.group(3)):
+            return WHY_TOKEN
+    return None
+
+
+def _soft_reason(data: bytes) -> str | None:
+    """A plain hex or base64 run or a token-like URL value: usually a hash or an example. Warn by name."""
+    text = data.decode("utf-8", errors="replace")
+    return WHY_SOFT if redact_patterns(text) != text else None
+
+
+def _clip(value: Any) -> str:
+    text = redact_patterns(_printable(str(value)))
+    return text if len(text) <= CLIP else text[:CLIP] + "..."
+
+
+# ---------------------------------------------------------------- stock skills Hermes seeds
+
+def _skill_name(skill_md: bytes, fallback: str) -> str:
+    """Hermes' read_skill_name: the frontmatter ``name:`` in the first 4000 characters, else FALLBACK."""
+    lines = [ln.strip() for ln in skill_md.decode("utf-8-sig", errors="replace")[:4000].split("\n")]
+    if "---" not in lines:
+        return fallback
+    block = lines[lines.index("---") + 1:]
+    block = block[:block.index("---")] if "---" in block else block
+    values = (ln.split(":", 1)[1].strip().strip("\"'") for ln in block if ln.startswith("name:"))
+    return next((v for v in values if v), fallback)
+
+
+def _dir_hash(files: list[tuple[str, bytes]], *, include_cache: bool) -> str:
+    """Hermes' tools/skills_sync.dir_hash over (path relative to the skill dir, bytes), VERIFIED against a real
+    0.23 profile (44 of 44 seeded skills matched). md5 is Hermes' own change detector, not a security check."""
+    rels = {r for r, _ in files}
+    h = hashlib.md5(usedforsecurity=False)
+    for rel, data in sorted(files, key=lambda f: tuple(f[0].split("/"))):
+        parts = rel.split("/")
+        cache = any(part in _RUNTIME_CACHE_DIRS for part in parts[:-1]) or (
+            rel.endswith((".pyc", ".pyo")) and rel.rsplit(".", 1)[0] + ".py" in rels)
+        if include_cache or not cache:
+            h.update(rel.encode("utf-8"))
+            h.update(data)
+    return h.hexdigest()
+
+
+def _disk_skill_files(skill_dir: Path, budget: list[int]) -> list[tuple[str, bytes]] | None:
+    """(path relative to SKILL_DIR, bytes) for every regular file under it, read from disk. None if it holds a
+    link or anything odd, or the shared read BUDGET runs out: such a dir is never treated as stock."""
+    out: list[tuple[str, bytes]] = []
+    for root, dirs, names in os.walk(skill_dir, followlinks=False):
+        for d in dirs:
+            if os.path.islink(os.path.join(root, d)):
+                return None
+        for n in names:
+            full = os.path.join(root, n)
+            st = os.lstat(full)
+            if not stat.S_ISREG(st.st_mode):
+                return None
+            budget[0] -= st.st_size
+            if budget[0] < 0:
+                return None
+            with open(full, "rb") as f:
+                out.append((Path(full).relative_to(skill_dir).as_posix(), f.read()))
+    return out
+
+
+def _stock_skill_files(entries, pdir: Path) -> set[str]:
+    """Archive paths of skills Hermes seeded and the user never changed: the skill dir's hash ON DISK equals the
+    entry for its name in ``skills/.bundled_manifest`` (``name:md5`` lines). The disk is used, not the archive,
+    because Hermes' export rewrites secret-looking example text inside files (VERIFIED on 0.23.x), so archive
+    bytes of some stock skills never match. Read-only; links are not followed."""
+    man_path = pdir / "skills" / ".bundled_manifest"
+    try:
+        if man_path.is_symlink() or not man_path.is_file() or man_path.stat().st_size > MAX_CONFIG_BYTES:
+            return set()
+        raw = man_path.read_bytes()
+    except OSError:
+        return set()
+    manifest: dict[str, str] = {}
+    for line in raw.decode("utf-8-sig", errors="replace").splitlines():
+        name, sep, digest = line.strip().partition(":")
+        if sep and re.fullmatch(r"[0-9a-f]{32}", digest.strip()):
+            manifest[name.strip()] = digest.strip()
+    rels = [rel for rel, _, _ in entries]
+    budget = [MAX_PROFILE_EXPANDED]
+    stock: set[str] = set()
+    for rel in rels:
+        if not rel.startswith("skills/") or rel.rsplit("/", 1)[-1] != "SKILL.md" or rel.count("/") < 2:
+            continue
+        base = rel[: -len("SKILL.md")]
+        skill_dir = pdir / base
+        try:
+            if any(q.is_symlink() for q in (skill_dir, *skill_dir.parents) if pdir in q.parents or q == pdir) \
+                    or not skill_dir.is_dir():
+                continue
+            files = _disk_skill_files(skill_dir, budget)
+        except OSError:
+            continue
+        if files is None:
+            continue
+        md = dict(files).get("SKILL.md")
+        want = manifest.get(_skill_name(md, base.rstrip("/").rsplit("/", 1)[-1])) if md is not None else None
+        if want and want in (_dir_hash(files, include_cache=False), _dir_hash(files, include_cache=True)):
+            stock.update(r for r in rels if r.startswith(base))
+    return stock
+
+
+def _orphan_description(rel: str, kept_files) -> bool:
+    parts = rel.split("/")
+    if len(parts) != 3 or parts[0] != "skills" or parts[2] != "DESCRIPTION.md":
+        return False
+    prefix = f"skills/{parts[1]}/"
+    return not any(r.startswith(prefix) and r != rel for r, _, _ in kept_files)
+
+
+def _hermes_skill_state(rel: str) -> bool:
+    return rel == "skills/.bundled_manifest" or rel == "skills/.hub" or rel.startswith("skills/.hub/")
+
+
+# ---------------------------------------------------------------- config.yaml checks
+
+def _load_config(data: bytes) -> Any:
+    if len(data) > MAX_CONFIG_BYTES:
+        raise BundleError(CONFIG_COMPLEX)
+    import yaml
+    try:
+        return yaml.safe_load(data.decode("utf-8"))
+    except (yaml.YAMLError, UnicodeDecodeError, RecursionError, ValueError):
+        raise BundleError(CONFIG_UNREADABLE) from None
+
+
+def _key_words(key: str) -> list[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key).lower()
+    return [w for w in re.split(r"[^a-z0-9]+", spaced) if w]
+
+
+def _secret_key(key: str) -> bool:
+    """A key whose value would be a secret: a key-like word (key, secret, token, password, auth, credential,
+    cookie ...), unless its last word says the value is a name, address or kind (``key_env``, ``token_url``,
+    ``auth_type``) or a word says it is a count (``token_limit``)."""
+    words = _key_words(key)
+    if not words or not any(w in _SECRET_WORDS for w in words):
+        return False
+    return words[-1] not in _NOT_A_VALUE_LAST and not any(w in _COUNT_WORDS for w in words)
+
+
+def _is_reference(value: str) -> bool:
+    rest = _STRICT_REF.sub("", value)
+    return rest != value and re.fullmatch(r"(?i)\s*(?:bearer|token|basic)?\s*", rest) is not None
+
+
+def _literal_problem(value: Any, in_map: bool, secret_key: bool) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    if not isinstance(value, str):
+        return in_map                     # numbers and dates in env/headers maps are literals too
+    if value == "" or _is_reference(value):
+        return False
+    return in_map or secret_key
+
+
+def _walk_config(cfg: Any) -> tuple[list[str], set[str]]:
+    """(dotted key paths holding a literal secret, Hermes setting names referenced in env maps). Iterative and
+    capped, so an alias bomb or a deep nest is refused instead of walked."""
+    literal: list[str] = []
+    hermes_names: set[str] = set()
+    stack: list[tuple[Any, tuple[str, ...], bool, bool]] = [(cfg, (), False, False)]
+    seen = 0
+    while stack:
+        node, path, in_map, secret_key = stack.pop()
+        seen += 1
+        if seen > MAX_CONFIG_NODES or len(path) > MAX_CONFIG_DEPTH:
+            raise BundleError(CONFIG_COMPLEX)
+        if isinstance(node, dict):
+            for k, v in node.items():
+                key = str(k)
+                if in_map and key.startswith("HERMES_"):
+                    hermes_names.add(key)
+                stack.append((v, (*path, key), in_map or key.lower() in ("env", "headers"), _secret_key(key)))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                stack.append((v, (*path, str(i)), in_map, secret_key))
+        else:
+            if isinstance(node, str):
+                hermes_names.update(n for n in _ANY_REF.findall(node) if n.startswith("HERMES_"))
+            if _literal_problem(node, in_map, secret_key):
+                literal.append(".".join(path))
+    return sorted(literal), hermes_names
+
+
+def _paths_text(paths: list[str]) -> str:
+    shown = [_clip(p)[:200] for p in paths[:5]]
+    return ", ".join(shown) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+
+
+def _truthy(v: Any) -> bool:
+    return v is True or (isinstance(v, (int, str)) and str(v).strip().lower() in ("1", "true", "yes", "on", "y"))
+
+
+def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
+    """What an imported config.yaml can run, in plain words. Raises BundleError if it turns off approvals."""
+    if not isinstance(cfg, dict):
+        return []
+    if _truthy(cfg.get("hooks_auto_accept")):
+        raise BundleError(APPROVALS_OFF.format(what="hooks_auto_accept"))
+    lines: list[str] = []
+    approvals = cfg.get("approvals")
+    if isinstance(approvals, dict):
+        mode = approvals.get("mode")
+        if mode is False or (isinstance(mode, str) and mode.strip().lower() in ("off", "false", "no")):
+            raise BundleError(APPROVALS_OFF.format(what="approvals.mode"))
+        if mode is not None and mode not in ("manual", "smart"):
+            lines.append(f"Command approvals mode: {_clip(mode)}")
+        for key in ("cron_mode", "single_query_mode", "unattended_mode"):
+            if isinstance(approvals.get(key), str) and approvals[key].strip().lower() == "approve":
+                lines.append(f"Command approvals: {key} is approve (risky commands run without asking)")
+    servers = cfg.get("mcp_servers")
+    if isinstance(servers, dict):
+        for i, (name, entry) in enumerate(servers.items()):
+            if i == MAX_SHOWN:
+                lines.append(f"and {len(servers) - MAX_SHOWN} more MCP servers")
+                break
+            if isinstance(entry, dict) and entry.get("command") is not None:
+                args = entry.get("args") if isinstance(entry.get("args"), list) else []
+                lines.append(f"MCP server {_clip(name)}: runs {_clip(' '.join(str(x) for x in [entry['command'], *args]))}")
+            elif isinstance(entry, dict) and entry.get("url") is not None:
+                lines.append(f"MCP server {_clip(name)}: connects to {_clip(entry['url'])}")
+            else:
+                lines.append(f"MCP server {_clip(name)}")
+    hooks = cfg.get("hooks")
+    shown = 0
+    if isinstance(hooks, dict):
+        for event, items in hooks.items():
+            for item in items if isinstance(items, list) else [items]:
+                cmd = item.get("command") if isinstance(item, dict) else item
+                if shown == MAX_SHOWN:
+                    lines.append("and more hooks")
+                    break
+                lines.append(f"Hook on {_clip(event)}: runs {_clip(cmd)}")
+                shown += 1
+    quick = cfg.get("quick_commands")
+    if isinstance(quick, dict):
+        for i, (name, item) in enumerate(quick.items()):
+            if i == MAX_SHOWN:
+                lines.append(f"and {len(quick) - MAX_SHOWN} more quick commands")
+                break
+            cmd = item.get("command") if isinstance(item, dict) else item
+            lines.append(f"Quick command /{_clip(name)}: runs {_clip(cmd)}")
+    for n in sorted(hermes_names)[:MAX_SHOWN]:
+        lines.append(f"Hermes setting {_clip(n)} is passed to a program it starts")
+    return lines
 
 
 def _build_profile_archive(top: str, entries) -> bytes:
@@ -457,7 +779,9 @@ def _check_out_file(out: Path) -> None:
 
 def _check_out_dir(out: Path) -> None:
     if os.path.lexists(out):
-        if out.is_symlink() or not out.is_dir() or any(out.iterdir()):
+        if out.is_symlink() or not out.is_dir():
+            raise BundleError(NOT_A_FOLDER)
+        if any(out.iterdir()):
             raise BundleError(DIR_NOT_EMPTY)
     elif not out.parent.is_dir():
         raise BundleError(NO_PARENT)
@@ -510,10 +834,24 @@ def _write_folder(out: Path, top: str, inner: bytes, manifest_bytes: bytes) -> N
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def export(name: str, out: Path, *, hermes: HermesCli, receipt: Receipt | None, files: bool = False
-           ) -> tuple[Path, BundleManifest]:
+def _confirm_soft(soft: list[tuple[str, str]], ui: IO | None) -> None:
+    rels = [_printable(redact_patterns(r)) for r, _ in soft]
+    if ui is None:
+        raise BundleError(SOFT_NO_ASK.format(rels=", ".join(rels[:5]) + (" and more" if len(rels) > 5 else "")))
+    ui.say(SOFT_HEAD)
+    for rel, (_, why) in list(zip(rels, soft))[:MAX_SHOWN]:
+        ui.say(f"- {rel}: {why}")
+    if len(soft) > MAX_SHOWN:
+        ui.say(f"and {len(soft) - MAX_SHOWN} more")
+    if not ui.confirm(SOFT_CONFIRM, default=False):
+        raise ExportCancelled(EXPORT_NO)
+
+
+def export(name: str, out: Path, *, hermes: HermesCli, receipt: Receipt | None, files: bool = False,
+           io: IO | None = None) -> tuple[Path, BundleManifest]:
     """Export profile NAME to a bundle file OUT (or, with FILES, a readable folder OUT). Writes nothing at all
-    unless every check passes."""
+    unless every check passes. IO, when given, is used only to ask about named warnings (default No)."""
+    ui = io
     validate_profile_name(name)
     out = Path(os.path.abspath(out))
     pdir = hermes.profile_dir(name)
@@ -535,11 +873,31 @@ def export(name: str, out: Path, *, hermes: HermesCli, receipt: Receipt | None, 
             for rel, _, _ in entries:
                 if _credential_named(rel):
                     raise BundleError(SECRET_FILE.format(rel=_printable(redact_patterns(rel))))
-            kept = [e for e in entries if _kept(e[0])]
-            for rel, is_dir, data in kept:
-                if redact_patterns(rel) != rel or (not is_dir and _looks_secret(data, values)):
-                    raise BundleError(SECRET_FILE.format(rel=_printable(redact_patterns(rel))))
+            stock = _stock_skill_files(entries, pdir)
+            kept_files = [e for e in entries if not e[1] and _kept(e[0]) and e[0] not in stock
+                          and not _hermes_skill_state(e[0])]
+            # A category DESCRIPTION.md (skills/<category>/DESCRIPTION.md) is seeded with the stock skills; leave
+            # it out unless a user skill file still lives in that category.
+            kept_files = [e for e in kept_files if not _orphan_description(e[0], kept_files)]
+            dirs_needed = set(KEPT_DIRS) | {r.rsplit("/", 1)[0] for r, _, _ in kept_files if "/" in r}
+            for r, _, _ in kept_files:
+                parts = r.split("/")
+                dirs_needed.update("/".join(parts[:i]) for i in range(1, len(parts)))
+            kept = [e for e in entries if e[1] and e[0] in dirs_needed] + kept_files
+            soft: list[tuple[str, str]] = []
+            for rel, is_dir, data in kept_files:
+                why = _hard_reason(data, values)
+                if why:
+                    raise BundleError(SECRET_CONTENT.format(rel=_printable(redact_patterns(rel)), why=why))
+                if redact_patterns(rel) != rel:
+                    soft.append((rel, WHY_SOFT_NAME))
+                elif _soft_reason(data):
+                    soft.append((rel, WHY_SOFT))
             config = next((d for r, is_dir, d in kept if r == "config.yaml" and not is_dir), b"")
+            if config:
+                literal, _ = _walk_config(_load_config(config))
+                if literal:
+                    raise BundleError(CONFIG_LITERAL.format(paths=_paths_text(literal)))
             ctext = config.decode("utf-8", errors="replace")
             needed = set(env_names) | set(_REF_RE.findall(ctext)) | set(_KEY_ENV_RE.findall(ctext))
             if receipt is not None:
@@ -560,20 +918,24 @@ def export(name: str, out: Path, *, hermes: HermesCli, receipt: Receipt | None, 
             manifest_bytes = (json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n").encode()
             # the catalog commit is a public 40-hex git id, which the hex-run pattern would flag
             pattern_view = json.dumps(dataclasses.replace(manifest, catalog_commit=None).to_dict()).encode()
-            if _looks_secret(pattern_view, []) or (values and scrub(manifest_bytes.decode(), values)
-                                                    != manifest_bytes.decode()):
-                raise BundleError(SECRET_FILE.format(rel=BUNDLE_JSON))
+            if _hard_reason(manifest_bytes, values) or _hard_reason(pattern_view, []) or _soft_reason(pattern_view):
+                raise BundleError(SECRET_CONTENT.format(rel=BUNDLE_JSON, why=WHY_TOKEN))
+            if soft:
+                _confirm_soft(soft, ui)
             inner = _build_profile_archive(name, kept)
-            if files:
-                _write_folder(out, name, inner, manifest_bytes)
-            else:
-                buf = io.BytesIO()
-                with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.PAX_FORMAT) as tar:
-                    for member, data in ((BUNDLE_JSON, manifest_bytes), (PROFILE_ARCHIVE, inner)):
-                        ti = tarfile.TarInfo(member)
-                        ti.mode, ti.size, ti.mtime = 0o600, len(data), int(time.time())
-                        tar.addfile(ti, io.BytesIO(data))
-                _write_new_file(out, buf.getvalue())
+            try:
+                if files:
+                    _write_folder(out, name, inner, manifest_bytes)
+                else:
+                    buf = _iomod.BytesIO()
+                    with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.PAX_FORMAT) as tar:
+                        for member, data in ((BUNDLE_JSON, manifest_bytes), (PROFILE_ARCHIVE, inner)):
+                            ti = tarfile.TarInfo(member)
+                            ti.mode, ti.size, ti.mtime = 0o600, len(data), int(time.time())
+                            tar.addfile(ti, _iomod.BytesIO(data))
+                    _write_new_file(out, buf.getvalue())
+            except PermissionError:
+                raise BundleError(NO_WRITE) from None
     finally:
         values.clear()
     return out, manifest
@@ -592,19 +954,21 @@ def _safe_ai_kind(receipt: Receipt | None) -> str | None:
     return kind if kind in AI_KINDS else None
 
 
-def export_bundle(name: str, out: Path, *, hermes: HermesCli, receipt: Receipt | None) -> Path:
-    return export(name, out, hermes=hermes, receipt=receipt)[0]
+def export_bundle(name: str, out: Path, *, hermes: HermesCli, receipt: Receipt | None, io: IO | None = None) -> Path:
+    return export(name, out, hermes=hermes, receipt=receipt, io=io)[0]
 
 
-def export_files(name: str, out_dir: Path, *, hermes: HermesCli, receipt: Receipt | None) -> Path:
-    return export(name, out_dir, hermes=hermes, receipt=receipt, files=True)[0]
+def export_files(name: str, out_dir: Path, *, hermes: HermesCli, receipt: Receipt | None,
+                 io: IO | None = None) -> Path:
+    return export(name, out_dir, hermes=hermes, receipt=receipt, files=True, io=io)[0]
 
 
 # ---------------------------------------------------------------- import
 
-def read_bundle(path: Path, work: Path) -> tuple[BundleManifest, list[tuple[str, bool, bytes]]]:
-    """Check a bundle completely, writing only into the private WORK dir. Returns the validated manifest and
-    the profile entries (relative paths). Raises BundleError before the caller creates anything."""
+def read_bundle(path: Path, work: Path) -> tuple[BundleManifest, list[tuple[str, bool, bytes]], list[str]]:
+    """Check a bundle completely, writing only into the private WORK dir. Returns the validated manifest, the
+    profile entries (relative paths) and plain lines saying what its config.yaml can run. Raises BundleError
+    before the caller creates anything."""
     try:
         st = os.stat(path)
     except OSError:
@@ -633,9 +997,17 @@ def read_bundle(path: Path, work: Path) -> tuple[BundleManifest, list[tuple[str,
     entries = _load_profile_archive(inner_gz, work)
     inner_gz.unlink()
     for rel, _, _ in entries:
-        if _credential_named(rel) or not _kept(rel):
+        if _credential_named(rel) or not _kept(rel) or _hermes_skill_state(rel):
             raise BundleError(NOT_ALLOWED)
-    return manifest, entries
+    risky: list[str] = []
+    config = next((d for r, is_dir, d in entries if r == "config.yaml" and not is_dir), None)
+    if config is not None:
+        cfg = _load_config(config)
+        literal, hermes_names = _walk_config(cfg)
+        if literal:
+            raise BundleError(CONFIG_LITERAL_IMPORT.format(paths=_paths_text(literal)))
+        risky = _risky_lines(cfg, hermes_names)
+    return manifest, entries, risky
 
 
 def _command_exists(hermes: HermesCli, name: str) -> bool:
@@ -701,13 +1073,26 @@ def _import_steps(name: str, archive: Path, values: dict[str, str], receipt: Rec
                   pdir: Path, store_factory: Callable[[Path], SecretStore]) -> None:
     platform = hermes.platform
     plain = list(values.values())
-    res = hermes.profile_import(archive, name)
-    if res.returncode != 0 or res.timed_out:
-        if "already exists" not in (res.stdout or "") and pdir.is_dir() and not pdir.is_symlink():
-            W._write_marker(pdir, receipt.run_id)     # a half-made dir we checked absent: claim it to roll back
+    def claim() -> None:
+        """A half-made dir we checked absent a moment ago: mark it ours so rollback can remove it (and
+        ``hermes profile delete`` removes the ~/.local/bin wrapper with it)."""
+        if pdir.is_dir() and not pdir.is_symlink() and "install" not in receipt.steps_done:
+            W._write_marker(pdir, receipt.run_id)
             receipt.created_paths.append(str(pdir))
             receipt.steps_done.append("install")
+    try:
+        res = hermes.profile_import(archive, name)
+    except BaseException:
+        claim()                                       # Ctrl-C or a crash while hermes was importing
+        raise
+    out = res.stdout or ""
+    if res.returncode != 0 or res.timed_out:
+        if "already exists" not in out:
+            claim()
         raise W._hermes_failure("import", res, plain)
+    m = _IMPORTED_AT.search(out)
+    if m and os.path.realpath(m.group(1)) != os.path.realpath(pdir):
+        raise W._StepError("import: hermes reported a different profile path than expected; left untouched")
     if not pdir.is_dir() or pdir.is_symlink():
         raise W._StepError("import: hermes exited 0 but the profile directory does not exist")
     W._write_marker(pdir, receipt.run_id)
@@ -735,18 +1120,27 @@ def import_bundle(path: Path, *, hermes: HermesCli, name: str | None, io: IO,
         validate_profile_name(name)
     with tempfile.TemporaryDirectory(prefix="trading-agent-import-") as tmp:
         work = Path(tmp)
-        manifest, entries = read_bundle(Path(path), work)
+        manifest, entries, risky = read_bundle(Path(path), work)
         for line in summary_lines(dataclasses.replace(manifest, contents=_contents(entries))):
             io.say(line)
-        io.say(IMPORT_TRUST)
+        if risky:
+            io.say(RISKY_HEAD)
+            for line in risky:
+                io.say(f"- {line}")
+            io.say(RUN_WARNING)
+        else:
+            io.say(IMPORT_TRUST)
         chosen = _free_name(name or manifest.profile_name, hermes, io)
         if chosen is None:
             io.say(IMPORT_NO)
             return None
-        if not io.confirm(IMPORT_CONFIRM.format(name=chosen)):
+        if not io.confirm(IMPORT_CONFIRM.format(name=chosen), default=False):
             io.say(IMPORT_NO)
             return None
         values = _ask_keys(manifest.env_names_needed, io)
+        if hermes.profile_exists(chosen) or _command_exists(hermes, chosen):     # taken while answering?
+            values.clear()
+            raise BundleError(NAME_TAKEN_NOW.format(name=chosen))
         archive = work / "profile-out.tar.gz"
         archive.write_bytes(_build_profile_archive(chosen, entries))
         receipt = _install(chosen, manifest, archive, values, hermes, store_factory)
