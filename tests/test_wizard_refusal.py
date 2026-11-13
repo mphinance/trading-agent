@@ -257,3 +257,43 @@ def test_no_user_visible_output_mentions_a_state_name(mk, world):
     outs.append(w2.run([*TO_REFUSAL, "done", "do", "stop"])[1])
     for io in outs:
         assert not STATE_NAMES.search(io.everything())
+
+
+# ------------------------------------------------------------------ N1 gap: _validate_decisions on forged left: records
+
+FORGED_LEFT = {
+    "left:ai": "‮" + "A" * 10,                      # bidi override in the value
+    "left:broker:kraken/community": "A" * 512,            # 512-char value
+    "left:evil": ORKEY,                                    # unknown key shape
+    "left:lib:x": "lower_case_name",                      # lower-case value
+    "left:lib:y": "⁦FOO⁩",                      # bidi isolate characters
+}
+
+
+def test_validate_decisions_drops_every_forged_left_record(mk):
+    w = mk(findings=[], environ={}, catalog=TWO_BROKERS)
+    wiz = _Wizard(ScriptedIO([]), w.deps)
+    wiz.ws.decisions.update(FORGED_LEFT)
+    keep = {"left:broker:kraken/community2": ORKEY}       # a well-formed record survives
+    wiz.ws.decisions.update(keep)
+    wiz._validate_decisions()
+    left = {k: v for k, v in wiz.ws.decisions.items() if k.startswith("left:")}
+    assert left == keep
+
+
+def test_resume_at_verify_never_prints_a_forged_left_record(world):
+    deps = deps_for(world, findings=[env_finding(ORKEY)], catalog=[entry("kraken", "Third Party", [LOCAL_SHARE])])
+    world.platform._e[ORKEY] = K1
+    answers = [*TOP, f"use:env:{ORKEY}", True, "continue", "pick:kraken", "continue", "same", "done", "do"]
+    receipt = run_wizard(ScriptedIO(answers), deps)
+    assert receipt is not None and world.receipt_path().exists()   # a trusted receipt is on disk
+    path = world.config_home / "trading-agent" / "state.json"
+    doc = json.loads(path.read_text())
+    doc["current"] = "VERIFY"
+    doc["decisions"].update(FORGED_LEFT)
+    path.write_text(json.dumps(doc))
+    io = ScriptedIO([])
+    assert run_wizard(io, deps) == receipt
+    said = "\n".join(io.said)
+    assert "‮" not in said and "⁦" not in said and "A" * 64 not in said and "lower_case_name" not in said
+    assert "left out" not in said.lower()
