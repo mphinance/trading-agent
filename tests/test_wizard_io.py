@@ -74,10 +74,10 @@ def test_console_choose_reprompts_without_printing_the_bad_input(monkeypatch, ca
 
 
 def test_console_confirm_reprompts_without_printing_the_bad_input(monkeypatch, capsys):
-    monkeypatch.setattr(_sys, "stdin", _PipeStdin("zz-JUNK-zz\nmaybe-JUNK\ny\n"))
+    monkeypatch.setattr(_sys, "stdin", _PipeStdin("zz-junk-zz\nmaybe-junk\ny\n"))
     assert ConsoleIO().confirm("Sure?") is True
-    out = capsys.readouterr().out
-    assert "JUNK" not in out and out.count("Type y or n.") == 2
+    out = capsys.readouterr().out.lower()
+    assert "junk" not in out and out.count("type y or n.") == 2
 
 
 def test_console_confirm_default_applies_only_when_given(monkeypatch, capsys):
