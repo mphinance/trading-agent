@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import builtins
 import getpass
+import io as _io
+import sys as _sys
+
+import pytest as _pytest
 
 from trading_agent.wizard.io import ConsoleIO, Option
 
@@ -33,11 +37,6 @@ def test_console_io_confirm_secret_ask_say(monkeypatch, capsys):
 
 # ---- ConsoleIO behavior the CLI relies on (secret never echoes, invalid input never printed, EOF raises)
 
-import io as _io
-import sys as _sys
-
-import pytest as _pytest
-
 
 class _PipeStdin(_io.StringIO):
     def isatty(self):
@@ -67,12 +66,18 @@ def test_console_secret_at_end_of_input_raises_eof(monkeypatch):
         ConsoleIO().secret("Paste it:")
 
 
-def test_console_choose_and_confirm_reprompt_without_printing_the_bad_input(monkeypatch, capsys):
-    monkeypatch.setattr(_sys, "stdin", _PipeStdin("zz-JUNK-zz\n9\nmaybe-JUNK\ny\n2\n"))
-    io = ConsoleIO()
-    assert io.confirm("Sure?") is True
-    assert io.choose("Pick", [Option("a", "A"), Option("b", "B")]) == "b"
-    assert "JUNK" not in capsys.readouterr().out
+def test_console_choose_reprompts_without_printing_the_bad_input(monkeypatch, capsys):
+    monkeypatch.setattr(_sys, "stdin", _PipeStdin("zz-JUNK-zz\n9\n0\n-1\nb-JUNK\n2\n"))
+    assert ConsoleIO().choose("Pick", [Option("a", "A"), Option("b", "B")]) == "b"
+    out = capsys.readouterr().out
+    assert "JUNK" not in out and out.count("Type a number from the list.") == 5
+
+
+def test_console_confirm_reprompts_without_printing_the_bad_input(monkeypatch, capsys):
+    monkeypatch.setattr(_sys, "stdin", _PipeStdin("zz-JUNK-zz\nmaybe-JUNK\ny\n"))
+    assert ConsoleIO().confirm("Sure?") is True
+    out = capsys.readouterr().out
+    assert "JUNK" not in out and out.count("Type y or n.") == 2
 
 
 def test_console_confirm_default_applies_only_when_given(monkeypatch, capsys):

@@ -75,3 +75,11 @@ def test_a_missing_default_overlay_warns_on_one_line_instead_of_silently_going_u
     assert generate.default_overlay_text() is None
     err = capsys.readouterr().err
     assert err.count("\n") == 1 and "overlay" in err.lower() and str(tmp_path) not in err
+
+
+def test_load_catalog_rejects_a_snapshot_with_an_invalid_entry(tmp_path, capsys):
+    for doc in ({"entries": [{}]}, {"entries": [{**_doc()["entries"][0], "trading": "maybe"}]}):
+        bad = tmp_path / "catalog.json"
+        bad.write_text(json.dumps(doc))
+        assert load_catalog(bad) == []
+        assert capsys.readouterr().err.count("\n") == 1

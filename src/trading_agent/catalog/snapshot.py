@@ -6,6 +6,9 @@ import sys
 from importlib import resources
 from pathlib import Path
 
+from trading_agent.catalog import CatalogError
+from trading_agent.catalog.schema import validate_entry
+
 NOTICE = "The broker catalog could not be read, so no brokers are offered. Reinstall the tool to restore it."
 
 
@@ -17,7 +20,9 @@ def load_catalog(path: Path | None = None) -> list[dict]:
         entries = doc["entries"]
         if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
             raise ValueError
+        for entry in entries:
+            validate_entry(entry)
         return entries
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, CatalogError):
         print(NOTICE, file=sys.stderr)
         return []
