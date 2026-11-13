@@ -356,3 +356,43 @@ def test_scrub_default_quote_form():
     value = "ab/cd ef&gh"
     assert quote(value) != quote(value, safe="")
     assert scrub(f"echo {quote(value)} end", [value]) == f"echo {sec.HIDDEN} end"
+
+
+# ---- final wave: env-dump lines, Basic auth, fragment and ;-separated params, percent-encoded names ----
+
+@pytest.mark.parametrize("text,gone,kept", [
+    ("OPENAI_API_KEY=QWxhZGRpbjpvcGVuIHNlc2Ft", "QWxhZGRpbjpvcGVuIHNlc2Ft", "OPENAI_API_KEY="),
+    ("TRADIER_TOKEN=abcdefghijklmnopqrstuvwxyzABCDEF", "abcdefghijklmnopqrstuvwxyzABCDEF", "TRADIER_TOKEN="),
+    ("APCA_API_KEY_ID=PKABCDEFGHIJ1234", "PKABCDEFGHIJ1234", "APCA_API_KEY_ID="),
+    ("export DB_PASSWORD = hunter2", "hunter2", "DB_PASSWORD"),
+    ("api_key: shortval", "shortval", "api_key:"),
+    ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA==", "Authorization: Basic"),
+    ("GET https://h.example/cb#access_token=zz9short&state=1", "zz9short", "state=1"),
+    ("GET https://h.example/p;api_key=zz9short", "zz9short", "https://h.example/p"),
+    ("GET https://h.example/p?api%5Fkey=zz9short", "zz9short", "api%5Fkey="),
+])
+def test_redact_patterns_final_wave_shapes(text, gone, kept):
+    out = sec.redact_patterns(text)
+    assert gone not in out and sec.HIDDEN in out and kept in out
+
+
+@pytest.mark.parametrize("text", [
+    "Press any key: then wait for the monkey: it is fine.",
+    "Tokenizer settings are default; basic setup works.",
+    "Basic Installation is in the README.",
+    "ALPACA_API_KEY",
+    "could not remove ALPACA_API_KEY from .env (KeyError)",
+])
+def test_redact_patterns_final_wave_leaves_prose(text):
+    assert sec.redact_patterns(text) == text
+
+
+@pytest.mark.parametrize("text", [
+    "KEY" * 70_000, "A_KEY_" * 35_000, "TOKEN_" * 35_000 + "=", "?api%5F" * 30_000, "#a;" * 70_000,
+    "Basic " * 35_000, "x_key :" * 30_000, ";" + "key" * 70_000,
+])
+def test_redact_patterns_final_wave_is_linear(text):
+    assert len(text) >= 200_000
+    t0 = time.perf_counter()
+    sec.redact_patterns(text)
+    assert time.perf_counter() - t0 < 1.0

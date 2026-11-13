@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, unquote
 import secrets as _stdlib_secrets
 from pathlib import Path
 from typing import Iterable, Protocol
@@ -233,16 +233,22 @@ def check_secret(name: str, value: str) -> None:
 # Deliberately small and biased toward over-redacting in error reports.
 
 _SK_KEY = re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{7,}")
-_BEARER = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=\-]{8,}")
+_BEARER = re.compile(r"(?i)\b(bearer|basic)\s+([A-Za-z0-9._~+/=\-]{8,})")
+# NAME=value or NAME: value. The name is bounded so a long word retried from its start stays linear;
+# whether the name is sensitive is decided in the callback, and only the value is hidden.
+_ENV_LINE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]{0,127})(\s*[=:]\s*)([^\s\[]\S*)")
+_ENV_WORDS = ("KEY", "TOKEN", "SECRET", "PASSW", "PWD", "AUTH", "CREDENTIAL")
+_PROSE_SAFE_WORDS = {"key", "keys", "token", "tokens", "secret", "secrets", "password", "passwd", "pwd", "auth",
+                     "credential", "credentials", "apikey"}
 # Bounded scheme: an unbounded scheme class retried from every start position is quadratic.
 # The userinfo class stops at the next "/" so it stays linear without a bound (a bound would fail open).
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,31}://)[^/\s@]+@")
 # One bounded-name pattern for query parameters; the keyword and long-value rules run in the callback.
 # (Nested unbounded classes around a keyword alternation were quadratic on "?" + "token" * n.)
-_URL_PARAM = re.compile(r"([?&])([A-Za-z0-9_.\-]+)=([^&\s#\"']+)")
+_URL_PARAM = re.compile(r"([?&#;])([A-Za-z0-9_.%\-]+)=([^&;\s#\"']+)")
 # Second pass, value class without "?": finds a sensitive param NESTED inside another param's value
 # (redirect_uri=https://app/cb?access_token=...). Two linear passes, never recursion.
-_URL_PARAM_NESTED = re.compile(r"([?&])([A-Za-z0-9_.\-]+)=([^?&\s#\"']+)")
+_URL_PARAM_NESTED = re.compile(r"([?&#;])([A-Za-z0-9_.%\-]+)=([^?&;\s#\"']+)")
 _SENSITIVE_NAME = ("token", "key", "secret", "sig", "auth", "passw", "pwd", "credential", "access")
 _TOKENISH = re.compile(r"[A-Za-z0-9_.~+/\-]{16,}")
 _HEX_RUN = re.compile(r"(?<![A-Za-z0-9])[A-Fa-f0-9]{32,}(?![A-Za-z0-9])")
@@ -261,19 +267,43 @@ def _b64_sub(m: re.Match) -> str:
 
 def _param_sub(m: re.Match) -> str:
     sep, name, value = m.group(1), m.group(2), m.group(3)
-    lowered = name.lower()
+    lowered = unquote(name).lower()
     if any(k in lowered for k in _SENSITIVE_NAME) or _TOKENISH.fullmatch(value):
         return f"{sep}{name}={HIDDEN}"
     return m.group(0)
 
 
+def _bearer_sub(m: re.Match) -> str:
+    scheme, value = m.group(1), m.group(2)
+    # "basic" is also an English word: a plain lower-case or Title-case word after it is prose, not a credential
+    if scheme.lower() == "basic" and value.isalpha() and (value.islower() or value.istitle()):
+        return m.group(0)
+    return f"{scheme} {HIDDEN}"
+
+
+def _env_name_sensitive(name: str) -> bool:
+    if name.upper() == name:
+        return any(w in name.upper() for w in _ENV_WORDS)
+    # mixed or lower case: an identifier with a sensitive segment (api_key, access_token), or the bare word
+    segs = name.lower().split("_")
+    return any(seg in _PROSE_SAFE_WORDS for seg in segs) and ("_" in name or name.lower() not in ("key", "keys"))
+
+
+def _env_sub(m: re.Match) -> str:
+    if not _env_name_sensitive(m.group(1)):
+        return m.group(0)
+    return f"{m.group(1)}{m.group(2)}{HIDDEN}"
+
+
 def redact_patterns(text: str) -> str:
-    """Mask things shaped like credentials: sk-style keys, ``Bearer <token>``, hex or
-    base64 runs of 32+ chars, URL userinfo, and token-looking URL query values."""
+    """Mask things shaped like credentials: sk-style keys, ``Bearer``/``Basic <token>``, hex or
+    base64 runs of 32+ chars, URL userinfo, token-looking URL query or fragment values, and the value of
+    a ``NAME=value`` or ``NAME: value`` line whose NAME looks like a key, token, secret or password."""
     text = _URL_USERINFO.sub(lambda m: f"{m.group(1)}{HIDDEN}@", text)
     text = _URL_PARAM.sub(_param_sub, text)
     text = _URL_PARAM_NESTED.sub(_param_sub, text)
-    text = _BEARER.sub(lambda m: f"{m.group(1)} {HIDDEN}", text)
+    text = _BEARER.sub(_bearer_sub, text)
+    text = _ENV_LINE.sub(_env_sub, text)
     text = _SK_KEY.sub(HIDDEN, text)
     text = _HEX_RUN.sub(HIDDEN, text)
     text = _B64_RUN.sub(_b64_sub, text)
