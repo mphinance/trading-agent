@@ -184,6 +184,11 @@ class RobinhoodBrokerClient:
         transport failure so a retry cannot double-place."""
         acct = self._require_agentic_account()
         args = self._order_args(symbol, side, quantity, order_type, limit_price, asset_type)
+        # Robinhood's own pre-trade checks (buying power, PDT, halts). Any alert
+        # means do not send; the guard's checks are ours, these are the broker's.
+        review = self._call("review_equity_order", {"account_number": acct, **args})
+        if isinstance(review, dict) and review.get("order_checks"):
+            raise RobinhoodError(f"Robinhood pre-trade check blocked the order: {review['order_checks']}")
         res = self._call(
             "place_equity_order",
             {"account_number": acct, "ref_id": ref_id or str(uuid.uuid4()), **args},

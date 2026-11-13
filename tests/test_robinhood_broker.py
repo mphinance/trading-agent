@@ -11,7 +11,8 @@ ACCTS = {"accounts": [
 
 
 class Fake:
-    def __init__(self, approval=False):
+    def __init__(self, approval=False, block=False):
+        self.block = block
         self.calls = []
         self.approval = approval
 
@@ -21,6 +22,8 @@ class Fake:
             return ACCTS
         if name == "get_portfolio":
             return {"buying_power": {"buying_power": "712.81"}}
+        if name == "review_equity_order" and self.block:
+            return {"order_checks": {"alertType": "EQUITY_NOT_ENOUGH_BP"}}
         if name == "place_equity_order":
             return {"order_id": "o1", "customer_approval_required": self.approval}
         return {"ok": True}
@@ -90,3 +93,10 @@ def test_preview_places_nothing():
     c, f = client()
     c.preview_order("AAPL", "buy", 1, "LIMIT", 100.0)
     assert not placed(f) and any(n == "review_equity_order" for n, _ in f.calls)
+
+
+def test_broker_pre_trade_alert_blocks_placement():
+    c, f = client(block=True)
+    with pytest.raises(RobinhoodError, match="pre-trade check"):
+        c.place_order("AAPL", "buy", 1, "LIMIT", 100.0)
+    assert not placed(f)
