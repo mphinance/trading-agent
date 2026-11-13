@@ -122,6 +122,15 @@ def test_undo_removes_everything_setup_created(world, monkeypatch, capsys):
     assert Receipt.list_receipts(world.platform) == []
 
 
+def test_undo_says_plainly_that_it_deletes_the_whole_profile(world, monkeypatch, capsys):
+    setup(world, monkeypatch, capsys)
+    rc, out, _ = run_cli(monkeypatch, capsys, ["undo", "--profile", "trader"], ["n"])
+    assert ("This deletes the whole profile trader: its memories, chats, skills and every key in its .env, "
+            "and the trader command Hermes added") in out
+    assert "ALPACA_API_KEY, ALPACA_SECRET_KEY" in out and "Remove it? [y/N]" in out
+    assert "Nothing outside that profile" not in out and "that setup created" not in out
+
+
 @pytest.mark.parametrize("answer", [[""], ["n"], ["no"]])
 def test_undo_default_is_no(world, monkeypatch, capsys, answer):
     setup(world, monkeypatch, capsys)
@@ -166,7 +175,7 @@ def test_undo_with_two_receipts_lists_the_names_and_asks(world, monkeypatch, cap
         Receipt(profile_name=name).save(world.platform)
     rc, out, _ = run_cli(monkeypatch, capsys, ["undo"], ["2", "n"])
     assert rc == 0 and "alpha" in out and "bravo" in out and "Which profile" in out
-    assert "remove the Hermes profile bravo" in out and Receipt.list_receipts(world.platform) == ["alpha", "bravo"]
+    assert "deletes the whole profile bravo" in out and Receipt.list_receipts(world.platform) == ["alpha", "bravo"]
 
 
 def test_a_receipt_that_cannot_be_read_removes_nothing(world, monkeypatch, capsys):

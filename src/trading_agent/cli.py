@@ -33,9 +33,10 @@ NO_RECEIPT_ONE = "I found no setup receipt for {name}, so there is nothing to un
 BAD_NAME = "That is not a valid profile name."
 BAD_RECEIPT = "The setup receipt for {name} could not be read, so I removed nothing."
 WHICH = "More than one setup receipt exists. Which profile should I undo?"
-UNDO_PLAN = ("This will remove the Hermes profile {name} that setup created.{env}\n"
-             "Nothing outside that profile is touched.")
-UNDO_ENV = " That includes these names in its private .env file: {names}."
+UNDO_PLAN = ("This deletes the whole profile {name}: its memories, chats, skills and every key in its .env, "
+             "and the {name} command Hermes added, if any.{env}\n"
+             "Nothing else is touched.")
+UNDO_ENV = " The keys setup put in that .env: {names}."
 UNDO_CONFIRM = "Remove it?"
 UNDO_NO = "Nothing was removed."
 UNDO_DONE = "Removed the profile {name} and its setup receipt."

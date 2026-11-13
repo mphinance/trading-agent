@@ -55,7 +55,7 @@ References such as `${ALPACA_API_KEY}`. A broker that runs as a local program ge
 trading-agent undo --profile <profile>
 ```
 
-Undo uses the setup receipt and an ownership marker inside the profile. It asks `Remove it? [y/N]` (default No), then removes the profile it created (including its `.env`) and the command shortcut Hermes made for it, if any. If it cannot prove it made a path, it leaves that path alone and says so.
+Undo uses the setup receipt and an ownership marker inside the profile. It asks `Remove it? [y/N]` (default No), then deletes the whole profile it created: its memories, chats, skills and every key in its `.env`, and the command shortcut Hermes made for it, if any. If it cannot prove it made a path, it leaves that path alone and says so.
 
 > [!CAUTION]
 > Undo deletes the profile's memories along with its keys. Export first if you want to keep them: [MOVING](MOVING.md).
