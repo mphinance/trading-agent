@@ -29,7 +29,7 @@
 ## What you need
 
 - Linux (the only platform covered so far).
-- Python 3.11 or newer.
+- Python 3.11.4 or newer.
 - [uv](https://docs.astral.sh/uv/) or pipx, to install a Python command.
 - Hermes 0.23.0 or newer. `distribution.yaml` says `hermes_requires: ">=0.23.0"`; Hermes refuses to install the profile on anything older.
 
