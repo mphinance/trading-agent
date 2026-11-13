@@ -576,3 +576,37 @@ def test_always_a_different_value_terminates_and_nothing_is_asked_after_do_it(mk
     review = io.prompts[last_review][1]
     assert "left out" in review.lower()
     assert_no_leak(io.everything() + w.state_text(), K1, K2, K3)
+
+
+# ------------------------------------------------------------------ N1: stale or forged left: records never reach DONE
+
+def _seed(w, **decisions):
+    """A hand-edited state.json: written raw, so only the loader's own checks apply."""
+    path = w.state_path()
+    doc = json.loads(path.read_text()) if path.exists() else {"current": "START", "decisions": {}}
+    doc["decisions"].update(decisions)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc))
+
+
+def test_a_stale_left_out_record_does_not_survive_a_later_write(mk):
+    w = mk(environ={ORKEY: K1}, findings=[OR_FINDING], catalog=SHARED_CATALOG)
+    _seed(w, **{"left:ai": ORKEY})       # an earlier run left the AI out, then was undone before VERIFY
+    receipt, io = w.run([*AI_THEN_BROKER, "same", "done", "do"])
+    plan = w.writes[0].plan
+    assert plan.ai == AiChoice("openrouter") and plan.broker is not None
+    done = "\n".join(io.said)
+    assert "left out" not in done.lower()
+    assert not [k for k in json.loads(w.state_text())["decisions"] if k.startswith("left:")]
+
+
+def test_a_forged_left_out_record_is_dropped_and_never_printed(mk):
+    forged = "‮" + "A" * 511
+    w = mk(environ={ORKEY: K1}, findings=[OR_FINDING], catalog=SHARED_CATALOG)
+    _seed(w, **{"left:ai": forged, "left:evil": ORKEY, "left:broker:kraken/community": "lower case"})
+    assert WizardState.load(w.platform).decisions["left:ai"] == forged   # the loader alone lets it through
+    receipt, io = w.run([*AI_THEN_BROKER, "same", "done", "do"])
+    text = io.everything()
+    assert "\u202e" not in text and "A" * 64 not in text and "lower case" not in text and "a broker connection" not in text
+    assert "left out" not in "\n".join(io.said).lower()
+    assert not [k for k in json.loads(w.state_text())["decisions"] if k.startswith("left:")]

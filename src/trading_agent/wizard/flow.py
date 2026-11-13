@@ -44,6 +44,10 @@ from urllib.parse import urlsplit
 
 _KEY_ENV_RE = re.compile(r"[A-Z][A-Z0-9]*(_[A-Z0-9]+)+")   # at least one underscore: a pasted key is not a name
 _AI_KINDS = ("none", "cli", "openrouter", "custom", "ollama", "lm-studio")
+# a saved "left:<consumer>" record: the consumer key shapes the wizard writes, and an env NAME as the value
+_ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+_LEFT_KEY = re.compile(rf"ai|broker:{_ID}/{_ID}|lib:{_ID}")
+_LEFT_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,127}")
 
 
 # ---------------------------------------------------------------- dependencies
@@ -241,6 +245,11 @@ class _Wizard(ValueMixin):
         ok = [i for i in ids if i in {lib.id for lib in listed_only(self.d.libraries)}]
         if ok != ids:
             self.ws.set("skills", ",".join(ok))
+            dropped = True
+        bad_left = [k for k, v in self.ws.decisions.items()
+                    if k.startswith("left:") and not (_LEFT_KEY.fullmatch(k[5:]) and _LEFT_NAME.fullmatch(v))]
+        for k in bad_left:
+            self.ws.forget(k)
             dropped = True
         if self.dec("scan.apps") not in ("", "yes", "no"):
             self.ws.forget("scan.apps")
@@ -1039,6 +1048,7 @@ class _Wizard(ValueMixin):
                 env.clear()
         self._values.clear()
         self._grants.clear()
+        self.forget(*[k for k in self.ws.decisions if k.startswith("left:")])   # an earlier run's record is stale now
         for key, (_label, name) in self.left_out.items():   # names only: so a restart can still say what was left out
             self.decide(f"left:{key}", name)
         return State.VERIFY
