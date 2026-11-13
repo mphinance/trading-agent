@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from importlib import resources
@@ -196,6 +198,22 @@ def _git_head(root: Path) -> str | None:
     return sha if r.returncode == 0 and sha else None
 
 
+def _write_atomically(out: Path, text: str) -> None:
+    """Temp file in the same directory, then os.replace; the temp file never outlives a failure."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=f".{out.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="catalog-build")
     ap.add_argument("--catalog-root", required=True, type=Path)
@@ -207,6 +225,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         text = args.overlay.read_text(encoding="utf-8") if args.overlay else default_overlay_text()
         overlay = json.loads(text) if text else {}
         entries = build_catalog(args.catalog_root, overlay)
+    except RecursionError:
+        print("error: the input is nested too deeply", file=sys.stderr)
+        return 1
     except (CatalogError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -215,6 +236,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "catalog_commit": _git_head(args.catalog_root),
         "entries": entries,
     }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    try:
+        _write_atomically(args.out, json.dumps(doc, indent=2) + "\n")
+    except OSError as exc:
+        print(f"error: could not write the output file ({type(exc).__name__})", file=sys.stderr)
+        return 1
     return 0
