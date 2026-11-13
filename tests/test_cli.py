@@ -314,7 +314,7 @@ def test_help_works_everywhere_and_mentions_no_secret(world, monkeypatch, capsys
 def test_the_top_level_help_names_every_command(capsys):
     cli.main(["--help"])
     out = capsys.readouterr().out
-    for word in ("setup", "undo", "catalog", "scan"):
+    for word in ("setup", "undo", "export", "import", "catalog", "scan"):
         assert word in out
 
 
@@ -599,3 +599,105 @@ def test_unexpected_tail_mentions_undo_only_for_setup(world, monkeypatch, capsys
     monkeypatch.setattr(cli, "_cmd_setup", lambda a: 1 / 0)
     rc, out, err = run_cli(monkeypatch, capsys, ["setup"])
     assert "trading-agent undo" in err and "ZeroDivisionError" in err
+
+
+# ---------------------------------------------------------------- export and import
+
+def _set_up_with_memory(world, monkeypatch, capsys):
+    assert setup(world, monkeypatch, capsys)[0] == 0
+    (world.pdir() / "memories" / "MEMORY.md").write_text("remember: trim AAPL at 200\n")
+
+
+def test_export_picks_the_only_receipt_and_prints_the_summary(world, monkeypatch, capsys):
+    _set_up_with_memory(world, monkeypatch, capsys)
+    out = world.root / "agent.tgz"
+    rc, so, se = run_cli(monkeypatch, capsys, ["export", "-o", str(out)])
+    assert rc == 0 and se == ""
+    assert "This contains: memories, config, SOUL.md." in so
+    assert "It does not contain: keys, sign-ins." in so
+    assert "ALPACA_API_KEY" in so and "ALPACA_SECRET_KEY" in so
+    assert oct(out.stat().st_mode & 0o777) == "0o600"
+    blob = out.read_bytes()
+    for s in (KEY_ID, SECRET_KEY):
+        assert s.encode() not in blob and s not in so + se
+
+
+def test_export_files_writes_a_folder(world, monkeypatch, capsys):
+    _set_up_with_memory(world, monkeypatch, capsys)
+    rc, so, _ = run_cli(monkeypatch, capsys, ["export", "--files", str(world.root / "f")])
+    assert rc == 0 and (world.root / "f" / "memories" / "MEMORY.md").is_file() and "This contains:" in so
+
+
+def test_export_output_and_files_are_mutually_exclusive(world, monkeypatch, capsys):
+    rc, _, se = run_cli(monkeypatch, capsys, ["export", "-o", "a.tgz", "--files", "d"])
+    assert rc == 2 and "not allowed with" in se
+
+
+@pytest.mark.parametrize("argv", [["export", "--profile", "Bad/Name"], ["import", "x.tgz", "--name", "Bad/Name"]])
+def test_export_and_import_validate_names_without_echoing(world, monkeypatch, capsys, argv):
+    rc, so, se = run_cli(monkeypatch, capsys, argv)
+    assert rc == 2 and se.strip() == cli.BAD_NAME and "Bad/Name" not in so + se
+
+
+def test_export_with_no_receipt_says_so_in_one_line(world, monkeypatch, capsys):
+    rc, _, se = run_cli(monkeypatch, capsys, ["export"])
+    assert rc == 1 and se.strip() == cli.NO_RECEIPT_EXPORT
+
+
+def test_export_refuses_an_existing_file_in_one_line(world, monkeypatch, capsys):
+    _set_up_with_memory(world, monkeypatch, capsys)
+    out = world.root / "agent.tgz"
+    out.write_text("mine")
+    rc, _, se = run_cli(monkeypatch, capsys, ["export", "-o", str(out)])
+    assert rc == 1 and len(se.strip().splitlines()) == 1 and out.read_text() == "mine"
+
+
+def test_import_round_trip_through_the_cli_then_undo(world, monkeypatch, capsys):
+    _set_up_with_memory(world, monkeypatch, capsys)
+    out = world.root / "agent.tgz"
+    assert run_cli(monkeypatch, capsys, ["export", "-o", str(out)])[0] == 0
+    new_key = random_secret()
+    rc, so, se = run_cli(monkeypatch, capsys, ["import", str(out), "--name", "moved"], ["y", new_key, "", ""])
+    assert rc == 0, se
+    assert (world.pdir("moved") / "memories" / "MEMORY.md").read_text() == "remember: trim AAPL at 200\n"
+    assert dotenv_read(world.pdir("moved") / ".env") == {"ALPACA_API_KEY": new_key}
+    assert "Left to finish later:" in so and "ALPACA_SECRET_KEY" in so
+    assert "trading-agent undo --profile moved" in so
+    assert no_window(so + se, new_key) and KEY_ID not in so + se
+    rc, so, _ = run_cli(monkeypatch, capsys, ["undo", "--profile", "moved"], ["y"])
+    assert rc == 0 and not world.pdir("moved").exists() and world.pdir().is_dir()
+
+
+def test_import_of_a_hostile_file_is_one_plain_line(world, monkeypatch, capsys):
+    bad = world.root / "bad.tgz"
+    bad.write_bytes(b"\x1b[2Jnot a bundle")
+    rc, so, se = run_cli(monkeypatch, capsys, ["import", str(bad)])
+    assert rc == 1 and len(se.strip().splitlines()) == 1 and "Traceback" not in se and "\x1b" not in se
+    rc, _, se = run_cli(monkeypatch, capsys, ["import", str(world.root / "missing.tgz")])
+    assert rc == 1 and len(se.strip().splitlines()) == 1
+
+
+@pytest.mark.parametrize("then,code", [("interrupt", 130), ("eof", 1)])
+def test_import_stopped_at_a_prompt_creates_nothing(world, monkeypatch, capsys, then, code):
+    _set_up_with_memory(world, monkeypatch, capsys)
+    out = world.root / "agent.tgz"
+    run_cli(monkeypatch, capsys, ["export", "-o", str(out)])
+    rc, _, se = run_cli(monkeypatch, capsys, ["import", str(out), "--name", "moved"], ["y"], then)
+    assert rc == code and se.strip() == cli.STOPPED_NEUTRAL and not world.pdir("moved").exists()
+
+
+@pytest.mark.parametrize("argv", [["export"], ["import", "x.tgz"]])
+def test_export_and_import_unexpected_errors_print_only_the_type(world, monkeypatch, capsys, argv):
+    from trading_agent import bundle
+    monkeypatch.setattr(bundle, "export", lambda *a, **k: 1 / 0)
+    monkeypatch.setattr(bundle, "import_bundle", lambda *a, **k: 1 / 0)
+    Receipt(profile_name="trader").save(world.platform)
+    rc, _, se = run_cli(monkeypatch, capsys, argv)
+    assert rc == 1 and se.strip() == cli.UNEXPECTED_PLAIN.format(kind="ZeroDivisionError")
+
+
+@pytest.mark.parametrize("argv", [["export"], ["import"]])
+def test_export_and_import_help(world, monkeypatch, capsys, argv):
+    rc = cli.main([*argv, "--help"])
+    out = capsys.readouterr().out
+    assert rc == 0 and out.startswith("usage: trading-agent")

@@ -1,4 +1,4 @@
-"""The ``trading-agent`` command: setup, undo, catalog build, scan.
+"""The ``trading-agent`` command: setup, undo, export, import, catalog build, scan.
 
 ``main`` never lets a traceback reach the user. Ctrl-C, end of input and a closed pipe each print one plain
 line; any other failure prints one plain line with the exception TYPE only (its text could hold a secret).
@@ -40,6 +40,12 @@ UNDO_DONE = "Removed the profile {name} and its setup receipt."
 UNDO_NOTHING = ("I did not remove anything: this profile is not one this tool created, "
                 "or it is already gone.")
 UNDO_FAILED = "I could not remove everything: {report}"
+NO_RECEIPT_EXPORT = "I found no setup receipt. Name the profile to export with --profile NAME."
+WHICH_EXPORT = "More than one setup receipt exists. Which profile should I export?"
+EXPORT_DONE = "Exported {name} to {path}"
+EXPORT_KEYS = "After importing it, add these keys again: {names}."
+IMPORT_FAILED = "The import did not finish: {report}"
+HERMES_GONE = "Hermes is not installed or did not answer, so nothing was done."
 
 
 # ---------------------------------------------------------------- subcommands
@@ -102,18 +108,19 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return 0 if receipt is not None else 1
 
 
-def _pick_profile(args: argparse.Namespace, platform, io) -> str | None:
+def _pick_profile(args: argparse.Namespace, platform, io, none_msg: str = NO_RECEIPT_ANY,
+                  which: str = WHICH) -> str | None:
     from trading_agent.profile.receipt import Receipt
     from trading_agent.wizard.io import Option
     if args.profile:
         return args.profile
     names = [n for n in Receipt.list_receipts(platform) if _valid_name(n)]
     if not names:
-        _err(NO_RECEIPT_ANY)
+        _err(none_msg)
         return None
     if len(names) == 1:
         return names[0]
-    return io.choose(WHICH, [Option(n, n) for n in names])
+    return io.choose(which, [Option(n, n) for n in names])
 
 
 def _cmd_undo(args: argparse.Namespace) -> int:
@@ -163,6 +170,73 @@ def _cmd_undo(args: argparse.Namespace) -> int:
     return 1
 
 
+def _printable(text: object) -> str:
+    """A path or report for one line: control and other unprintable characters become ``?`` (no length cap)."""
+    return "".join(c if c.isprintable() else "?" for c in str(text))
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    import time
+    from trading_agent import bundle as B
+    from trading_agent.profile.hermes_cli import HermesCli, HermesUnavailable
+    from trading_agent.profile.receipt import Receipt, ReceiptError
+    from trading_agent.wizard.io import ConsoleIO
+    if args.profile and not _valid_name(args.profile):
+        _err(BAD_NAME)
+        return 2
+    platform = _platform()
+    name = _pick_profile(args, platform, ConsoleIO(), NO_RECEIPT_EXPORT, WHICH_EXPORT)
+    if name is None:
+        return 1
+    try:
+        receipt = None if Receipt.path(platform, name).is_symlink() else Receipt.load(platform, name)
+    except (ReceiptError, OSError):
+        receipt = None                      # metadata only: a broken receipt does not stop an export
+    if receipt is not None and receipt.profile_name != name:
+        receipt = None
+    files = args.files is not None
+    out = args.files if files else (args.output or Path.cwd() / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.tgz")
+    try:
+        path, manifest = B.export(name, out, hermes=HermesCli(platform), receipt=receipt, files=files)
+    except B.BundleError as exc:
+        _err(str(exc))
+        return 1
+    except HermesUnavailable:
+        _err(HERMES_GONE)
+        return 1
+    print(EXPORT_DONE.format(name=name, path=_printable(path)))
+    for line in B.summary_lines(manifest):
+        print(line)
+    if manifest.env_names_needed:
+        print(EXPORT_KEYS.format(names=", ".join(manifest.env_names_needed)))
+    return 0
+
+
+def _cmd_import(args: argparse.Namespace) -> int:
+    from trading_agent import bundle as B
+    from trading_agent.profile.hermes_cli import HermesCli, HermesUnavailable
+    from trading_agent.profile.writer import WriteError
+    from trading_agent.secrets import choose_store, redact_patterns
+    from trading_agent.wizard.io import ConsoleIO
+    if args.name is not None and not _valid_name(args.name):
+        _err(BAD_NAME)
+        return 2
+    platform = _platform()
+    try:
+        B.import_bundle(Path(args.bundle), hermes=HermesCli(platform), name=args.name, io=ConsoleIO(),
+                        store_factory=lambda profile_dir: choose_store(platform, profile_dir))
+    except B.BundleError as exc:
+        _err(str(exc))
+        return 1
+    except HermesUnavailable:
+        _err(HERMES_GONE)
+        return 1
+    except WriteError as exc:
+        _err(IMPORT_FAILED.format(report=_printable(redact_patterns(exc.report))))
+        return 1
+    return 0
+
+
 def _cmd_catalog_build(args: argparse.Namespace) -> int:
     from trading_agent.catalog import generate
     argv = ["--catalog-root", str(args.catalog_root), "--out", str(args.out)]
@@ -210,6 +284,25 @@ def _parser() -> argparse.ArgumentParser:
                        description="Remove the profile setup created, using its saved receipt.")
     p.add_argument("--profile", help="profile to remove (default: the only one with a receipt)")
     p.set_defaults(func=_cmd_undo)
+
+    p = sub.add_parser("export", help="save a profile to one bundle file (no keys)",
+                       description="Save a profile's memories, SOUL.md, config.yaml and skills to one bundle "
+                                   "file, or to a readable folder. Keys and sign-ins are never included. "
+                                   "The bundle is not encrypted.")
+    p.add_argument("--profile", help="profile to export (default: the only one with a setup receipt)")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument("-o", "--output", metavar="FILE", type=Path,
+                       help="bundle file to write (must not exist yet)")
+    where.add_argument("--files", metavar="DIR", type=Path,
+                       help="write a readable folder instead (must be new or empty)")
+    p.set_defaults(func=_cmd_export)
+
+    p = sub.add_parser("import", help="create a new profile from a bundle file",
+                       description="Create a new profile from a bundle file. Never overwrites a profile; "
+                                   "asks for each key by name.")
+    p.add_argument("bundle", metavar="BUNDLE", help="the bundle file")
+    p.add_argument("--name", help="name for the new profile (default: the name in the bundle)")
+    p.set_defaults(func=_cmd_import)
 
     p = sub.add_parser("catalog", help="catalog tools", description="Catalog tools.")
     csub = p.add_subparsers(dest="catalog_command", required=True, metavar="ACTION")
