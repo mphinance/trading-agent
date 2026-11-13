@@ -1,6 +1,6 @@
 """Household leverage, concentration and short-put assignment-collateral checks.
 
-Ported from the Robinhood research engine (avorojeykin/trading-agent). Vesper's
+Ported from the Robinhood research engine. Vesper's
 risk gate looks at one order at a time; this looks at the whole book: how levered
 the account really is, how much of NET equity one name is, and what happens to
 both if every ITM short put is assigned against the buying power on hand.
