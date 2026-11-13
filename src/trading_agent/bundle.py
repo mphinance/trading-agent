@@ -696,6 +696,33 @@ def _masked_reason(data: bytes) -> str | None:
 # ---------------------------------------------------------------- config.yaml checks
 
 _YAML11_YN = re.compile(r"^(?:y|Y|n|N)$")
+# ruamel.yaml 0.18 (MIT) resolver.py, its YAML 1.1 float and int patterns, as Hermes 0.23.1 loads config.yaml.
+_YAML11_FLOAT = re.compile(r"""^(?:
+     [-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+]?[0-9]+)?
+    |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
+    |\.[0-9_]+(?:[eE][-+][0-9]+)?
+    |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*
+    |[-+]?\.(?:inf|Inf|INF)
+    |\.(?:nan|NaN|NAN))$""", re.X)
+_YAML11_INT = re.compile(r"""^(?:[-+]?0b[0-1_]+
+    |[-+]?0?[0-7_]+
+    |[-+]?(?:0|[1-9][0-9_]*)
+    |[-+]?0x[0-9a-fA-F_]+
+    |[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)$""", re.X)
+# Hermes 0.23.1 hermes_cli/config.py _ENV_REF_RE: every match in any config.yaml text is replaced with an environment
+# value from the profile's .env (${NAME}, ${env:NAME}, ${ NAME }, lowercase names too).
+_HERMES_REF = re.compile(r"\$\{([^}]+)\}")
+
+
+def _hermes_ref_names(text: str) -> list[str]:
+    """The variable names Hermes would read for each reference in TEXT (``env:`` prefix and spaces removed)."""
+    out = []
+    for inner in _HERMES_REF.findall(text):
+        name = inner.strip()
+        name = name[4:].strip() if name.startswith("env:") else name
+        if name:
+            out.append(name)
+    return out
 
 
 def _yaml_classes() -> tuple[type, type]:
@@ -726,6 +753,10 @@ def _yaml_classes() -> tuple[type, type]:
 
         for cls in (Loader, Dumper):
             cls.add_implicit_resolver("tag:yaml.org,2002:bool", _YAML11_YN, list("yYnN"))
+        # Text that ruamel's YAML 1.1 reads as a number (1e3, 1.0e3, 1_0.5) or that fails the whole file (._) is
+        # quoted when written, so Hermes reads it back as the text that was checked.
+        Dumper.add_implicit_resolver("tag:yaml.org,2002:float", _YAML11_FLOAT, list("-+0123456789."))
+        Dumper.add_implicit_resolver("tag:yaml.org,2002:int", _YAML11_INT, list("-+0123456789"))
         _YAML_CLASSES = (Loader, Dumper)
     return _YAML_CLASSES
 
@@ -1069,6 +1100,13 @@ KNOWN_SAFE_CONFIG = frozenset({
 SAFE_SUBTREES = frozenset({"mcp_servers"})
 
 
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}")
+
+
+def _plain_name(v: Any) -> bool:
+    return v is None or v == "" or (isinstance(v, str) and _PLAIN_NAME.fullmatch(v) is not None)
+
+
 def _ref_or_empty(v: Any) -> bool:
     return v is None or v == "" or (isinstance(v, str) and _is_reference(v))
 
@@ -1081,6 +1119,9 @@ def _env_name_value(v: Any) -> bool:
 SAFE_VALUE_RULES: tuple[tuple[str, Callable[[Any], bool]], ...] = (
     # Hermes imports plugins/context_engine/<name>/__init__.py with no sanitising, so only the built-in is allowed.
     ("context.engine", lambda v: v == "compressor"),
+    # Hermes joins these into a file path (skins/<name>.yaml and the pet's folder): a plain name only.
+    ("display.skin", lambda v: _plain_name(v)),
+    ("display.pet.slug", lambda v: _plain_name(v)),
     # Maps keyed by a name the user picks: only the value type Hermes reads is kept.
     ("compression.model_thresholds.*", lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)),
     ("agent.reasoning_overrides.*", lambda v: isinstance(v, str)),
@@ -1151,8 +1192,20 @@ def _plain(v: Any) -> bool:
     return _scalar(v) or (isinstance(v, list) and all(_scalar(x) for x in v))
 
 
+# Leaves where a ${NAME} reference IS the setting: a key read from the environment and shown as sent.
+_REFERENCE_LEAVES = frozenset({"api_key", "key_env", "api_key_env"})
+
+
+def _no_hermes_ref(v: Any) -> bool:
+    items = v if isinstance(v, list) else [v]
+    return not any(isinstance(x, str) and _HERMES_REF.search(x) for x in items)
+
+
 def _leaf_ok(path: tuple[str, ...], v: Any) -> bool:
-    return _plain(v) and all(rule(v) for spec, rule in _RULE_SPECS if _spec_is(spec, path))
+    """A plain value that passes its rule. Text holding a reference is dropped everywhere but the key leaves:
+    Hermes would put the environment value into a prompt, a display string or an address."""
+    return (_plain(v) and (path[-1] in _REFERENCE_LEAVES or _no_hermes_ref(v))
+            and all(rule(v) for spec, rule in _RULE_SPECS if _spec_is(spec, path)))
 
 
 def _filter_config(cfg: Any) -> tuple[Any, list[str]]:
@@ -1245,7 +1298,6 @@ _TLS_KEYS = frozenset({"ssl_verify", "verify_ssl", "tls_verify", "verify", "inse
                        "ca_bundle", "client_cert", "client_key", "ssl_cert", "ssl_key"})
 _MCP_USUAL = frozenset({"command", "args", "env", "url", "headers", "cwd", "timeout", "connect_timeout", "enabled",
                         "description", "transport", "type"})
-_REF_NAMES = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 
 
 def _program_key(key: str) -> bool:
@@ -1268,9 +1320,9 @@ def _send_lines(node: dict, where: str, address: str) -> list[str]:
                 key, sub = str(k), f"{p}.{k}" if p else str(k)
                 if key in ("key_env", "api_key_env") and isinstance(v, str) and _ENV_NAME_RE.fullmatch(v):
                     out.append(f"Would send the key in ${{{v}}} ({_clip(sub)}) to {_clip(address)}")
-                elif isinstance(v, str) and _is_reference(v):
-                    out += [f"Would send the key in ${{{ref}}} ({_clip(sub)}) to {_clip(address)}"
-                            for ref in _REF_NAMES.findall(v)]
+                elif isinstance(v, str) and _HERMES_REF.search(v):
+                    out += [f"Would send the key in ${{{_clip(ref)}}} ({_clip(sub)}) to {_clip(address)}"
+                            for ref in _hermes_ref_names(v)]
                 elif isinstance(v, (dict, list)):
                     stack.append((v, sub))
         elif isinstance(n, list):

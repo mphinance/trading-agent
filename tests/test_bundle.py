@@ -1860,8 +1860,117 @@ def test_a_program_setting_that_survives_anywhere_is_shown():
     assert "x.key_cmd: op read secret" in lines and "x.codex_bin: /opt/codex" in lines
 
 
-def test_text_that_only_contains_a_reference_is_not_called_a_key():
-    lines = B._risky_lines({"providers": {"p": {"name": "p", "base_url": "https://p.test/${REGION}/v1",
-                                                "key_env": "P_KEY"}}}, set())
-    assert not any("key in ${REGION}" in line for line in lines)
-    assert any("${P_KEY}" in line and "Would send" in line for line in lines)
+def test_references_in_every_hermes_shape_are_named_in_would_send_lines():
+    """Hermes expands the pattern in config.py _ENV_REF_RE: ${KEY}, ${env:KEY}, ${ KEY } and a reference inside
+    a URL all reach the address."""
+    servers = {"a": {"url": "https://e.test/${URL_KEY}/mcp"},
+               "b": {"url": "https://b.test/mcp", "headers": {"Authorization": "Bearer ${env:ENV_KEY}",
+                                                              "X-Key": "${ SPACED_KEY }"}}}
+    lines = B._risky_lines({"mcp_servers": servers, "providers": {"p": {"name": "p", "base_url": "https://p.test/v1",
+                                                                         "key_env": "P_KEY"}}}, set())
+    for ref, addr in (("URL_KEY", "https://e.test/${URL_KEY}/mcp"), ("ENV_KEY", "https://b.test/mcp"),
+                      ("SPACED_KEY", "https://b.test/mcp"), ("P_KEY", "https://p.test/v1")):
+        assert any(f"${{{ref}}}" in line and "Would send" in line and line.endswith(addr) for line in lines), \
+            (ref, lines)
+
+
+# ---------------------------------------------------------------- fix round 5
+
+REF_SHAPES = ["${X_KEY}", "${env:X_KEY}", "${ x_key }", "${lower}"]
+REF_PLACES = {
+    "personality_prompt": ("personalities:\n  helper:\n    system_prompt: 'probe {ref} end'\n",
+                           "personalities.helper.system_prompt"),
+    "personality_text": ("personalities:\n  helper: 'say {ref}'\n", "personalities.helper"),
+    "model_default": ("model:\n  provider: openrouter\n  default: 'm{ref}'\n", "model.default"),
+    "display_text": ("display:\n  timestamp_format: '{ref}'\n", "display.timestamp_format"),
+    "list_item": ("display:\n  runtime_footer:\n    fields: [model, '{ref}']\n", "display.runtime_footer.fields"),
+    "base_url": ("providers:\n  p:\n    name: p\n    base_url: 'https://p.test/{ref}'\n", "providers.p.base_url"),
+}
+
+
+@pytest.mark.parametrize("ref", REF_SHAPES)
+@pytest.mark.parametrize("where", sorted(REF_PLACES))
+def test_a_reference_in_a_kept_text_setting_is_dropped_and_listed(env, ref, where):
+    """Hermes expands every ${...} in config.yaml text against the profile's .env, so a reference in a prompt or a
+    display string would put a key into the system prompt or on screen."""
+    text, path = REF_PLACES[where]
+    text = text.replace("{ref}", ref)
+    if where != "model_default":
+        text = "model:\n  provider: openrouter\n" + text
+    r, io_ = do_import(env, config_bundle(env, text))
+    assert r is not None
+    raw = (env.pdir() / "config.yaml").read_bytes()
+    assert b"${" not in raw
+    notices = [line for line in io_.said if line.startswith(B.NOT_IMPORTED_HEAD)]
+    assert len(notices) == 2 and all(path in n and "${" not in n for n in notices), notices
+
+
+def test_legitimate_references_still_round_trip(env):
+    cfg = ("model:\n  provider: openrouter\n  api_key: ${OPENROUTER_API_KEY}\n"
+           "providers:\n  p:\n    name: p\n    base_url: https://p.test/v1\n    key_env: P_KEY\n"
+           "mcp_servers:\n  x:\n    command: tool\n    env:\n      FEED_KEY: ${FEED_KEY}\n"
+           "  r:\n    url: https://r.test/mcp\n    headers:\n      Authorization: Bearer ${R_KEY}\n")
+    r, io_ = do_import(env, config_bundle(env, cfg))
+    assert not any(line.startswith(B.NOT_IMPORTED_HEAD) for line in io_.said)
+    written = _written_config(env)
+    assert written["model"]["api_key"] == "${OPENROUTER_API_KEY}"
+    assert written["mcp_servers"]["x"]["env"] == {"FEED_KEY": "${FEED_KEY}"}
+    assert written["mcp_servers"]["r"]["headers"] == {"Authorization": "Bearer ${R_KEY}"}
+
+
+@pytest.mark.parametrize("leaf", ["skin", "pet.slug"])
+@pytest.mark.parametrize("value,kept", [("default", True), ("my-skin_2.v1", True), ("../../x", False),
+                                        ("a/b", False), (".hidden", False), ("x" * 65, False), ("", True)])
+def test_path_shaped_display_names_must_be_plain_names(leaf, value, kept):
+    """Hermes joins display.skin into skins/<name>.yaml (and the pet slug likewise)."""
+    tree: dict = {"display": {}}
+    node = tree["display"]
+    *parents, last = leaf.split(".")
+    for part in parents:
+        node = node.setdefault(part, {})
+    node[last] = value
+    out, dropped = B._filter_config(tree)
+    assert (f"display.{leaf}" in dropped) is not kept
+
+
+TRICKY_SCALARS = ["1e3", "1E3", "1e+3", "1.0e3", "._", ".5", "1_000", "0o17", "017", "0x1F", "1:30", "y", "n",
+                  "on", "off", "yes", "No", "~", "null", ".inf", ".NaN", "-.5", "+1", "1.", "12:30:00", "2026-11-13",
+                  "0b101", "+.5", "1_0.5", "+_", "-_"]
+# Read as TEXT by Hermes' own loader (hermes_yaml.safe_load, Hermes 0.23.1, run read-only on 2026-11-13): every
+# other item above came back as a number, bool, null or date, and ._, +_ and -_ failed the whole file.
+YAML11_TEXT = frozenset({"0o17", "-.5", "+.5"})
+
+
+@pytest.mark.parametrize("text", TRICKY_SCALARS)
+def test_text_that_yaml_1_1_reads_as_a_number_or_rejects_is_quoted(text):
+    """Hermes reads config.yaml with ruamel in YAML 1.1 mode, where 1e3 and 1.0e3 are numbers and ._ fails the
+    whole file. Text must be written so it reads back as text in that mode too (checked against Hermes' own
+    hermes_yaml.safe_load on the build box, see the round 5 report)."""
+    raw = B._dump_config({"display": {"note": text}}).decode()
+    value = raw.split("note:", 1)[1].strip()
+    assert text in YAML11_TEXT or value[0] in "'\"", raw
+    assert B._load_config(raw.encode()) == {"display": {"note": text}}
+
+
+def test_an_anchor_and_alias_in_the_bundle_are_written_out_in_full(env):
+    cfg = ("model:\n  provider: openrouter\npersonalities:\n  a: &p 'shared prompt'\n  b: *p\n"
+           "display:\n  runtime_footer:\n    fields: &f [model, cwd]\n  status_bar:\n    fields: *f\n")
+    r, io_ = do_import(env, config_bundle(env, cfg))
+    raw = (env.pdir() / "config.yaml").read_bytes()
+    assert b"&" not in raw and b"*" not in raw
+    written = B._load_config(raw)
+    assert written["personalities"] == {"a": "shared prompt", "b": "shared prompt"}
+    assert written["display"]["status_bar"]["fields"] == ["model", "cwd"]
+
+
+def test_a_dump_that_does_not_read_back_the_same_is_refused(monkeypatch):
+    """The read-back check in _dump_config: if the writer ever changed a value, the import stops."""
+    loader, dumper = B._yaml_classes()
+
+    class Lossy(dumper):
+        def represent_str(self, data):
+            return super().represent_str(data.upper())
+    Lossy.add_representer(str, Lossy.represent_str)
+    monkeypatch.setattr(B, "_yaml_classes", lambda: (loader, Lossy))
+    with pytest.raises(B.BundleError):
+        B._dump_config({"display": {"skin": "default"}})
