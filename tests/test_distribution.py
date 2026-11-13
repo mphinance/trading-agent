@@ -19,6 +19,13 @@ ROOT = Path(__file__).parents[1]
 SHIPPED = ("distribution.yaml", "SOUL.md", "config.yaml")
 
 
+def test_package_and_distribution_versions_match():
+    import tomllib
+    pkg = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    dist = yaml.safe_load((ROOT / "distribution.yaml").read_text(encoding="utf-8"))["version"]
+    assert str(dist) == pkg
+
+
 def test_distribution_yaml_valid():
     m = yaml.safe_load((ROOT / "distribution.yaml").read_text(encoding="utf-8"))
     assert m["name"] == "trading-agent" and m["name"] not in RESERVED_NAMES
