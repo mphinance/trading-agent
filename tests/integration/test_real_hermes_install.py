@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).parents[2]
 
@@ -74,3 +75,18 @@ def test_install_then_update_preserves_a_user_edited_config(tmp_path):
     u = _hermes(tmp_path, "profile", "update", "tatest", "-y")
     assert u.returncode == 0 and "Updated 'tatest'" in u.stdout, u.stdout + u.stderr
     assert "user_setting: kept" in cfg.read_text()
+
+
+def test_the_recorded_source_is_the_folder_installed_from_and_update_keeps_it(tmp_path):
+    """The packaged folder of an installed wheel is a real directory, so Hermes records exactly that path and
+    `profile update` can come back to it (no temporary copy in between)."""
+    (tmp_path / "home").mkdir()
+    ready_scratch_hermes(tmp_path / "home", tmp_path / "hermes")
+    src = _clean_checkout(tmp_path / "checkout")
+    r = _hermes(tmp_path, "profile", "install", str(src), "--name", "tasrc", "-y")
+    assert r.returncode == 0, r.stdout + r.stderr
+    prof = Path(re.search(r"^\s*Profile path:\s*(.+)$", r.stdout, re.M).group(1).strip())
+    manifest = yaml.safe_load((prof / "distribution.yaml").read_text())
+    assert "".join(str(manifest["source"]).split()) == "".join(str(src).split())   # Hermes may wrap a long line
+    u = _hermes(tmp_path, "profile", "update", "tasrc", "-y")
+    assert u.returncode == 0 and "Updated 'tasrc'" in u.stdout, u.stdout + u.stderr

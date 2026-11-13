@@ -18,6 +18,8 @@ from trading_agent import paths
 STOPPED_NEUTRAL = "Stopped."
 STOPPED = "Setup stopped. Run `trading-agent setup` again to continue where you left off."
 NOT_IN_BUILD = "The setup files for the agent are not in this build yet."
+SOURCE_NOT_DURABLE = ("Note: this install has no permanent source folder, so `hermes profile update` will need "
+                      "the profile's source set by hand first. docs/UPDATING.md has the one line to change.")
 NOT_A_DISTRIBUTION = "That folder does not look like a Hermes distribution: it has no distribution.yaml."
 UNEXPECTED = ("Something unexpected went wrong ({kind}). Run the command again; "
               "`trading-agent undo` removes anything setup created.")
@@ -94,6 +96,8 @@ def _cmd_setup(args: argparse.Namespace) -> int:
         if dist is None or not (dist / "distribution.yaml").is_file():
             _err(NOT_IN_BUILD)
             return 2
+        if not paths.source_is_durable(dist):
+            print(SOURCE_NOT_DURABLE)
     platform = _platform()
     deps = Deps(
         platform=platform, hermes=HermesCli(platform), detectors=_detectors(platform),
