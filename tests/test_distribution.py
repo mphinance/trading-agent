@@ -128,3 +128,15 @@ def test_real_setup_with_no_override_reaches_the_wizard(tmp_path):
                        text=True, env=sub_env(w), timeout=120)
     assert cli.NOT_IN_BUILD not in r.stderr
     assert r.returncode == 1 and r.stderr.strip() == cli.STOPPED
+
+
+def test_declared_minimum_python_covers_the_tar_extraction_filter():
+    """bundle.py passes filter="data" to extractall, which needs Python 3.11.4 or newer. Keep the pair in step."""
+    import re
+    import tomllib
+    declared = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["requires-python"]
+    m = re.fullmatch(r">=\s*(\d+)\.(\d+)(?:\.(\d+))?", declared.strip())
+    assert m, f"unexpected requires-python form: {declared}"
+    assert tuple(int(x or 0) for x in m.groups()) >= (3, 11, 4)
+    src = (ROOT / "src" / "trading_agent" / "bundle.py").read_text(encoding="utf-8")
+    assert 'extractall(stage, filter="data")' in src
