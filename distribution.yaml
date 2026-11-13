@@ -4,4 +4,6 @@ description: Hermes profile with a first-run setup wizard. Pick an AI provider, 
 hermes_requires: ">=0.23.0"
 license: MIT
 env_requires: []
+# config.yaml is listed only so `hermes profile install` copies it (Hermes 0.23.1 skips unlisted files).
+# `hermes profile update` still keeps the user's edited config.yaml; only SOUL.md is overwritten.
 distribution_owned: [SOUL.md, config.yaml, distribution.yaml]
