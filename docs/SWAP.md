@@ -1,9 +1,12 @@
 # Swap procedure
 
-> [!WARNING]
-> Status: not run. Maintainer only. **Every step below requires explicit maintainer confirmation; do not run from automation.** Step 5 is a force-push to a public remote.
+> [!NOTE]
+> Status: not run. Maintainer only.
 
 **How to replace the old `trading-agent` folder and repository with this project without losing the old untracked work, the old `.env`, or the three local MCP servers that still run from the old folder.**
+
+> [!WARNING]
+> **Every step below requires explicit maintainer confirmation; do not run from automation.** Step 5 is a force-push to a public remote.
 
 ## At a glance
 

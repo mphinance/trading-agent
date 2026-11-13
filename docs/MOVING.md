@@ -37,6 +37,8 @@
 trading-agent export --profile <profile> -o <profile>.tgz
 ```
 
+A real run is in [export.txt](transcripts/export.txt).
+
 - `--profile` can be left out when setup made only one profile; with several, the tool asks which one.
 - The output file must not exist yet. The tool never overwrites; it writes to a temporary file and moves it into place, readable only by you (mode 0600).
 - Afterwards it prints `This contains: ...` and `It does not contain: keys, sign-ins.`, plus the key names you will re-enter.
@@ -78,6 +80,8 @@ Install Hermes and this tool as the [README](../README.md) describes. You do not
 trading-agent import <profile>.tgz
 trading-agent import <profile>.tgz --name <new-name>
 ```
+
+A real run, including the hidden key prompts, is in [import.txt](transcripts/import.txt).
 
 What happens, in order:
 

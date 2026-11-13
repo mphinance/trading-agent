@@ -1,0 +1,126 @@
+$ trading-agent setup
+Set up your trading agent.
+About five minutes. I look at what is already on this computer, ask before I use any of it, and never show you a key.
+  1. Start
+  2. What does this do?
+> 1
+Name for the new profile (letters, digits, hyphen, underscore). Press Enter for trader. Type < to go back.
+Looking around: AI tools, saved keys, other apps' settings, local model ports. Names only, local, no network.
+  1. Look around
+  2. Look around, but skip scanning other apps
+     Turns off reading other apps' MCP settings.
+  3. Back
+> 1
+Found on this computer:
+- OpenRouter API key: OPENROUTER_API_KEY (environment variable)
+Nothing here has been used yet. I never show key values.
+No local model found. A free, private option: install Ollama or LM Studio, start it, then go Back and scan again.
+Pick where the agent's brain comes from. You can change this any time.
+  1. OpenRouter [Key found in your settings] (Recommended)
+     One key, many models, pay as you go. Cheap models cost cents.
+  2. OpenRouter: paste a key
+     One key, many models, pay as you go. Cheap models cost cents. Make a key at https://openrouter.ai/keys, then paste it here. It is never shown.
+  3. Venice: paste a key
+     Uses your Venice account. Cost depends on the model. Make a key at https://venice.ai/settings/api.
+  4. Another OpenAI-compatible service (OpenAI and others)
+     You give me its address and the name of the setting that holds its key.
+  5. Keep it private
+     Shows only a model on this computer, or Venice.
+  6. Skip for now
+     No brain yet. You can add one later.
+  7. Back
+> 6
+Nothing to test yet: no AI is set up for the agent's brain.
+  1. Continue
+  2. Back
+> 1
+Pick a broker MCP, or skip. A broker MCP lets the agent read your account and, if the broker offers it, place orders. What it can do is set by the broker's own connector. Below is what each broker says about itself.
+  1. No broker, research only
+     Skip for now. The agent still works for research.
+  2. Interactive Brokers [Official; not installable here yet, I will point you to its page]
+     US / International. Trading: draft only. Last checked 2026-11-11.
+  3. Alpaca [Official]
+     US. Trading: yes. Last checked 2026-11-11.
+  4. Kraken [Official; not installable here yet, I will point you to its page]
+     US / Global. Trading: yes. Last checked 2026-11-11.
+  5. Tradier [Official]
+     US. Trading: yes. Last checked 2026-11-11.
+  6. tastytrade [Official; Made by a third party, not the broker; not installable here yet, I will point you to its page]
+     US. Trading: yes. Last checked 2026-11-11.
+  7. Bitget [Official; not installable here yet, I will point you to its page]
+     Global. Trading: yes. Last checked 2026-11-11.
+  8. Capital.com [Official; not installable here yet, I will point you to its page]
+     Global CFD broker (MENA release 2026-06-08; availability by entity and region). Trading: yes. Last checked 2026-11-11.
+  9. eToro [Official; Made by a third party, not the broker; not installable here yet, I will point you to its page]
+     International (not available to US retail). Trading: yes. Last checked 2026-11-11.
+  10. Trade It (formerly Trade Agent) [Official; not installable here yet, I will point you to its page]
+     US (broker coverage) + crypto. Trading: yes. Last checked 2026-11-11.
+  11. SnapTrade [Official; not installable here yet, I will point you to its page]
+     US (broker coverage varies). Trading: yes. Last checked 2026-11-11.
+  12. Show every broker (the full list, curated ten first, then A to Z)
+  13. Search or filter
+  14. Back
+> 3
+Alpaca has more than one way to connect. Pick one.
+  1. local: runs a program on this computer, made by the broker. Paper trading: ALPACA_PAPER_TRADE (default true on the local server)
+  2. hosted-paper: connects to a hosted server, made by the broker. Paper trading: connect the paper URL, not the live one
+  3. Back
+> 1
+Setting up Alpaca. Next I ask for each name this connection needs.
+How it connects: it runs a local program: uvx alpaca-mcp-server
+It needs: python>=3.10, uv
+Paper trading, in the broker page's own words: ALPACA_PAPER_TRADE (default true on the local server)
+Orders, per the broker page: can submit orders: yes; confirmation: only a prompt in your AI app.
+Read-only option, per the broker page: ALPACA_TOOLSETS restricts which tool groups are exposed
+If a name stays unset, the broker connection will not start until it is set. You can set it later in the profile's private .env file.
+Connect Alpaca.
+  1. Continue
+  2. Back
+> 1
+Alpaca: ALPACA_API_KEY. Paste it now, or skip and finish later?
+  1. Paste it
+  2. Skip, finish later
+> 1
+Alpaca: paste ALPACA_API_KEY (hidden, nothing is shown). Press Enter to skip it. [hidden]
+Alpaca: ALPACA_SECRET_KEY. Paste it now, or skip and finish later?
+  1. Paste it
+  2. Skip, finish later
+> 1
+Alpaca: paste ALPACA_SECRET_KEY (hidden, nothing is shown). Press Enter to skip it. [hidden]
+Alpaca: setting ALPACA_PAPER_TRADE (not a secret, so you will see it). Type one of: true, false, paper, live, 0, 1. Press Enter to skip it, or type < to go back. true
+Testing the Alpaca connection is not built yet, so it is listed under finish later. Status: not tested yet.
+Pick skill libraries. Skills are small how-to packs the agent reads before it acts. Pick any, or none, then choose Done.
+  1. [ ] Broker agent skill docs (awesome-broker-mcp) (CC0)
+     skills library.
+  2. [ ] momentum-mcp (portable quant MCP server, optional) (Apache-2.0)
+     tool library. Needs keys: TD_API_KEY, SEC_USER_AGENT, OPENROUTER_API_KEY.
+  3. Done
+  4. Back
+> 3
+None of your picks needs a key, so there is nothing to ask here.
+Ready. Here is exactly what I will do.
+- Create a Hermes profile named trader.
+- AI: none yet. You can add one later.
+- Broker MCP: Alpaca, installed the way its page says. It runs uvx alpaca-mcp-server.
+- Put these into the profile's private .env file: ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_PAPER_TRADE.
+  ALPACA_API_KEY: the Alpaca connection.
+  ALPACA_SECRET_KEY: the Alpaca connection.
+  ALPACA_PAPER_TRADE: the Alpaca connection.
+- Change nothing in any other app or Hermes profile.
+  1. Do it
+  2. Back
+> 1
+Checking what I can:
+Broker connection: not tested yet (testing is not built yet).
+You are set up.
+AI: no AI yet. Broker: Alpaca. Skills: 0 picked.
+The Alpaca connection runs uvx alpaca-mcp-server.
+Who can read each key or setting in the profile's private .env file:
+  ALPACA_API_KEY: the Alpaca connection.
+  ALPACA_SECRET_KEY: the Alpaca connection.
+  ALPACA_PAPER_TRADE: the Alpaca connection.
+Left to finish later:
+- Pick an AI for the agent's brain: a local model or an API key.
+- Test the Alpaca connection: not tested yet.
+What was created is listed in the setup receipt: <home>/config/trading-agent/receipts/trader.json
+To remove it all, run: trading-agent undo --profile trader

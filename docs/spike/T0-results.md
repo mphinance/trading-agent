@@ -30,7 +30,7 @@ All commands below were run with a throwaway `HERMES_HOME`; `<DIST>` stands for 
 
 ### Install call
 
-```
+```text
 hermes profile install <DIST> --name <name> -y
 ```
 
@@ -38,7 +38,7 @@ hermes profile install <DIST> --name <name> -y
 - `-y/--yes` is required for non-interactive use. Without it Hermes prints the manifest preview and "Proceed with install? [y/N]"; with stdin closed that gave "Install cancelled." and exit code 0 with NO profile created. A wrapper must not treat exit 0 as success; confirm the profile exists (parse `Profile path:` or check the directory).
 - Success: exit 0, stdout (leading blank line, then):
 
-```
+```text
 Distribution: <manifest name> v<version>
   <description>
   Requires: Hermes <hermes_requires>

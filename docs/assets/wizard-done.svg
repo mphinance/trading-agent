@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="772" height="357" viewBox="0 0 772 357" role="img" aria-labelledby="t d">
+  <title id="t">Setup finished</title>
+  <desc id="d">A dark terminal window ending in You are set up, with the broker choice, who can read each key, what is left to finish later, and the undo command.</desc>
+  <rect x="0" y="0" width="772" height="357" rx="10" fill="#1e1f26"/>
+  <rect x="0" y="0" width="772" height="34" rx="10" fill="#2b2d37"/>
+  <rect x="0" y="24" width="772" height="10" fill="#2b2d37"/>
+  <circle cx="20" cy="17" r="6" fill="#ff5f56"/>
+  <circle cx="40" cy="17" r="6" fill="#ffbd2e"/>
+  <circle cx="60" cy="17" r="6" fill="#27c93f"/>
+  <text x="386" y="22" fill="#9aa0b4" font-family="monospace" font-size="12" text-anchor="middle">trading-agent</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#d7dae0" xml:space="preserve">
+    <text x="18" y="52" xml:space="preserve">Checking what I can:</text>
+    <text x="18" y="71" xml:space="preserve">Broker connection: not tested yet (testing is not built yet).</text>
+    <text x="18" y="90" xml:space="preserve">You are set up.</text>
+    <text x="18" y="109" xml:space="preserve">AI: no AI yet. Broker: Alpaca. Skills: 0 picked.</text>
+    <text x="18" y="128" xml:space="preserve">The Alpaca connection runs uvx alpaca-mcp-server.</text>
+    <text x="18" y="147" xml:space="preserve">Who can read each key or setting in the profile's private .env file:</text>
+    <text x="18" y="166" xml:space="preserve">  ALPACA_API_KEY: the Alpaca connection.</text>
+    <text x="18" y="185" xml:space="preserve">  ALPACA_SECRET_KEY: the Alpaca connection.</text>
+    <text x="18" y="204" xml:space="preserve">  ALPACA_PAPER_TRADE: the Alpaca connection.</text>
+    <text x="18" y="223" xml:space="preserve">Left to finish later:</text>
+    <text x="18" y="242" xml:space="preserve">- Pick an AI for the agent's brain: a local model or an API key.</text>
+    <text x="18" y="261" xml:space="preserve">- Test the Alpaca connection: not tested yet.</text>
+    <text x="18" y="280" xml:space="preserve">What was created is listed in the setup receipt:</text>
+    <text x="18" y="299" xml:space="preserve">  &lt;home&gt;/config/trading-agent/receipts/trader.json</text>
+    <text x="18" y="318" xml:space="preserve">To remove it all, run: trading-agent undo --profile trader</text>
+  </g>
+</svg>

@@ -1,0 +1,6 @@
+$ trading-agent export --profile trader -o trader.bundle
+Exported trader to <home>/trader.bundle
+This contains: memories, config, SOUL.md.
+It does not contain: keys, sign-ins.
+Chat history, logs and workspace files stay on this computer. The bundle is not encrypted.
+After importing it, add these keys again: ALPACA_API_KEY, ALPACA_PAPER_TRADE, ALPACA_SECRET_KEY.

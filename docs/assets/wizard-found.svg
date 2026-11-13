@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="772" height="490" viewBox="0 0 772 490" role="img" aria-labelledby="t d">
+  <title id="t">What setup found on this computer</title>
+  <desc id="d">A dark terminal window listing one key found by name only, an OpenRouter API key in an environment variable, then a menu for picking where the agent's brain comes from. No key value is shown.</desc>
+  <rect x="0" y="0" width="772" height="490" rx="10" fill="#1e1f26"/>
+  <rect x="0" y="0" width="772" height="34" rx="10" fill="#2b2d37"/>
+  <rect x="0" y="24" width="772" height="10" fill="#2b2d37"/>
+  <circle cx="20" cy="17" r="6" fill="#ff5f56"/>
+  <circle cx="40" cy="17" r="6" fill="#ffbd2e"/>
+  <circle cx="60" cy="17" r="6" fill="#27c93f"/>
+  <text x="386" y="22" fill="#9aa0b4" font-family="monospace" font-size="12" text-anchor="middle">trading-agent</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#d7dae0" xml:space="preserve">
+    <text x="18" y="52" xml:space="preserve">Found on this computer:</text>
+    <text x="18" y="71" xml:space="preserve">- OpenRouter API key: OPENROUTER_API_KEY (environment variable)</text>
+    <text x="18" y="90" xml:space="preserve">Nothing here has been used yet. I never show key values.</text>
+    <text x="18" y="109" xml:space="preserve">No local model found. A free, private option: install Ollama or LM Studio, start it, then</text>
+    <text x="18" y="128" xml:space="preserve">  go Back and scan again.</text>
+    <text x="18" y="147" xml:space="preserve">Pick where the agent's brain comes from. You can change this any time.</text>
+    <text x="18" y="166" xml:space="preserve">  1. OpenRouter [Key found in your settings] (Recommended)</text>
+    <text x="18" y="185" xml:space="preserve">     One key, many models, pay as you go. Cheap models cost cents.</text>
+    <text x="18" y="204" xml:space="preserve">  2. OpenRouter: paste a key</text>
+    <text x="18" y="223" xml:space="preserve">     One key, many models, pay as you go. Cheap models cost cents. Make a key at</text>
+    <text x="18" y="242" xml:space="preserve">       https://openrouter.ai/keys, then paste it here. It is never shown.</text>
+    <text x="18" y="261" xml:space="preserve">  3. Venice: paste a key</text>
+    <text x="18" y="280" xml:space="preserve">     Uses your Venice account. Cost depends on the model. Make a key at</text>
+    <text x="18" y="299" xml:space="preserve">       https://venice.ai/settings/api.</text>
+    <text x="18" y="318" xml:space="preserve">  4. Another OpenAI-compatible service (OpenAI and others)</text>
+    <text x="18" y="337" xml:space="preserve">     You give me its address and the name of the setting that holds its key.</text>
+    <text x="18" y="356" xml:space="preserve">  5. Keep it private</text>
+    <text x="18" y="375" xml:space="preserve">     Shows only a model on this computer, or Venice.</text>
+    <text x="18" y="394" xml:space="preserve">  6. Skip for now</text>
+    <text x="18" y="413" xml:space="preserve">     No brain yet. You can add one later.</text>
+    <text x="18" y="432" xml:space="preserve">  7. Back</text>
+    <text x="18" y="451" fill="#7ee787" xml:space="preserve">&gt; 6</text>
+  </g>
+</svg>

@@ -14,6 +14,7 @@
 | [MOVING.md](MOVING.md) | Export an agent to one file and import it on a new computer, with no keys |
 | [PUBLISH_CHECKLIST.md](PUBLISH_CHECKLIST.md) | Open items and checks before this repository goes public |
 | [SWAP.md](SWAP.md) | Maintainer-only procedure to replace the old repository and folder with this one |
+| [STYLE.md](STYLE.md) | The style contract every page follows: template, voice, diagrams, review lenses |
 | [spike/T0-results.md](spike/T0-results.md) | Verified Hermes behavior this tool relies on (install command, version pin, update rules) |
 | [../THIRD_PARTY.md](../THIRD_PARTY.md) | Third-party libraries, licenses and attribution |
 

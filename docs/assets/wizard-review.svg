@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="772" height="338" viewBox="0 0 772 338" role="img" aria-labelledby="t d">
+  <title id="t">The review screen before anything is written</title>
+  <desc id="d">A dark terminal window listing exactly what setup will do: create one profile, install the Alpaca broker connection, and write three names into the profile's private key file. Nothing else is changed.</desc>
+  <rect x="0" y="0" width="772" height="338" rx="10" fill="#1e1f26"/>
+  <rect x="0" y="0" width="772" height="34" rx="10" fill="#2b2d37"/>
+  <rect x="0" y="24" width="772" height="10" fill="#2b2d37"/>
+  <circle cx="20" cy="17" r="6" fill="#ff5f56"/>
+  <circle cx="40" cy="17" r="6" fill="#ffbd2e"/>
+  <circle cx="60" cy="17" r="6" fill="#27c93f"/>
+  <text x="386" y="22" fill="#9aa0b4" font-family="monospace" font-size="12" text-anchor="middle">trading-agent</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#d7dae0" xml:space="preserve">
+    <text x="18" y="52" xml:space="preserve">None of your picks needs a key, so there is nothing to ask here.</text>
+    <text x="18" y="71" xml:space="preserve">Ready. Here is exactly what I will do.</text>
+    <text x="18" y="90" xml:space="preserve">- Create a Hermes profile named trader.</text>
+    <text x="18" y="109" xml:space="preserve">- AI: none yet. You can add one later.</text>
+    <text x="18" y="128" xml:space="preserve">- Broker MCP: Alpaca, installed the way its page says. It runs uvx alpaca-mcp-server.</text>
+    <text x="18" y="147" xml:space="preserve">- Put these into the profile's private .env file: ALPACA_API_KEY, ALPACA_SECRET_KEY,</text>
+    <text x="18" y="166" xml:space="preserve">  ALPACA_PAPER_TRADE.</text>
+    <text x="18" y="185" xml:space="preserve">  ALPACA_API_KEY: the Alpaca connection.</text>
+    <text x="18" y="204" xml:space="preserve">  ALPACA_SECRET_KEY: the Alpaca connection.</text>
+    <text x="18" y="223" xml:space="preserve">  ALPACA_PAPER_TRADE: the Alpaca connection.</text>
+    <text x="18" y="242" xml:space="preserve">- Change nothing in any other app or Hermes profile.</text>
+    <text x="18" y="261" xml:space="preserve">  1. Do it</text>
+    <text x="18" y="280" xml:space="preserve">  2. Back</text>
+    <text x="18" y="299" fill="#7ee787" xml:space="preserve">&gt; 1</text>
+  </g>
+</svg>

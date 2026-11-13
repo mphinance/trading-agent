@@ -1,0 +1,5 @@
+$ trading-agent undo --profile trader2
+This will remove the Hermes profile trader2 that setup created. That includes these names in its private .env file: ALPACA_API_KEY, ALPACA_SECRET_KEY.
+Nothing outside that profile is touched.
+Remove it? [y/N] y
+Removed the profile trader2 and its setup receipt.

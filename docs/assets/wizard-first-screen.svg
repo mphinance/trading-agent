@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="772" height="186" viewBox="0 0 772 186" role="img" aria-labelledby="t d">
+  <title id="t">The first screen of trading-agent setup</title>
+  <desc id="d">A dark terminal window showing the wizard's opening message and a two-item menu: Start, or What does this do. The answer typed is 1.</desc>
+  <rect x="0" y="0" width="772" height="186" rx="10" fill="#1e1f26"/>
+  <rect x="0" y="0" width="772" height="34" rx="10" fill="#2b2d37"/>
+  <rect x="0" y="24" width="772" height="10" fill="#2b2d37"/>
+  <circle cx="20" cy="17" r="6" fill="#ff5f56"/>
+  <circle cx="40" cy="17" r="6" fill="#ffbd2e"/>
+  <circle cx="60" cy="17" r="6" fill="#27c93f"/>
+  <text x="386" y="22" fill="#9aa0b4" font-family="monospace" font-size="12" text-anchor="middle">trading-agent</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#d7dae0" xml:space="preserve">
+    <text x="18" y="52" xml:space="preserve">Set up your trading agent.</text>
+    <text x="18" y="71" xml:space="preserve">About five minutes. I look at what is already on this computer, ask before I use any of it,</text>
+    <text x="18" y="90" xml:space="preserve">  and never show you a key.</text>
+    <text x="18" y="109" xml:space="preserve">  1. Start</text>
+    <text x="18" y="128" xml:space="preserve">  2. What does this do?</text>
+    <text x="18" y="147" fill="#7ee787" xml:space="preserve">&gt; 1</text>
+  </g>
+</svg>

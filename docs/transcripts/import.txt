@@ -1,0 +1,18 @@
+$ trading-agent import trader.bundle --name trader2
+This contains: memories, config, SOUL.md.
+It does not contain: keys, sign-ins.
+Chat history, logs and workspace files stay on this computer. The bundle is not encrypted.
+The bundle's config.yaml sets up these:
+- MCP server alpaca: runs uvx alpaca-mcp-server
+- MCP server alpaca: sets ALPACA_API_KEY to ${ALPACA_API_KEY}
+- MCP server alpaca: sets ALPACA_SECRET_KEY to ${ALPACA_SECRET_KEY}
+- MCP server alpaca: sets ALPACA_PAPER_TRADE to ${ALPACA_PAPER_TRADE}
+These can run programs on this computer. Import only a bundle you made or trust; the answer defaults to No.
+Import it as a new profile called trader2? [y/N] y
+The imported profile: paste ALPACA_API_KEY (hidden, nothing is shown). Press Enter to skip it. [hidden]
+The imported profile: paste ALPACA_PAPER_TRADE (hidden, nothing is shown). Press Enter to skip it. [hidden]
+The imported profile: paste ALPACA_SECRET_KEY (hidden, nothing is shown). Press Enter to skip it. [hidden]
+Imported the profile trader2.
+Left to finish later:
+- Add ALPACA_PAPER_TRADE to the profile's private .env file (you skipped it).
+To remove it, run: trading-agent undo --profile trader2

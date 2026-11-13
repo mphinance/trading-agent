@@ -98,6 +98,8 @@ You can go back one screen by typing `<`. Progress is saved, so an interrupted s
 
 Nothing is required. Skip any step and finish later.
 
+To see every screen first, read the transcript of a real run against a test copy of Hermes: [setup.txt](transcripts/setup.txt) (Alpaca, fake key, keys shown as `[hidden]`). Four screens are also drawn as pictures: [first screen](assets/wizard-first-screen.svg), [found on this computer](assets/wizard-found.svg), [review](assets/wizard-review.svg) and [done](assets/wizard-done.svg). The transcript of `scan` is [scan.txt](transcripts/scan.txt).
+
 ```mermaid
 flowchart LR
     A["Check Hermes"] --> B["Scan (names only)"]
@@ -130,7 +132,7 @@ When it finishes, setup lists what was created, a "Left to finish later" list (f
 trading-agent undo --profile <profile>
 ```
 
-`--profile` can be left out when exactly one profile has a receipt. Undo removes what setup created, by the receipt, and only things that carry this tool's ownership marker. A profile or file you made yourself is left alone. Details on keys: [KEYS](KEYS.md#removing-keys).
+`--profile` can be left out when exactly one profile has a receipt. Undo removes what setup created, by the receipt, and only things that carry this tool's ownership marker. A profile or file you made yourself is left alone. Details on keys: [KEYS](KEYS.md#removing-keys). A real run is in [undo.txt](transcripts/undo.txt).
 
 ## If something goes wrong
 

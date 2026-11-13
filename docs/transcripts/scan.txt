@@ -1,0 +1,63 @@
+$ trading-agent scan
+env:OPENROUTER_API_KEY | ai-key | present | OPENROUTER_API_KEY
+env:VENICE_API_KEY | ai-key | absent | VENICE_API_KEY
+env:OPENAI_API_KEY | ai-key | absent | OPENAI_API_KEY
+env:ANTHROPIC_API_KEY | ai-key | absent | ANTHROPIC_API_KEY
+env:ALPACA_API_KEY | broker-key | absent | ALPACA_API_KEY
+env:ALPACA_SECRET_KEY | broker-key | absent | ALPACA_SECRET_KEY
+env:BITGET_API_KEY | broker-key | absent | BITGET_API_KEY
+env:BITGET_SECRET_KEY | broker-key | absent | BITGET_SECRET_KEY
+env:BITGET_PASSPHRASE | broker-key | absent | BITGET_PASSPHRASE
+env:BINGX_API_KEY | broker-key | absent | BINGX_API_KEY
+env:BYBIT_API_SECRET | broker-key | absent | BYBIT_API_SECRET
+env:BYBIT_API_PRIVATE_KEY_PATH | broker-key | absent | BYBIT_API_PRIVATE_KEY_PATH
+env:CAP_API_KEY | broker-key | absent | CAP_API_KEY
+env:CAP_IDENTIFIER | broker-key | absent | CAP_IDENTIFIER
+env:CAP_API_PASSWORD | broker-key | absent | CAP_API_PASSWORD
+env:GEMINI_API_KEY | broker-key | absent | GEMINI_API_KEY
+env:GEMINI_API_SECRET | broker-key | absent | GEMINI_API_SECRET
+env:HTX_API_KEY | broker-key | absent | HTX_API_KEY
+env:HTX_SECRET_KEY | broker-key | absent | HTX_SECRET_KEY
+env:KALSHI_API_KEY | broker-key | absent | KALSHI_API_KEY
+env:KALSHI_PRIVATE_KEY_PATH | broker-key | absent | KALSHI_PRIVATE_KEY_PATH
+env:KIS_APP_KEY | broker-key | absent | KIS_APP_KEY
+env:KIS_APP_SECRET | broker-key | absent | KIS_APP_SECRET
+env:KIS_PAPER_APP_KEY | broker-key | absent | KIS_PAPER_APP_KEY
+env:KIS_PAPER_APP_SECRET | broker-key | absent | KIS_PAPER_APP_SECRET
+env:LUNO_API_KEY_ID | broker-key | absent | LUNO_API_KEY_ID
+env:LUNO_API_SECRET | broker-key | absent | LUNO_API_SECRET
+env:POLYMARKET_PRIVATE_KEY | broker-key | absent | POLYMARKET_PRIVATE_KEY
+env:PUBLIC_COM_SECRET | broker-key | absent | PUBLIC_COM_SECRET
+env:PUBLIC_COM_ACCOUNT_ID | broker-key | absent | PUBLIC_COM_ACCOUNT_ID
+env:TASTYTRADE_CLIENT_ID | broker-key | absent | TASTYTRADE_CLIENT_ID
+env:TASTYTRADE_CLIENT_SECRET | broker-key | absent | TASTYTRADE_CLIENT_SECRET
+env:TASTYTRADE_REFRESH_TOKEN | broker-key | absent | TASTYTRADE_REFRESH_TOKEN
+env:TIGEROPEN_TIGER_ID | broker-key | absent | TIGEROPEN_TIGER_ID
+env:TIGEROPEN_ACCOUNT | broker-key | absent | TIGEROPEN_ACCOUNT
+env:TIGEROPEN_SECRET_KEY | broker-key | absent | TIGEROPEN_SECRET_KEY
+env:TIGEROPEN_PRIVATE_KEY | broker-key | absent | TIGEROPEN_PRIVATE_KEY
+env:TIGEROPEN_TOKEN | broker-key | absent | TIGEROPEN_TOKEN
+env:TR_PHONE_NUMBER | broker-key | absent | TR_PHONE_NUMBER
+env:TR_PIN | broker-key | absent | TR_PIN
+env:DEGIRO_USERNAME | broker-key | absent | DEGIRO_USERNAME
+env:DEGIRO_PASSWORD | broker-key | absent | DEGIRO_PASSWORD
+env:DEGIRO_TOTP_SECRET | broker-key | absent | DEGIRO_TOTP_SECRET
+env:DERIV_API_TOKEN | broker-key | absent | DERIV_API_TOKEN
+env:ANGEL_ONE_API_KEY | broker-key | absent | ANGEL_ONE_API_KEY
+env:XBTFX_API_KEY | broker-key | absent | XBTFX_API_KEY
+env:MOOMOO_TRADE_PASSWORD | broker-key | absent | MOOMOO_TRADE_PASSWORD
+env:MOOMOO_SECURITY_FIRM | broker-key | absent | MOOMOO_SECURITY_FIRM
+mcp:claude-code | mcp-entry | absent |
+mcp:claude-desktop | mcp-entry | absent |
+mcp:cursor | mcp-entry | absent |
+mcp:vscode | mcp-entry | absent |
+mcp:codex | mcp-entry | absent |
+cli:claude | ai-cli | absent | claude
+cli:codex | ai-cli | absent | codex
+cli:gemini | ai-cli | absent | gemini
+cli:agy | ai-cli | absent | agy
+ai-local:ollama | ai-local | absent | ollama
+ai-local:lm-studio | ai-local | absent | lm-studio
+gateway:ibkr-gateway | gateway | absent | ibkr-gateway
+gateway:moomoo-opend | gateway | absent | moomoo-opend
+gateway:ninjatrader | gateway | absent | ninjatrader
