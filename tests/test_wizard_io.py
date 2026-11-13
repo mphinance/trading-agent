@@ -21,6 +21,7 @@ def test_console_io_confirm_secret_ask_say(monkeypatch, capsys):
     monkeypatch.setattr(builtins, "input", lambda prompt="": next(answers))
     answers = iter(["maybe", "y", "n", "hello"])
     monkeypatch.setattr(getpass, "getpass", lambda prompt="": "s3cret")
+    monkeypatch.setattr("sys.stdin", type("Tty", (), {"isatty": lambda self: True})())
     io = ConsoleIO()
     assert io.confirm("ok?") is True
     assert io.confirm("ok?") is False
@@ -28,3 +29,64 @@ def test_console_io_confirm_secret_ask_say(monkeypatch, capsys):
     assert io.ask("name") == "hello"
     io.say("plain text")
     assert "plain text" in capsys.readouterr().out
+
+
+# ---- ConsoleIO behavior the CLI relies on (secret never echoes, invalid input never printed, EOF raises)
+
+import io as _io
+import sys as _sys
+
+import pytest as _pytest
+
+
+class _PipeStdin(_io.StringIO):
+    def isatty(self):
+        return False
+
+
+def test_console_secret_from_a_pipe_reads_one_line_and_prints_neither_it_nor_anything_derived(monkeypatch, capsys):
+    monkeypatch.setattr(_sys, "stdin", _PipeStdin("hunter2-SECRET\nnext\n"))
+    got = ConsoleIO().secret("Paste it:")
+    assert got == "hunter2-SECRET"
+    out = capsys.readouterr()
+    assert "hunter2" not in out.out + out.err and "Paste it:" in out.out
+
+
+def test_console_secret_on_a_terminal_uses_getpass(monkeypatch):
+    class Tty(_PipeStdin):
+        def isatty(self):
+            return True
+    monkeypatch.setattr(_sys, "stdin", Tty(""))
+    monkeypatch.setattr(getpass, "getpass", lambda prompt: "typed")
+    assert ConsoleIO().secret("Paste it:") == "typed"
+
+
+def test_console_secret_at_end_of_input_raises_eof(monkeypatch):
+    monkeypatch.setattr(_sys, "stdin", _PipeStdin(""))
+    with _pytest.raises(EOFError):
+        ConsoleIO().secret("Paste it:")
+
+
+def test_console_choose_and_confirm_reprompt_without_printing_the_bad_input(monkeypatch, capsys):
+    monkeypatch.setattr(_sys, "stdin", _PipeStdin("zz-JUNK-zz\n9\nmaybe-JUNK\ny\n2\n"))
+    io = ConsoleIO()
+    assert io.confirm("Sure?") is True
+    assert io.choose("Pick", [Option("a", "A"), Option("b", "B")]) == "b"
+    assert "JUNK" not in capsys.readouterr().out
+
+
+def test_console_confirm_default_applies_only_when_given(monkeypatch, capsys):
+    monkeypatch.setattr(_sys, "stdin", _PipeStdin("\n\ny\n"))
+    io = ConsoleIO()
+    assert io.confirm("Remove?", default=False) is False
+    assert io.confirm("Remove?", default=True) is True
+    assert io.confirm("Remove?") is True          # no default: an empty line re-asks, then y
+    assert "[y/N]" in capsys.readouterr().out
+
+
+def test_console_input_at_end_of_input_raises_eof(monkeypatch):
+    monkeypatch.setattr(_sys, "stdin", _PipeStdin(""))
+    for call in (lambda io: io.ask("Name?"), lambda io: io.confirm("Sure?"),
+                 lambda io: io.choose("Pick", [Option("a", "A")])):
+        with _pytest.raises(EOFError):
+            call(ConsoleIO())
