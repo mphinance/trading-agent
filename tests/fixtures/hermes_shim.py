@@ -119,7 +119,20 @@ def main(argv: list[str]) -> int:
             data = re.sub(rb"-----BEGIN[^-]*PRIVATE KEY-----.*?-----END[^-]*PRIVATE KEY-----",
                           b"[REDACTED PRIVATE KEY]", data, flags=re.S)
             data = token.sub(lambda m: mask(m.group(0)), data)
-            data = re.sub(rb"(?i)(bearer\s+)([A-Za-z0-9._~+/=-]{8,})", lambda m: m.group(1) + mask(m.group(2)), data)
+            data = re.sub(rb"(Bearer\s+)([A-Za-z0-9._~+/=-]{8,})", lambda m: m.group(1) + mask(m.group(2)), data)
+            # assignment shapes (observed 2026-11-13): "password: X", "Password: X", "db_password: X",
+            # "token=X", "--token=X", "--password X", '"apiKey": "X"' all become ***; "AccountKey=X" keeps
+            # its first 6 and last 4; "SG.<id>.<key>" masks only the id segment; "bot<id>:<token>" masks the token.
+            # Not masked: "db password: X" (a space before the key word) and lowercase "bearer X".
+            # Also observed: "access_token_env: BWS_ACCESS_TOKEN" and "password_store: auto" become ***, while
+            # "${NAME}" values, "" and "token_limit: 4000" are left alone.
+            data = re.sub(rb"(?im)^(\s*#?\s*[\"']?[A-Za-z0-9_.-]*(?:password|passwd|secret|token|apikey|api_key)"
+                          rb"[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*[\"']?)(?!\$\{)(?![0-9]+\s*$)([^\s\"']+)",
+                          lambda m: m.group(1) + b"***", data)
+            data = re.sub(rb"(--(?:token|password|api-key)[= ])(\S+)", lambda m: m.group(1) + b"***", data)
+            data = re.sub(rb"(AccountKey=)(\S{10,})", lambda m: m.group(1) + mask(m.group(2)), data)
+            data = re.sub(rb"\bSG\.([A-Za-z0-9_-]{16,})\.", lambda m: b"SG." + mask(m.group(1)) + b".", data)
+            data = re.sub(rb"\b(bot\d{6,}:)[A-Za-z0-9_-]{20,}", rb"\1***", data)
             data = re.sub(rb"(://[^/\s@:]+:)[^/\s@]+@", rb"\1***@", data)
             return re.sub(rb"(SECRET=)(\S{6})\S+(\S{4})", rb"\1\2...\3", data)
 
