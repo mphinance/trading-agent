@@ -111,6 +111,14 @@ _VENDOR = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{2
                      r"|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,})")
 _USERINFO_PW = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{0,31}://[^/\s@:]+:[^/\s@]+@")
 _HARD_SHAPES = (_SK_KEY, _BEARER, _PEM, _JWT, _VENDOR, _USERINFO_PW)
+# What Hermes 0.23's export leaves of a real token (agent.redact.redact_sensitive_text(force=True), observed):
+# a known prefix, up to 4 more characters, "...", the last 4 (ghp_xa...NGp7, sk-or-...89ab, AKIAAB...MNOP,
+# eyJhbG...sR8U), "Bearer abcdef...xyzQ", or "[REDACTED PRIVATE KEY]". Short tokens become "***" (not detectable
+# here: only the on-disk scan sees those).
+_MASKED = re.compile(r"(?<![A-Za-z0-9_\-])(?:sk-|gh[pousr]_|github_|xox[abposr]-|AKIA|AIza|glpat-|eyJ)"
+                     r"[A-Za-z0-9_\-]{0,4}\.\.\.[A-Za-z0-9_\-]{4}(?![A-Za-z0-9_\-])"
+                     r"|\[REDACTED[^\]\n]{0,40}\]"
+                     r"|(?i:\bbearer\s+[A-Za-z0-9._~+/=\-]{6}\.\.\.[A-Za-z0-9._~+/=\-]{4})")
 
 # config.yaml literal-value rule. Key names are split into words (snake, kebab and camel case).
 _SECRET_WORDS = frozenset({"key", "keys", "apikey", "secret", "secrets", "token", "password", "passwd", "pwd",
@@ -135,8 +143,8 @@ IMPORT_CONFIRM = "Import it as a new profile called {name}?"
 RISKY_HEAD = "The bundle's config.yaml sets up these:"
 RUN_WARNING = ("These can run programs on this computer. Import only a bundle you made or trust; "
                "the answer defaults to No.")
-APPROVALS_OFF = ("The bundle's config.yaml turns off command approvals ({what}). An imported bundle may not do "
-                 "that. Nothing was imported.")
+REFUSED_SETTING = ("The bundle's config.yaml sets {path}, which can run programs on this computer or turn off "
+                   "command approvals. An imported bundle may not do that. Nothing was imported.")
 NAME_TAKEN_NOW = "The name {name} was taken while you were answering. Nothing was imported."
 SOFT_HEAD = ("These files hold text shaped like a key. It is probably a hash or an example, but check before "
              "you share the bundle:")
@@ -172,6 +180,8 @@ SECRET_CONTENT = "I did not export anything: {rel} {why}. Edit that file to remo
 WHY_ENV_VALUE = "holds a value from this profile's .env file"
 WHY_TOKEN = "holds something shaped like a key or token"
 WHY_SOFT = "has a long hex or base64 run, or a token-like web address value"
+WHY_MASKED = "holds a key that Hermes would export in part (its start and last 4 characters)"
+CHANGED = "I did not export anything: {rel} changed or became a link while I was checking it. Try again."
 WHY_SOFT_NAME = "has a name shaped like a key"
 CONFIG_LITERAL = ("I did not export anything: config.yaml holds a value written out in full at {paths}. Move each "
                   "value to the profile's .env file and reference it as ${{NAME}}.")
@@ -460,19 +470,65 @@ def _skill_name(skill_md: bytes, fallback: str) -> str:
     return next((v for v in values if v), fallback)
 
 
+def _is_cache_file(rel: str, rels: set[str]) -> bool:
+    parts = rel.split("/")
+    return any(part in _RUNTIME_CACHE_DIRS for part in parts[:-1]) or (
+        rel.endswith((".pyc", ".pyo")) and rel.rsplit(".", 1)[0] + ".py" in rels)
+
+
 def _dir_hash(files: list[tuple[str, bytes]], *, include_cache: bool) -> str:
     """Hermes' tools/skills_sync.dir_hash over (path relative to the skill dir, bytes), VERIFIED against a real
     0.23 profile (44 of 44 seeded skills matched). md5 is Hermes' own change detector, not a security check."""
     rels = {r for r, _ in files}
     h = hashlib.md5(usedforsecurity=False)
     for rel, data in sorted(files, key=lambda f: tuple(f[0].split("/"))):
-        parts = rel.split("/")
-        cache = any(part in _RUNTIME_CACHE_DIRS for part in parts[:-1]) or (
-            rel.endswith((".pyc", ".pyo")) and rel.rsplit(".", 1)[0] + ".py" in rels)
-        if include_cache or not cache:
+        if include_cache or not _is_cache_file(rel, rels):
             h.update(rel.encode("utf-8"))
             h.update(data)
     return h.hexdigest()
+
+
+def _safe_open_under(pdir: Path, rel: str) -> int | None:
+    """An fd for PDIR/REL opened without following any link on the way (each component is opened with
+    O_NOFOLLOW relative to its parent), or None if any part is a link, missing or not a directory/file."""
+    flags_dir = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(pdir, flags_dir)
+    except OSError:
+        return None
+    parts = rel.split("/")
+    try:
+        for part in parts[:-1]:
+            nxt = os.open(part, flags_dir, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        leaf = os.open(parts[-1], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=fd)
+    except OSError:
+        os.close(fd)
+        return None
+    os.close(fd)
+    return leaf
+
+
+def _disk_bytes(pdir: Path, rel: str, budget: list[int]) -> bytes | None:
+    """The bytes of PDIR/REL as they are on disk, read-only, no link followed, within the shared read BUDGET.
+    None when the path is a link, not a regular file, gone, or the budget is spent."""
+    fd = _safe_open_under(pdir, rel)
+    if fd is None:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_MEMBER_BYTES:
+            return None
+        budget[0] -= st.st_size
+        if budget[0] < 0:
+            return None
+        with os.fdopen(fd, "rb") as f:
+            fd = -1
+            return f.read(MAX_MEMBER_BYTES + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _disk_skill_files(skill_dir: Path, budget: list[int]) -> list[tuple[str, bytes]] | None:
@@ -497,10 +553,11 @@ def _disk_skill_files(skill_dir: Path, budget: list[int]) -> list[tuple[str, byt
 
 
 def _stock_skill_files(entries, pdir: Path) -> set[str]:
-    """Archive paths of skills Hermes seeded and the user never changed: the skill dir's hash ON DISK equals the
-    entry for its name in ``skills/.bundled_manifest`` (``name:md5`` lines). The disk is used, not the archive,
-    because Hermes' export rewrites secret-looking example text inside files (VERIFIED on 0.23.x), so archive
-    bytes of some stock skills never match. Read-only; links are not followed."""
+    """Archive paths of skill files Hermes seeded and the user never changed: the skill dir's hash ON DISK
+    equals the entry for its name in ``skills/.bundled_manifest`` (``name:md5`` lines). The disk is used, not
+    the archive, because Hermes' export rewrites secret-looking example text inside files (VERIFIED on 0.23.x).
+    When the match ignored runtime cache folders, files in them are NOT stock (a user file there is kept).
+    Read-only; links are not followed."""
     man_path = pdir / "skills" / ".bundled_manifest"
     try:
         if man_path.is_symlink() or not man_path.is_file() or man_path.stat().st_size > MAX_CONFIG_BYTES:
@@ -532,8 +589,16 @@ def _stock_skill_files(entries, pdir: Path) -> set[str]:
             continue
         md = dict(files).get("SKILL.md")
         want = manifest.get(_skill_name(md, base.rstrip("/").rsplit("/", 1)[-1])) if md is not None else None
-        if want and want in (_dir_hash(files, include_cache=False), _dir_hash(files, include_cache=True)):
-            stock.update(r for r in rels if r.startswith(base))
+        if not want:
+            continue
+        names = {r for r, _ in files}
+        if want == _dir_hash(files, include_cache=False):
+            hashed = {r for r in names if not _is_cache_file(r, names)}
+        elif want == _dir_hash(files, include_cache=True):
+            hashed = names
+        else:
+            continue
+        stock.update(base + r for r in hashed)
     return stock
 
 
@@ -547,6 +612,13 @@ def _orphan_description(rel: str, kept_files) -> bool:
 
 def _hermes_skill_state(rel: str) -> bool:
     return rel == "skills/.bundled_manifest" or rel == "skills/.hub" or rel.startswith("skills/.hub/")
+
+
+def _masked_reason(data: bytes) -> str | None:
+    """Hermes' export masks a real token as its first 6 characters, ``...`` and its last 4 (``ghp_xa...NGp7``)
+    or as ``[REDACTED ...]``. Seeing that shape in the archive means a real key sat in the file."""
+    text = data.decode("utf-8", errors="replace")
+    return WHY_MASKED if _MASKED.search(text) else None
 
 
 # ---------------------------------------------------------------- config.yaml checks
@@ -566,14 +638,24 @@ def _key_words(key: str) -> list[str]:
     return [w for w in re.split(r"[^a-z0-9]+", spaced) if w]
 
 
+def _safe_key(key: str) -> bool:
+    """A key whose value is a name, address, kind or count, never a secret (``key_env``, ``token_url``,
+    ``auth_type``, ``token_limit``). Also exempts it from a secret-named parent."""
+    words = _key_words(key)
+    return bool(words) and (words[-1] in _NOT_A_VALUE_LAST or any(w in _COUNT_WORDS for w in words))
+
+
 def _secret_key(key: str) -> bool:
     """A key whose value would be a secret: a key-like word (key, secret, token, password, auth, credential,
-    cookie ...), unless its last word says the value is a name, address or kind (``key_env``, ``token_url``,
-    ``auth_type``) or a word says it is a count (``token_limit``)."""
+    cookie ...), unless ``_safe_key`` says the value is a name, address, kind or count."""
     words = _key_words(key)
-    if not words or not any(w in _SECRET_WORDS for w in words):
-        return False
-    return words[-1] not in _NOT_A_VALUE_LAST and not any(w in _COUNT_WORDS for w in words)
+    return any(w in _SECRET_WORDS for w in words) and not _safe_key(key)
+
+
+def _map_key(key: str) -> bool:
+    """A key whose MAP value is an env or header map: every literal inside it is a secret (strict rule)."""
+    k = key.lower()
+    return k in ("env", "headers") or k.endswith(("_headers", "_env"))
 
 
 def _is_reference(value: str) -> bool:
@@ -581,41 +663,45 @@ def _is_reference(value: str) -> bool:
     return rest != value and re.fullmatch(r"(?i)\s*(?:bearer|token|basic)?\s*", rest) is not None
 
 
-def _literal_problem(value: Any, in_map: bool, secret_key: bool) -> bool:
+def _literal_problem(value: Any, strict: bool, secret: bool) -> bool:
+    """Booleans and null are never secrets. Strings are fine when empty or a ``${NAME}`` reference. Any other
+    scalar (string, number, date, binary) under a secret key or in an env/header map is a literal secret."""
     if value is None or isinstance(value, bool):
         return False
-    if not isinstance(value, str):
-        return in_map                     # numbers and dates in env/headers maps are literals too
-    if value == "" or _is_reference(value):
+    if isinstance(value, str) and (value == "" or _is_reference(value)):
         return False
-    return in_map or secret_key
+    return strict or secret
 
 
 def _walk_config(cfg: Any) -> tuple[list[str], set[str]]:
     """(dotted key paths holding a literal secret, Hermes setting names referenced in env maps). Iterative and
-    capped, so an alias bomb or a deep nest is refused instead of walked."""
+    capped, so an alias bomb or a deep nest is refused instead of walked. Secret-ness is inherited by every
+    value under a secret-named key, except keys ``_safe_key`` exempts."""
     literal: list[str] = []
     hermes_names: set[str] = set()
     stack: list[tuple[Any, tuple[str, ...], bool, bool]] = [(cfg, (), False, False)]
     seen = 0
     while stack:
-        node, path, in_map, secret_key = stack.pop()
+        node, path, strict, secret = stack.pop()
         seen += 1
         if seen > MAX_CONFIG_NODES or len(path) > MAX_CONFIG_DEPTH:
             raise BundleError(CONFIG_COMPLEX)
         if isinstance(node, dict):
             for k, v in node.items():
                 key = str(k)
-                if in_map and key.startswith("HERMES_"):
+                if strict and key.startswith("HERMES_"):
                     hermes_names.add(key)
-                stack.append((v, (*path, key), in_map or key.lower() in ("env", "headers"), _secret_key(key)))
+                child_strict = strict or (isinstance(v, dict) and _map_key(key)) or (
+                    isinstance(v, list) and key.lower() in ("env", "headers"))
+                child_secret = _secret_key(key) or (secret and not _safe_key(key))
+                stack.append((v, (*path, key), child_strict, child_secret))
         elif isinstance(node, list):
             for i, v in enumerate(node):
-                stack.append((v, (*path, str(i)), in_map, secret_key))
+                stack.append((v, (*path, str(i)), strict, secret))
         else:
             if isinstance(node, str):
                 hermes_names.update(n for n in _ANY_REF.findall(node) if n.startswith("HERMES_"))
-            if _literal_problem(node, in_map, secret_key):
+            if _literal_problem(node, strict, secret):
                 literal.append(".".join(path))
     return sorted(literal), hermes_names
 
@@ -625,22 +711,140 @@ def _paths_text(paths: list[str]) -> str:
     return ", ".join(shown) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
 
 
-def _truthy(v: Any) -> bool:
-    return v is True or (isinstance(v, (int, str)) and str(v).strip().lower() in ("1", "true", "yes", "on", "y"))
+_MISSING = object()
+
+
+def _get(cfg: Any, path: str) -> Any:
+    node = cfg
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return _MISSING
+        node = node[part]
+    return node
+
+
+def _on(v: Any) -> bool:
+    """Hermes reads these switches with Python ``bool()``, so even the string "false" turns them on."""
+    return bool(v)
+
+
+def _not_plain_true(v: Any) -> bool:
+    return not (v is True or (isinstance(v, str) and v.strip().lower() in ("true", "yes", "on", "1")))
+
+
+def _mode_off(v: Any) -> bool:
+    return v is False or (isinstance(v, str) and v.strip().lower() in ("off", "false", "no", "0"))
+
+
+def _globby(v: Any) -> bool:
+    items = v if isinstance(v, list) else [v]
+    return any(not isinstance(x, str) or any(c in x for c in "*?[") for x in items)
+
+
+def _nonempty(v: Any) -> bool:
+    return v not in (None, "", [], {})
+
+
+# R47 tier 1: settings an imported config.yaml may not carry at all. Each runs a program at every start or
+# weakens the command approval gate (Hermes 0.23: agent/secret_sources/command.py runs secrets.command through
+# /bin/sh -c from hermes_cli/env_loader.apply_all; skills.inline_shell runs shell found in skill text;
+# plugins.host.launcher and terminal.shell_init_files run at session start; the rest switch approvals or
+# redaction off). Checked before anything else, by key path only.
+REFUSED_SETTINGS: tuple[tuple[str, Callable[[Any], bool]], ...] = (
+    ("secrets.command.enabled", _on),
+    ("skills.inline_shell", _on),
+    ("command_allowlist", _globby),
+    ("delegation.subagent_auto_approve", _on),
+    ("plugins.host.launcher", _nonempty),
+    ("terminal.shell_init_files", _nonempty),
+    ("security.redact_secrets", _not_plain_true),
+    ("hooks_auto_accept", _on),
+    ("approvals.mode", _mode_off),
+)
+# R47 tier 2: shown before the default-No confirm. Leaves under these key names, at any depth, are programs.
+SHOWN_LEAF_KEYS = frozenset({"command", "args", "binary_path", "executable_path", "launcher", "ssh_path", "cmd",
+                             "exec", "shell", "program", "script", "cwd"})
+# Values under these key names (or ending in _url, _endpoint, _proxy) are addresses the agent talks to.
+SHOWN_ADDRESS_KEYS = frozenset({"base_url", "url", "endpoint", "proxy"})
+# Whole settings shown as they are.
+SHOWN_PATHS = ("lsp.servers", "plugins.enabled", "terminal.env_passthrough", "terminal.client_env_passthrough",
+               "terminal.docker_forward_env", "skills.auto_load", "skills.external_dirs")
+# Top-level keys of Hermes 0.23's own config: hermes_cli/config_defaults.DEFAULT_CONFIG, listed from the
+# installed package on 2026-11-13, plus mcp_servers (read by the MCP loader, not in the defaults). A bundle key
+# outside this set is named in the summary, because this tool cannot say what it does.
+KNOWN_TOP_KEYS = frozenset({
+    "_config_version", "agent", "approvals", "attachments", "auth", "auxiliary", "bedrock", "bot_desktop",
+    "bot_mode", "browser", "checkpoints", "code_execution", "command_allowlist", "compression", "computer_use",
+    "context", "context_file_max_chars", "context_file_read_timeout", "credential_pool_strategies", "cron",
+    "curator", "dashboard", "database", "delegation", "desktop", "discord", "display", "doctor", "fallback",
+    "fallback_providers", "file_read_max_chars", "gateway", "goals", "hooks", "hooks_auto_accept",
+    "hosted_rooms", "human_delay", "kanban", "local_runtime", "logging", "loops", "lsp", "matrix", "mattermost",
+    "max_concurrent_sessions", "max_live_sessions", "mcp", "mcp_discovery_timeout",
+    "mcp_single_query_discovery_timeout", "memory", "moa", "model", "model_catalog", "model_overrides",
+    "models_dev", "monitoring", "network", "nous", "onboarding", "openrouter", "paste_collapse_char_threshold",
+    "paste_collapse_threshold", "paste_collapse_threshold_fallback", "personalities", "platform_hints",
+    "plugins", "prefill_messages_file", "privacy", "prompt_caching", "providers", "proxy", "quick_commands",
+    "runtime", "secrets", "security", "session", "sessions", "skills", "slack", "streaming", "stt", "telegram",
+    "telemetry", "terminal", "timezone", "tool_loop_guardrails", "tool_output", "tools", "toolsets", "tts",
+    "updates", "vault", "vertex", "vision", "voice", "wake_word", "web", "webapp", "whatsapp", "worktrees",
+    "x_search", "mcp_servers",
+})
+_SPECIAL_SUBTREES = ("mcp_servers", "hooks", "quick_commands")
+
+
+def _refused_setting(cfg: Any) -> str | None:
+    if not isinstance(cfg, dict):
+        return None
+    for path, bad in REFUSED_SETTINGS:
+        v = _get(cfg, path)
+        if v is not _MISSING and bad(v):
+            return path
+    return None
+
+
+def _address_key(key: str) -> bool:
+    k = key.lower()
+    return k in SHOWN_ADDRESS_KEYS or k.endswith(("_url", "_endpoint", "_proxy"))
+
+
+def _flat(v: Any) -> str:
+    if isinstance(v, list):
+        return " ".join(str(x) for x in v)
+    if isinstance(v, dict):
+        return ", ".join(str(k) for k in v)
+    return str(v)
+
+
+def _refs_in(node: Any, budget: list[int]) -> set[str]:
+    out: set[str] = set()
+    stack = [node]
+    while stack and budget[0] > 0:
+        n = stack.pop()
+        budget[0] -= 1
+        if isinstance(n, dict):
+            stack.extend(n.values())
+        elif isinstance(n, list):
+            stack.extend(n)
+        elif isinstance(n, str):
+            out.update(_ANY_REF.findall(n))
+    return out
+
+
+def _capped(lines: list[str], what: str) -> list[str]:
+    if len(lines) <= MAX_SHOWN:
+        return lines
+    return [*lines[:MAX_SHOWN], f"and {len(lines) - MAX_SHOWN} more {what}"]
 
 
 def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
-    """What an imported config.yaml can run, in plain words. Raises BundleError if it turns off approvals."""
+    """What an imported config.yaml can run or reach, in plain words (best effort, R47 tier 2). Tier 1 settings
+    were refused before this runs."""
     if not isinstance(cfg, dict):
         return []
-    if _truthy(cfg.get("hooks_auto_accept")):
-        raise BundleError(APPROVALS_OFF.format(what="hooks_auto_accept"))
     lines: list[str] = []
     approvals = cfg.get("approvals")
     if isinstance(approvals, dict):
         mode = approvals.get("mode")
-        if mode is False or (isinstance(mode, str) and mode.strip().lower() in ("off", "false", "no")):
-            raise BundleError(APPROVALS_OFF.format(what="approvals.mode"))
         if mode is not None and mode not in ("manual", "smart"):
             lines.append(f"Command approvals mode: {_clip(mode)}")
         for key in ("cron_mode", "single_query_mode", "unattended_mode"):
@@ -648,38 +852,84 @@ def _risky_lines(cfg: Any, hermes_names: set[str]) -> list[str]:
                 lines.append(f"Command approvals: {key} is approve (risky commands run without asking)")
     servers = cfg.get("mcp_servers")
     if isinstance(servers, dict):
-        for i, (name, entry) in enumerate(servers.items()):
-            if i == MAX_SHOWN:
-                lines.append(f"and {len(servers) - MAX_SHOWN} more MCP servers")
-                break
+        mcp = []
+        for name, entry in servers.items():
             if isinstance(entry, dict) and entry.get("command") is not None:
                 args = entry.get("args") if isinstance(entry.get("args"), list) else []
-                lines.append(f"MCP server {_clip(name)}: runs {_clip(' '.join(str(x) for x in [entry['command'], *args]))}")
+                mcp.append(f"MCP server {_clip(name)}: runs {_clip(' '.join(str(x) for x in [entry['command'], *args]))}")
             elif isinstance(entry, dict) and entry.get("url") is not None:
-                lines.append(f"MCP server {_clip(name)}: connects to {_clip(entry['url'])}")
+                mcp.append(f"MCP server {_clip(name)}: connects to {_clip(entry['url'])}")
             else:
-                lines.append(f"MCP server {_clip(name)}")
+                mcp.append(f"MCP server {_clip(name)}")
+        lines += _capped(mcp, "MCP servers")
     hooks = cfg.get("hooks")
-    shown = 0
     if isinstance(hooks, dict):
+        hk = []
         for event, items in hooks.items():
             for item in items if isinstance(items, list) else [items]:
                 cmd = item.get("command") if isinstance(item, dict) else item
-                if shown == MAX_SHOWN:
-                    lines.append("and more hooks")
-                    break
-                lines.append(f"Hook on {_clip(event)}: runs {_clip(cmd)}")
-                shown += 1
+                hk.append(f"Hook on {_clip(event)}: runs {_clip(cmd)}")
+        lines += _capped(hk, "hooks")
     quick = cfg.get("quick_commands")
     if isinstance(quick, dict):
-        for i, (name, item) in enumerate(quick.items()):
-            if i == MAX_SHOWN:
-                lines.append(f"and {len(quick) - MAX_SHOWN} more quick commands")
-                break
+        qc = []
+        for name, item in quick.items():
             cmd = item.get("command") if isinstance(item, dict) else item
-            lines.append(f"Quick command /{_clip(name)}: runs {_clip(cmd)}")
-    for n in sorted(hermes_names)[:MAX_SHOWN]:
-        lines.append(f"Hermes setting {_clip(n)} is passed to a program it starts")
+            qc.append(f"Quick command /{_clip(name)}: runs {_clip(cmd)}")
+        lines += _capped(qc, "quick commands")
+    secrets_cfg = cfg.get("secrets")
+    if isinstance(secrets_cfg, dict):
+        lines += _capped([f"secrets.{_clip(name)}: enabled (runs its helper program)"
+                          for name, sec in secrets_cfg.items() if isinstance(sec, dict) and _on(sec.get("enabled"))],
+                         "secret sources")
+    shown_paths = []
+    for path in SHOWN_PATHS:
+        v = _get(cfg, path)
+        if v is not _MISSING and _nonempty(v):
+            shown_paths.append(f"{path}: {_clip(_flat(v))}")
+    lines += _capped(shown_paths, "settings")
+    # the generic walk: programs and addresses at any depth, outside the subtrees listed above
+    programs: list[str] = []
+    addresses: list[str] = []
+    sends: list[str] = []
+    budget = [MAX_CONFIG_NODES]
+    stack: list[tuple[Any, tuple[str, ...]]] = [(cfg, ())]
+    while stack and budget[0] > 0:
+        node, path = stack.pop()
+        budget[0] -= 1
+        if not isinstance(node, dict):
+            if isinstance(node, list):
+                stack.extend((v, (*path, str(i))) for i, v in reversed(list(enumerate(node))))
+            continue
+        address = None
+        for k, v in node.items():
+            key = str(k)
+            p = (*path, key)
+            if not path and key in _SPECIAL_SUBTREES:
+                continue
+            if key.lower() in SHOWN_LEAF_KEYS and not isinstance(v, dict) and _nonempty(v):
+                programs.append(f"{'.'.join(p)}: {_clip(_flat(v))}")
+            elif _address_key(key) and isinstance(v, str) and v:
+                addresses.append(f"{'.'.join(p)}: {_clip(v)}")
+                address = address or v
+            if isinstance(v, (dict, list)):
+                stack.append((v, p))
+        if address is not None:
+            for ref in sorted(_refs_in(node, [1000])):
+                sends.append(f"Would send ${{{ref}}} to {_clip(address)}")
+    servers_sends = []
+    if isinstance(servers, dict):
+        for entry in servers.values():
+            if isinstance(entry, dict) and isinstance(entry.get("url"), str):
+                for ref in sorted(_refs_in(entry, [1000])):
+                    servers_sends.append(f"Would send ${{{ref}}} to {_clip(entry['url'])}")
+    lines += _capped(sorted(programs), "program settings")
+    lines += _capped(sorted(addresses), "addresses")
+    lines += _capped(sends + servers_sends, "keys sent to addresses")
+    unknown = sorted(str(k) for k in cfg if str(k) not in KNOWN_TOP_KEYS)
+    lines += _capped([f"Setting this tool does not know: {_clip(k)}" for k in unknown], "unknown settings")
+    lines += _capped([f"Hermes setting {_clip(n)} is passed to a program it starts" for n in sorted(hermes_names)],
+                     "Hermes settings")
     return lines
 
 
@@ -885,19 +1135,32 @@ def export(name: str, out: Path, *, hermes: HermesCli, receipt: Receipt | None, 
                 dirs_needed.update("/".join(parts[:i]) for i in range(1, len(parts)))
             kept = [e for e in entries if e[1] and e[0] in dirs_needed] + kept_files
             soft: list[tuple[str, str]] = []
+            budget = [MAX_PROFILE_EXPANDED]
+            disk_config = b""
             for rel, is_dir, data in kept_files:
-                why = _hard_reason(data, values)
+                shown_rel = _printable(redact_patterns(rel))
+                # Hermes' export masks token shapes BEFORE we see the archive, so the on-disk bytes of every
+                # file that goes into the bundle are authoritative for the hard checks.
+                disk = _disk_bytes(pdir, rel, budget)
+                if disk is None:
+                    raise BundleError(CHANGED.format(rel=shown_rel))
+                if rel == "config.yaml":
+                    disk_config = disk
+                why = _hard_reason(disk, values) or _hard_reason(data, values)
                 if why:
-                    raise BundleError(SECRET_CONTENT.format(rel=_printable(redact_patterns(rel)), why=why))
+                    raise BundleError(SECRET_CONTENT.format(rel=shown_rel, why=why))
+                if _masked_reason(data):
+                    raise BundleError(SECRET_CONTENT.format(rel=shown_rel, why=WHY_MASKED))
                 if redact_patterns(rel) != rel:
                     soft.append((rel, WHY_SOFT_NAME))
-                elif _soft_reason(data):
+                elif _soft_reason(data) or _soft_reason(disk):
                     soft.append((rel, WHY_SOFT))
             config = next((d for r, is_dir, d in kept if r == "config.yaml" and not is_dir), b"")
-            if config:
-                literal, _ = _walk_config(_load_config(config))
-                if literal:
-                    raise BundleError(CONFIG_LITERAL.format(paths=_paths_text(literal)))
+            for text in (disk_config, config):
+                if text:
+                    literal, _ = _walk_config(_load_config(text))
+                    if literal:
+                        raise BundleError(CONFIG_LITERAL.format(paths=_paths_text(literal)))
             ctext = config.decode("utf-8", errors="replace")
             needed = set(env_names) | set(_REF_RE.findall(ctext)) | set(_KEY_ENV_RE.findall(ctext))
             if receipt is not None:
@@ -1003,6 +1266,9 @@ def read_bundle(path: Path, work: Path) -> tuple[BundleManifest, list[tuple[str,
     config = next((d for r, is_dir, d in entries if r == "config.yaml" and not is_dir), None)
     if config is not None:
         cfg = _load_config(config)
+        refused = _refused_setting(cfg)       # tier 1 first, by key path only
+        if refused:
+            raise BundleError(REFUSED_SETTING.format(path=refused))
         literal, hermes_names = _walk_config(cfg)
         if literal:
             raise BundleError(CONFIG_LITERAL_IMPORT.format(paths=_paths_text(literal)))
