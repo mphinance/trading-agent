@@ -13,7 +13,7 @@
 | 2. Install this tool | `uv tool install "git+https://github.com/mphinance/trading-agent.git@portable-agent"` | Installs a command |
 | 3. Look first (optional) | `trading-agent scan` | No |
 | 4. Run the wizard | `trading-agent setup` | One new Hermes profile |
-| 5. Undo | `trading-agent undo --profile <profile>` | Removes what step 4 made |
+| 5. Undo | `trading-agent undo --profile <profile>` | Deletes the whole profile step 4 made, memories and keys included |
 
 ## In this doc
 
