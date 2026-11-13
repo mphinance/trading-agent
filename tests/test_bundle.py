@@ -1974,3 +1974,40 @@ def test_a_dump_that_does_not_read_back_the_same_is_refused(monkeypatch):
     monkeypatch.setattr(B, "_yaml_classes", lambda: (loader, Lossy))
     with pytest.raises(B.BundleError):
         B._dump_config({"display": {"skin": "default"}})
+
+
+# ---------------------------------------------------------------- fix round 6 (R51)
+
+NAMED_KEY_PLACES = {
+    "personalities.api_key": "personalities:\n  api_key: '{ref}'\ndisplay:\n  personality: api_key\n",
+    "personalities.key_env": "personalities:\n  key_env: '{ref}'\n",
+    "agent.reasoning_overrides.api_key": "agent:\n  reasoning_overrides:\n    api_key: '{ref}'\n",
+    "providers.x.models.api_key": ("providers:\n  x:\n    name: x\n    base_url: https://x.test/v1\n"
+                                   "    models:\n      api_key: '{ref}'\n"),
+}
+
+
+@pytest.mark.parametrize("ref", ["${K}", "Bearer ${K}"])
+@pytest.mark.parametrize("path", sorted(NAMED_KEY_PLACES))
+def test_a_key_name_the_bundle_picks_does_not_exempt_a_reference(env, ref, path):
+    """api_key, key_env and api_key_env keep a reference only at their named provider and model positions, never
+    where the bundle chooses the name (a personality, a model override, a model entry)."""
+    text = "model:\n  provider: openrouter\n" + NAMED_KEY_PLACES[path].replace("{ref}", ref)
+    r, io_ = do_import(env, config_bundle(env, text))
+    assert r is not None
+    assert b"${" not in (env.pdir() / "config.yaml").read_bytes()
+    notices = [line for line in io_.said if line.startswith(B.NOT_IMPORTED_HEAD)]
+    assert len(notices) == 2 and all(path in n and "${" not in n for n in notices), notices
+
+
+def test_named_key_positions_still_keep_their_references(env):
+    cfg = ("model:\n  provider: openrouter\n  api_key: ${OPENROUTER_API_KEY}\n  key_env: OPENROUTER_API_KEY\n"
+           "providers:\n  x:\n    name: x\n    base_url: https://x.test/v1\n    api_key: Bearer ${X_KEY}\n"
+           "    key_env: X_KEY\n"
+           "fallback_providers:\n  - provider: openrouter\n    model: m\n    api_key: ${FB_KEY}\n")
+    r, io_ = do_import(env, config_bundle(env, cfg))
+    assert not any(line.startswith(B.NOT_IMPORTED_HEAD) for line in io_.said)
+    written = _written_config(env)
+    assert written["model"]["api_key"] == "${OPENROUTER_API_KEY}"
+    assert written["providers"]["x"]["api_key"] == "Bearer ${X_KEY}" and written["providers"]["x"]["key_env"] == "X_KEY"
+    assert written["fallback_providers"][0]["api_key"] == "${FB_KEY}"

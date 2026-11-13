@@ -224,3 +224,36 @@ def test_real_reference_in_a_personality_prompt_never_reaches_the_prompt(tmp_pat
     assert fake in got.stdout, "control: Hermes did not expand the reference, so this probe proves nothing"
     assert rollback(imported, hermes=hermes, store_factory=store)
     assert not pdir.exists()
+
+
+def test_real_personality_named_api_key_never_returns_the_key(tmp_path):
+    """R51: a personality the bundle names api_key, holding a reference, is dropped like any other text with a
+    reference; Hermes never returns the key value for it."""
+    from test_bundle import GOOD_INNER, manifest, tinfo, write_bundle
+    if shutil.which("hermes") is None:
+        pytest.skip("hermes is not installed")
+    home, hermes_home, config = tmp_path / "home", tmp_path / "hermes", tmp_path / "config"
+    for d in (home, hermes_home, config):
+        d.mkdir()
+    ready_scratch_hermes(home, hermes_home)
+    platform = TmpPlatform(home, config, {
+        "PATH": os.environ.get("PATH", ""), "HOME": str(home), "HERMES_HOME": str(hermes_home),
+        "XDG_CONFIG_HOME": str(config)})
+    hermes = HermesCli(platform)
+    store = lambda d: choose_store(platform, d)  # noqa: E731
+    fake = "".join(c for c in random_secret() if c.isalnum()) + "Zq9"
+    cfg = (b"model:\n  provider: openrouter\ndisplay:\n  personality: api_key\n"
+           b"personalities:\n  api_key: 'Bearer ${PROBE_KEY}'\n")
+    bundle = write_bundle(tmp_path / "named.tgz", man=manifest(env_names_needed=["PROBE_KEY"]), inner=[
+        *GOOD_INNER, tinfo("trader/config.yaml", data=cfg)])
+    io = ScriptedIO([True, fake])
+    imported = B.import_bundle(bundle, hermes=hermes, name="named", io=io, store_factory=store)
+    assert imported is not None
+    pdir = hermes.profile_dir("named")
+    assert b"${" not in (pdir / "config.yaml").read_bytes()
+    assert any("personalities.api_key" in line for line in io.said if line.startswith(B.NOT_IMPORTED_HEAD))
+    for key in ("personalities.api_key", "personalities", "display.personality"):
+        got = hermes.run(["-p", "named", "config", "get", key], timeout=300)
+        assert no_window(got.stdout + got.stderr, fake), key
+    assert rollback(imported, hermes=hermes, store_factory=store)
+    assert not pdir.exists()

@@ -1201,10 +1201,16 @@ def _no_hermes_ref(v: Any) -> bool:
     return not any(isinstance(x, str) and _HERMES_REF.search(x) for x in items)
 
 
+def _named_reference_leaf(path: tuple[str, ...]) -> bool:
+    """PATH is a key leaf by the allowlist's own name (model.api_key, providers.*.key_env), not a key the bundle
+    named itself under a wildcard (personalities.api_key, agent.reasoning_overrides.api_key)."""
+    return any(_spec_is(spec, path) and spec[-1] in _REFERENCE_LEAVES for spec in _SAFE_SPECS)
+
+
 def _leaf_ok(path: tuple[str, ...], v: Any) -> bool:
     """A plain value that passes its rule. Text holding a reference is dropped everywhere but the key leaves:
     Hermes would put the environment value into a prompt, a display string or an address."""
-    return (_plain(v) and (path[-1] in _REFERENCE_LEAVES or _no_hermes_ref(v))
+    return (_plain(v) and (_named_reference_leaf(path) or _no_hermes_ref(v))
             and all(rule(v) for spec, rule in _RULE_SPECS if _spec_is(spec, path)))
 
 
