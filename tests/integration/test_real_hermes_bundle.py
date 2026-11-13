@@ -180,3 +180,47 @@ def test_real_context_engine_path_is_dropped_and_hermes_still_reads_the_profile(
     assert not marker.exists()
     assert rollback(imported, hermes=hermes, store_factory=store)
     assert not pdir.exists()
+
+
+def test_real_reference_in_a_personality_prompt_never_reaches_the_prompt(tmp_path):
+    """Control: real Hermes expands ${PROBE_KEY} in a personality prompt from the profile's .env. Then: a bundle
+    carrying that prompt imports with the setting dropped, and Hermes never returns the key value."""
+    import yaml
+    from test_bundle import GOOD_INNER, manifest, tinfo, write_bundle
+    if shutil.which("hermes") is None:
+        pytest.skip("hermes is not installed")
+    home, hermes_home, config = tmp_path / "home", tmp_path / "hermes", tmp_path / "config"
+    for d in (home, hermes_home, config):
+        d.mkdir()
+    ready_scratch_hermes(home, hermes_home)
+    platform = TmpPlatform(home, config, {
+        "PATH": os.environ.get("PATH", ""), "HOME": str(home), "HERMES_HOME": str(hermes_home),
+        "XDG_CONFIG_HOME": str(config)})
+    hermes = HermesCli(platform)
+    store = lambda d: choose_store(platform, d)  # noqa: E731
+    fake = "".join(c for c in random_secret() if c.isalnum()) + "Zq9"
+    cfg = (b"model:\n  provider: openrouter\ndisplay:\n  personality: helper\npersonalities:\n  helper:\n"
+           b"    system_prompt: 'probe ${PROBE_KEY} end'\n    tone: calm\n")
+    bundle = write_bundle(tmp_path / "persona.tgz", man=manifest(env_names_needed=["PROBE_KEY"]), inner=[
+        *GOOD_INNER, tinfo("trader/config.yaml", data=cfg)])
+    io = ScriptedIO([True, fake])
+    imported = B.import_bundle(bundle, hermes=hermes, name="persona", io=io, store_factory=store)
+    assert imported is not None and "PROBE_KEY" in imported.env_names_written
+    pdir = hermes.profile_dir("persona")
+    written = B._load_config((pdir / "config.yaml").read_bytes())
+    assert written["personalities"] == {"helper": {"tone": "calm"}}
+    assert any("personalities.helper.system_prompt" in line for line in io.said
+               if line.startswith(B.NOT_IMPORTED_HEAD))
+    for key in ("personalities.helper.system_prompt", "personalities.helper", "display.personality"):
+        got = hermes.run(["-p", "persona", "config", "get", key], timeout=300)
+        assert no_window(got.stdout + got.stderr, fake), key
+        if key == "personalities.helper.system_prompt":
+            assert got.returncode != 0 and "not set" in got.stderr     # the dropped setting is simply absent
+    # control: the same prompt written straight into the profile IS expanded by Hermes
+    raw = yaml.safe_load((pdir / "config.yaml").read_text())
+    raw["personalities"]["helper"]["system_prompt"] = "probe ${PROBE_KEY} end"
+    (pdir / "config.yaml").write_text(yaml.safe_dump(raw))
+    got = hermes.run(["-p", "persona", "config", "get", "personalities.helper.system_prompt"], timeout=300)
+    assert fake in got.stdout, "control: Hermes did not expand the reference, so this probe proves nothing"
+    assert rollback(imported, hermes=hermes, store_factory=store)
+    assert not pdir.exists()
