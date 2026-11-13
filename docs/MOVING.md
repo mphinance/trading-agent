@@ -33,7 +33,7 @@
 
 ## Step 1: export
 
-```sh
+```bash
 trading-agent export --profile <profile> -o <profile>.tgz
 ```
 
@@ -58,7 +58,7 @@ Values shorter than 8 characters (`true`, `paper`) are settings, not keys, and a
 
 ### A readable folder instead
 
-```sh
+```bash
 trading-agent export --profile <profile> --files <folder>
 ```
 
@@ -74,7 +74,7 @@ Install Hermes and this tool as the [README](../README.md) describes. You do not
 
 ## Step 4: import
 
-```sh
+```bash
 trading-agent import <profile>.tgz
 trading-agent import <profile>.tgz --name <new-name>
 ```
@@ -108,7 +108,7 @@ The import lists the keys you skipped under `Left to finish later:`. Add each on
 
 To remove an imported profile completely:
 
-```sh
+```bash
 trading-agent undo --profile <profile>
 ```
 
@@ -148,5 +148,9 @@ A bundle from anyone else is treated as hostile input. Before anything is writte
 
 ## Related docs
 
-- [README](../README.md): install the tool and run setup.
+- [README](../README.md): what the tool is and the five-minute start.
+- [Setup](SETUP.md): install Hermes and the tool before you import.
+- [Keys](KEYS.md): where keys live and how to remove them.
+- [Updating](UPDATING.md): why an imported profile cannot use `hermes profile update`.
+- [Docs index](README.md): all pages.
 - [T0 spike results](spike/T0-results.md): verified Hermes behavior the tool relies on.

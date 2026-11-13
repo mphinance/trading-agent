@@ -90,3 +90,9 @@ All `aie-spike*` profiles and both scratch data roots were deleted, as was the s
 - `hermes profile install` refuses an existing profile (use `update`, or `--force`, which preserves user data).
 - `mcp_servers` appended to `config.yaml` must be a top-level key; appending text under a trailing `auth:` block silently nests it wrongly (the profile then lists no servers). Use a YAML library to merge, never a text append.
 - Unset `${NAME}` in a stdio `args` stays literal; in remote `url`/`headers` it hard-fails with a message that names the variable.
+
+## Related docs
+
+- [Setup](../SETUP.md): the user-facing install flow built on these facts.
+- [Updating](../UPDATING.md): the update rules in plain language.
+- [Docs index](../README.md): all pages.
