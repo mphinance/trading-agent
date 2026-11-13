@@ -49,7 +49,7 @@ def _import_targets_in_file(path: Path) -> set[str]:
     miss deferred imports, which several modules in this repo use
     deliberately to avoid pulling in heavy optional dependencies at import
     time)."""
-    tree = ast.parse(path.read_text(), filename=str(path))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     targets: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -74,7 +74,7 @@ def _refs_to_packages(root: Path, packages: tuple[str, ...]) -> dict[str, set[st
     for path in sorted(root.rglob("*.py")):
         hit = _import_targets_in_file(path) & set(packages)
         if hit:
-            found[str(path.relative_to(REPO_ROOT))] = hit
+            found[path.relative_to(REPO_ROOT).as_posix()] = hit
     return found
 
 
@@ -119,7 +119,7 @@ def test_vesper_to_mcp_server_allowlist_never_grows():
     for path in sorted((REPO_ROOT / "vesper").rglob("*.py")):
         hit = _import_targets_in_file(path) & {"mcp_server"}
         if hit:
-            actual[str(path.relative_to(REPO_ROOT))] = hit
+            actual[path.relative_to(REPO_ROOT).as_posix()] = hit
     assert actual == VESPER_TO_MCP_SERVER_ALLOWLIST, (
         "vesper -> mcp_server imports changed. The allowlist above is "
         "empty and should stay that way -- if this is a genuinely new, "
@@ -156,7 +156,7 @@ def test_trading_mcp_vesper_imports_match_m0_06_allowlist():
     for path in sorted((REPO_ROOT / "trading_mcp").rglob("*.py")):
         hit = _import_targets_in_file(path) & {"vesper"}
         if hit:
-            actual[str(path.relative_to(REPO_ROOT))] = hit
+            actual[path.relative_to(REPO_ROOT).as_posix()] = hit
     assert actual == TRADING_MCP_TO_VESPER_ALLOWLIST, (
         "trading_mcp/ -> vesper imports changed from the M0-06 baseline. "
         "trading_mcp is a read-only viewer over vesper's state (rule 3) -- "

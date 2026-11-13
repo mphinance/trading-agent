@@ -74,7 +74,7 @@ def test_registry_wires_the_screeners_through_the_hint():
     where the gap has to be visible."""
     from pathlib import Path
 
-    source = (Path(__file__).resolve().parents[1] / "mcp_server" / "registry.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "mcp_server" / "registry.py").read_text(encoding="utf-8")
     for tool in ("screen_vcp", "screen_pead", "screen_canslim", "run_stock_screen"):
         block = source.split(f"async def {tool}(")[1].split("@mcp.tool()")[0]
         assert "with_free_tier_note" in block, f"{tool} no longer surfaces the gap"

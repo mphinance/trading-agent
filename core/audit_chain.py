@@ -28,7 +28,6 @@ invocation can run concurrently on the same box and both open this file.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import logging
@@ -36,6 +35,31 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
+
+try:  # POSIX
+    import fcntl
+    _msvcrt = None
+except ImportError:  # Windows: same exclusive-lock guarantee via msvcrt
+    fcntl = None
+    import msvcrt as _msvcrt
+
+
+def _lock(f) -> None:
+    """Exclusive lock for the duration of one append (blocks until acquired)."""
+    if fcntl is not None:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    else:
+        f.seek(0)
+        _msvcrt.locking(f.fileno(), _msvcrt.LK_LOCK, 1)
+
+
+def _unlock(f) -> None:
+    if fcntl is not None:
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    else:
+        f.seek(0)
+        _msvcrt.locking(f.fileno(), _msvcrt.LK_UNLCK, 1)
+
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +95,7 @@ def append_entry(session_id: str, node: str, entry: Dict[str, Any]) -> Dict[str,
     """
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     with open(_CHAIN_PATH, "a+b") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        _lock(f)
         try:
             f.seek(0)
             prev_hash = GENESIS_HASH
@@ -102,7 +126,7 @@ def append_entry(session_id: str, node: str, entry: Dict[str, Any]) -> Dict[str,
             os.fsync(f.fileno())
             return record
         finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            _unlock(f)
 
 
 def verify_chain() -> Dict[str, Any]:

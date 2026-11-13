@@ -45,7 +45,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def _vesper_refs_in_file(path: Path) -> set[str]:
     """Normalized set of ``vesper.xxx`` references anywhere in ``path``'s
     AST -- function-local imports included, not just module-level ones."""
-    tree = ast.parse(path.read_text(), filename=str(path))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     refs: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -66,7 +66,7 @@ def _vesper_refs_in_file(path: Path) -> set[str]:
 
 
 def _refs_to_targets_in_file(path: Path, targets: tuple[str, ...]) -> set[str]:
-    tree = ast.parse(path.read_text(), filename=str(path))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     refs: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -87,7 +87,7 @@ def _scan_vesper_refs(root: Path) -> dict[str, set[str]]:
     for path in sorted(root.rglob("*.py")):
         refs = _vesper_refs_in_file(path)
         if refs:
-            found[str(path.relative_to(REPO_ROOT))] = refs
+            found[path.relative_to(REPO_ROOT).as_posix()] = refs
     return found
 
 
@@ -211,7 +211,7 @@ def test_vesper_never_imports_trading_mcp():
     for path in sorted((REPO_ROOT / "vesper").rglob("*.py")):
         refs = _refs_to_targets_in_file(path, ("trading_mcp",))
         if refs:
-            offenders[str(path.relative_to(REPO_ROOT))] = refs
+            offenders[path.relative_to(REPO_ROOT).as_posix()] = refs
     assert offenders == {}, f"vesper/ must never import trading_mcp: {offenders}"
 
 
@@ -234,7 +234,7 @@ def test_vesper_to_mcp_server_baseline_is_pinned_not_growing():
     for path in sorted((REPO_ROOT / "vesper").rglob("*.py")):
         refs = _refs_to_targets_in_file(path, ("mcp_server",))
         if refs:
-            actual[str(path.relative_to(REPO_ROOT))] = refs
+            actual[path.relative_to(REPO_ROOT).as_posix()] = refs
     assert actual == EXPECTED_VESPER_TO_MCP_SERVER_BASELINE, (
         "vesper -> mcp_server imports changed. If this shrank, good -- "
         "update the baseline (and check whether M0-02/M0-07 can now be "
