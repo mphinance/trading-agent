@@ -80,3 +80,6 @@ tradingview-ta         # mcp_server/tv_analysis.py, same import chain as above
 # exercises the real math, not a mocked delta) — see
 # vesper/nodes/playbooks.py's _select_0dte_delta_strike.
 py_vollib
+
+# imported transitively by the chart tests (python-dateutil/pyparsing era packages no longer pull it in)
+six>=1.16
